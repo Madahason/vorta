@@ -49,17 +49,14 @@ async function generateImage(prompt, model = MODELS.default) {
     throw new Error(`Higgsfield generation failed: ${detail}`);
   }
 
-  // Strip ANSI codes in case CLI emits them in non-TTY mode; extract first URL
-  const cleaned = result.stdout.replace(/\x1b\[[0-9;]*m/g, '').trim();
-  const urlMatch = cleaned.match(/https?:\/\/\S+/);
-  if (!urlMatch) {
-    console.error('[higgsfield] no URL in stdout:', cleaned.slice(0, 300));
-    throw new Error(`Higgsfield returned no URL: ${cleaned.slice(0, 200)}`);
+  const output = result.stdout.trim();
+  if (!output.startsWith('http')) {
+    console.error('[higgsfield] unexpected output:', output.slice(0, 300));
+    throw new Error(`Higgsfield returned unexpected output: ${output.slice(0, 200)}`);
   }
 
-  const url = urlMatch[0];
-  console.log(`[higgsfield] done: ${url}`);
-  return url;
+  console.log(`[higgsfield] done: ${output}`);
+  return output;
 }
 
 module.exports = { generateImage, MODELS };
