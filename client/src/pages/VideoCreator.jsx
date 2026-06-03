@@ -3,6 +3,9 @@ import { Loader2, Zap } from 'lucide-react'
 import ScriptInput from '../components/video-creator/ScriptInput'
 import SceneGrid from '../components/video-creator/SceneGrid'
 
+// EventSource must connect directly to Express — Vite's proxy buffers text/event-stream
+const SERVER_URL = 'http://localhost:3001'
+
 export default function VideoCreator() {
   const [scenes, setScenes] = useState([])
   const [isAnalyzing, setIsAnalyzing] = useState(false)
@@ -27,7 +30,7 @@ export default function VideoCreator() {
       eventSourceRef.current.close()
     }
 
-    const es = new EventSource(`/api/generate/progress/${pid}`)
+    const es = new EventSource(`${SERVER_URL}/api/generate/progress/${pid}`)
     eventSourceRef.current = es
 
     es.onmessage = (e) => {
