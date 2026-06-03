@@ -49,14 +49,17 @@ async function generateImage(prompt, model = MODELS.default) {
     throw new Error(`Higgsfield generation failed: ${detail}`);
   }
 
-  const output = result.stdout.trim();
-  if (!output.startsWith('http')) {
-    console.error('[higgsfield] unexpected output:', output.slice(0, 300));
-    throw new Error(`Higgsfield returned unexpected output: ${output.slice(0, 200)}`);
+  // Strip ANSI colour codes, then find the URL line
+  const clean = result.stdout.replace(/\x1B\[[0-9;]*m/g, '');
+  const urlLine = clean.split('\n').map(l => l.trim()).find(l => l.startsWith('http'));
+
+  if (!urlLine) {
+    console.error('[higgsfield] no URL found in output:', clean.slice(0, 300));
+    throw new Error(`Higgsfield returned no URL. Full output: ${clean.slice(0, 200)}`);
   }
 
-  console.log(`[higgsfield] done: ${output}`);
-  return output;
+  console.log(`[higgsfield] done: ${urlLine}`);
+  return urlLine;
 }
 
 module.exports = { generateImage, MODELS };
