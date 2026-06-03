@@ -9,21 +9,19 @@ const TIMEOUT_CREATE = 30_000;
 const TIMEOUT_WAIT   = 360_000; // 6 min — image generation can take time
 const TIMEOUT_GET    = 30_000;
 
-function escapePrompt(prompt) {
-  return prompt
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/`/g, '\\`')
-    .replace(/\$/g, '\\$');
+// cmd.exe-safe quoting: wrap in double quotes, escape internal " as ""
+// exec() uses cmd.exe on Windows; bash-style \" is wrong here — & % | < > are
+// all safe inside double-quoted strings in cmd.exe without additional escaping.
+function quoteCmdArg(str) {
+  return '"' + str.replace(/"/g, '""') + '"';
 }
 
 // create returns: ["job-uuid"]  — an array, not an object
 async function createJob(prompt) {
-  const escaped = escapePrompt(prompt);
   let result;
   try {
     result = await execAsync(
-      `higgsfield generate create ${IMAGE_MODEL} --prompt "${escaped}" --json`,
+      `higgsfield generate create ${IMAGE_MODEL} --prompt ${quoteCmdArg(prompt)} --json`,
       { timeout: TIMEOUT_CREATE }
     );
   } catch (err) {
