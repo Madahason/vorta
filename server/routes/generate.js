@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const http = require('http');
-const { createJob, waitJob, getResult } = require('../services/higgsfield');
+const { generateImage } = require('../services/higgsfield');
 
 // In-memory progress store: projectId → { progress, clients, allDone }
 const store = new Map();
@@ -48,10 +48,7 @@ async function processScene(projectId, scene, assetsDir) {
     entry.progress[scene.scene_id].status = 'generating';
     broadcast(projectId, { type: 'update', scene_id: scene.scene_id, status: 'generating' });
 
-    const jobId = await createJob(scene.higgsfield_prompt);
-    const waitUrl = await waitJob(jobId);
-    // waitJob returns the URL directly from stdout — only call getResult as fallback
-    const outputUrl = waitUrl || await getResult(jobId);
+    const outputUrl = await generateImage(scene.higgsfield_prompt);
 
     const dest = path.join(assetsDir, `${scene.scene_id}.jpg`);
     await downloadImage(outputUrl, dest);

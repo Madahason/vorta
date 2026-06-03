@@ -2,100 +2,64 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
 
-// soul_cinematic — Higgsfield's cinematic still-image model
-const IMAGE_MODEL = 'soul_cinematic';
+// Available image models
+const MODELS = {
+  default: 'nano_banana_2', // Fast, cinematic quality — default for all scenes
+  quality: 'gpt_image_2',   // Higher quality, slower — opt-in per project
+};
 
-const TIMEOUT_CREATE = 30_000;
-const TIMEOUT_WAIT   = 360_000; // 6 min — image generation can take time
-const TIMEOUT_GET    = 30_000;
+// 6 min covers both job creation + wait for worst-case generation times
+const TIMEOUT = 360_000;
 
 // cmd.exe-safe quoting: wrap in double quotes, escape internal " as ""
-// exec() uses cmd.exe on Windows; bash-style \" is wrong here — & % | < > are
-// all safe inside double-quoted strings in cmd.exe without additional escaping.
+// exec() on Windows runs via cmd.exe; bash-style \" is wrong here.
+// & % | < > are all literal inside cmd.exe double-quoted strings.
 function quoteCmdArg(str) {
   return '"' + str.replace(/"/g, '""') + '"';
 }
 
-// create returns: ["job-uuid"]  — an array, not an object
-async function createJob(prompt) {
+/**
+ * Generate a single image via Higgsfield CLI.
+ * Uses --wait so the command blocks until complete and returns the URL on stdout.
+ * stdout is a plain URL string, not JSON.
+ *
+ * @param {string} prompt  - Full Higgsfield prompt (style lock already appended)
+ * @param {string} [model] - Job set type; defaults to MODELS.default
+ * @returns {Promise<string>} Resolved image URL
+ */
+async function generateImage(prompt, model = MODELS.default) {
+  const cmd = [
+    'higgsfield generate create',
+    model,
+    '--prompt', quoteCmdArg(prompt),
+    '--aspect_ratio 16:9',
+    '--resolution 2k',
+    '--wait',
+  ].join(' ');
+
+  console.log(`[higgsfield] starting: model=${model} | "${prompt.slice(0, 60)}…"`);
+
   let result;
   try {
-    result = await execAsync(
-      `higgsfield generate create ${IMAGE_MODEL} --prompt ${quoteCmdArg(prompt)} --json`,
-      { timeout: TIMEOUT_CREATE }
-    );
-  } catch (err) {
-    const detail = err.stderr?.trim() || err.message;
-    throw new Error(`higgsfield create failed: ${detail}`);
-  }
-
-  let data;
-  try {
-    data = JSON.parse(result.stdout.trim());
-  } catch {
-    throw new Error(`higgsfield create returned non-JSON: ${result.stdout.slice(0, 300)}`);
-  }
-
-  // Response shape: ["uuid"]
-  const jobId = Array.isArray(data) ? data[0] : (data.id || data.job_id || null);
-  if (!jobId) {
-    throw new Error(`higgsfield create: no job id in response — ${JSON.stringify(data)}`);
-  }
-
-  console.log(`[higgsfield] job created: ${jobId}`);
-  return jobId;
-}
-
-// wait prints the result URL to stdout on completion (positional job_id, no flag)
-async function waitJob(jobId) {
-  let result;
-  try {
-    result = await execAsync(
-      `higgsfield generate wait ${jobId} --quiet`,
-      { timeout: TIMEOUT_WAIT }
-    );
-    console.log(`[higgsfield] job complete: ${jobId}`);
+    result = await execAsync(cmd, { timeout: TIMEOUT });
   } catch (err) {
     if (err.killed) {
-      throw new Error(`higgsfield wait timed out after ${TIMEOUT_WAIT / 1000}s (job: ${jobId})`);
+      throw new Error(`Higgsfield timed out after ${TIMEOUT / 1000}s`);
     }
-    throw new Error(`higgsfield wait failed: ${err.stderr?.trim() || err.message}`);
+    // err.stdout may have a partial result or error detail from the CLI
+    const detail = err.stderr?.trim() || err.stdout?.trim() || err.message;
+    throw new Error(`Higgsfield generation failed: ${detail}`);
   }
 
-  // wait stdout is the result URL — return it as a shortcut to skip the get call
-  const url = result.stdout.trim();
-  return url.startsWith('http') ? url : null;
+  const raw = result.stdout.trim();
+
+  if (!raw.startsWith('http')) {
+    console.error('[higgsfield] unexpected stdout:', raw.slice(0, 300));
+    throw new Error(`Higgsfield returned unexpected output (not a URL): ${raw.slice(0, 200)}`);
+  }
+
+  console.log(`[higgsfield] done: ${raw}`);
+  return raw;
 }
 
-// get returns full job JSON: { id, status, result_url, ... }
-async function getResult(jobId) {
-  let result;
-  try {
-    result = await execAsync(
-      `higgsfield generate get ${jobId} --json`,
-      { timeout: TIMEOUT_GET }
-    );
-  } catch (err) {
-    throw new Error(`higgsfield get failed: ${err.stderr?.trim() || err.message}`);
-  }
-
-  let data;
-  try {
-    data = JSON.parse(result.stdout.trim());
-  } catch {
-    throw new Error(`higgsfield get returned non-JSON: ${result.stdout.slice(0, 300)}`);
-  }
-
-  // result_url is the canonical field; also check legacy shapes
-  const url = data.result_url || data.output_url || data.url
-    || (Array.isArray(data.urls) ? data.urls[0] : null);
-
-  if (!url) {
-    throw new Error(`higgsfield get: no output URL in response — ${JSON.stringify(data)}`);
-  }
-
-  console.log(`[higgsfield] result: ${url}`);
-  return url;
-}
-
-module.exports = { createJob, waitJob, getResult };
+module.exports = { generateImage, MODELS };
