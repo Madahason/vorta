@@ -1,0 +1,26 @@
+require('dotenv').config({ path: '../.env' });
+const express = require('express');
+const cors = require('cors');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// Confirm env loaded
+const apiKeyLoaded = !!process.env.ANTHROPIC_API_KEY;
+console.log(`ANTHROPIC_API_KEY loaded: ${apiKeyLoaded}`);
+
+// Routes (stubs — wired in Phase 1)
+app.use('/api/analyze', require('./routes/analyze'));
+app.use('/api/generate', require('./routes/generate'));
+app.use('/api/library', require('./routes/library'));
+app.use('/api/render', require('./routes/render'));
+
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', anthropic_key: apiKeyLoaded });
+});
+
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
+  console.log(`Vorta server running on http://localhost:${PORT}`);
+});

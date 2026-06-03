@@ -1,0 +1,14 @@
+{
+  "name": "vorta",
+  "version": "0.1.0",
+  "description": "AI-powered content production platform",
+  "private": true,
+  "scripts": {
+    "client": "cd client && npm run dev",
+    "server": "cd server && npm run dev",
+    "dev": "concurrently \"npm run client\" \"npm run server\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}
