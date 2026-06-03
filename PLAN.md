@@ -91,7 +91,7 @@ Pre-built components to build and maintain:
 |-------|-----------|
 | Frontend | React + Tailwind CSS |
 | Backend | Node.js + Express |
-| AI Analysis | Claude API (claude-sonnet-4-20250514) |
+| AI Analysis | Claude API (claude-sonnet-4-6) |
 | Image Generation | Higgsfield CLI (`@higgsfield/cli`) |
 | Video Assembly | Remotion |
 | Clip Library | JSON flat file + local filesystem |
@@ -127,22 +127,25 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
 
-async function generateImage(prompt) {
-  // 1. Submit generation job
-  const { stdout: createOut } = await execAsync(
-    `higgsfield generate create --prompt "${prompt}" --model soul`
-  );
-  const { job_id } = JSON.parse(createOut);
+// cmd.exe-safe quoting: wrap in double quotes, escape internal " as ""
+function quoteCmdArg(str) {
+  return '"' + str.replace(/"/g, '""') + '"';
+}
 
-  // 2. Poll until complete
-  await execAsync(`higgsfield generate wait --job-id ${job_id}`);
+async function generateImage(prompt, model = 'nano_banana_2') {
+  const cmd = [
+    'higgsfield generate create',
+    model,
+    '--prompt', quoteCmdArg(prompt),
+    '--aspect_ratio 16:9',
+    '--resolution 2k',
+    '--wait',
+  ].join(' ');
 
-  // 3. Fetch result
-  const { stdout: getOut } = await execAsync(
-    `higgsfield generate get --job-id ${job_id}`
-  );
-  const { output_url } = JSON.parse(getOut);
-  return output_url;
+  const { stdout } = await execAsync(cmd, { timeout: 360_000 });
+  const url = stdout.trim();
+  if (!url.startsWith('http')) throw new Error(`Unexpected output: ${url.slice(0, 200)}`);
+  return url; // plain URL string, not JSON
 }
 ```
 
@@ -151,16 +154,30 @@ async function generateImage(prompt) {
 higgsfield auth login              # Authenticate (run once)
 higgsfield account                 # Check credit balance
 higgsfield model list              # List all available models
-higgsfield generate create         # Submit a generation job
-higgsfield generate wait           # Poll until job completes
-higgsfield generate get            # Fetch completed result
+higgsfield generate create <model> # Submit job — model is a positional arg, not a flag
 higgsfield generate list           # List past generations
 higgsfield upload image            # Upload reference image (returns UUID)
 ```
 
+### Actual generate command (confirmed working)
+```bash
+higgsfield generate create nano_banana_2 \
+  --prompt "..." \
+  --aspect_ratio 16:9 \
+  --resolution 2k \
+  --wait
+```
+`--wait` blocks until generation is complete and prints the image URL directly to stdout as a plain string (not JSON). No separate `wait` or `get` step needed.
+
+### Available models
+- `nano_banana_2` — fast, cinematic quality (default for all scenes)
+- `gpt_image_2` — higher quality, slower (opt-in per project)
+
 ### Key behaviours
 - Authentication session is persisted locally by the CLI — no token management needed in code
-- Generation is asynchronous — always use `generate wait` before `generate get`
+- `--wait` makes generation synchronous from the caller's perspective — stdout is the final image URL
+- stdout is a plain URL string, NOT JSON — do not `JSON.parse()` it
+- On Windows, `child_process.exec` runs through `cmd.exe` — use `""` quoting (not `\"`): `'"' + str.replace(/"/g, '""') + '"'`
 - Credits use the same system as the Higgsfield platform (Plus plan: unlimited image models)
 - No API key in `.env` for Higgsfield — remove `HIGGSFIELD_API_KEY` entirely
 
@@ -248,17 +265,17 @@ vorta/
 - Auto-download and save images to `/projects/[id]/assets/`
 
 **Deviations from original plan:**
-- Higgsfield CLI command syntax differs from PLAN.md. Actual syntax discovered by running `higgsfield generate create --help` and `higgsfield model list`:
-  - Model is a **positional argument**, not a `--model` flag: `higgsfield generate create soul_cinematic --prompt "..." --json`
-  - `--json` flag **required** for JSON output — without it, CLI prints formatted text
-  - `wait` and `get` take a **positional job ID**, not `--job-id`: `higgsfield generate wait <id> --quiet`
-  - `create` returns `["job-uuid"]` (a JSON array), not `{ job_id: "..." }`
-  - `wait` returns the result URL directly on stdout (used as shortcut; `get` is fallback)
-  - `get` returns `{ result_url: "..." }`, not `{ output_url: "..." }`
-- Model used: `soul_cinematic` (PLAN.md said `soul`; confirmed `soul_cinematic` is the correct job_set_type)
+- Higgsfield CLI command syntax differs significantly from PLAN.md. Final confirmed working approach:
+  - Single `--wait` command replaces the three-step create/wait/get flow entirely
+  - Model is a **positional argument**: `higgsfield generate create nano_banana_2 --prompt "..." --aspect_ratio 16:9 --resolution 2k --wait`
+  - stdout is a **plain URL string**, not JSON — do not parse it
+  - Model used: `nano_banana_2` (PLAN.md said `soul`; that model does not exist)
+  - `gpt_image_2` available as quality alternative, exported as `MODELS.quality`
+  - On Windows, `cmd.exe` quoting requires `""` escaping (not bash-style `\"`) — `quoteCmdArg()` handles this
 - SSE (Server-Sent Events) used for live per-scene progress updates — no extra library, uses browser's native `EventSource`
-- Projects static files served via `express.static` at `/projects` route and proxied through Vite
-- `generate.js` in-memory `progressStore` Map resets on server restart — clients receive 404 on SSE reconnect if server was restarted mid-generation
+- `EventSource` must connect directly to Express (`http://localhost:3001`), NOT through Vite proxy — Vite's http-proxy buffers `text/event-stream` responses
+- Projects static files served via `express.static` at `/projects` route
+- `generate.js` in-memory `store` Map resets on server restart — clients receive 404 on SSE reconnect if server was restarted mid-generation
 
 ### Phase 3 — Clip library + matching
 - Clip library browser UI (search, filter by category/mood/tags)
@@ -384,9 +401,8 @@ Before marking any phase complete, run through its testing checklist (defined pe
 - [ ] Generate button appears only after Phase 1 scenes exist
 - [ ] Clicking Generate loops through all `image` scenes only
 - [ ] Each scene card shows status: pending → generating → done / failed
-- [ ] `higgsfield generate create` command fires correctly (check server logs)
-- [ ] `higgsfield generate wait` polls until complete without timing out
-- [ ] `higgsfield generate get` returns a valid image URL
+- [ ] `higgsfield generate create nano_banana_2 --wait` fires correctly (check server logs)
+- [ ] Command blocks until complete and returns a plain image URL on stdout (not JSON)
 - [ ] Image downloads and saves to `/projects/[id]/assets/[scene_id].jpg`
 - [ ] Scene card displays the generated image on completion
 - [ ] Regenerate button on individual cards works independently
