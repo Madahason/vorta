@@ -50,12 +50,16 @@ async function processScene(projectId, scene, assetsDir) {
 
     const outputUrl = await generateImage(scene.higgsfield_prompt);
 
-    const dest = path.join(assetsDir, `${scene.scene_id}.jpg`);
+    // Use the real extension from the URL (Higgsfield returns .png)
+    const ext = path.extname(new URL(outputUrl).pathname) || '.png';
+    const filename = `${scene.scene_id}${ext}`;
+    const dest = path.join(assetsDir, filename);
     await downloadImage(outputUrl, dest);
 
-    const image_path = `/projects/${projectId}/assets/${scene.scene_id}.jpg`;
+    const image_path = `/projects/${projectId}/assets/${filename}`;
     entry.progress[scene.scene_id].status = 'done';
     entry.progress[scene.scene_id].image_path = image_path;
+    console.log(`[generate] scene ${scene.scene_id} done → ${image_path}`);
     broadcast(projectId, { type: 'update', scene_id: scene.scene_id, status: 'done', image_path });
   } catch (err) {
     console.error(`[generate] scene ${scene.scene_id} failed:`, err.message);

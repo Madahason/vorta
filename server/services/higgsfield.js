@@ -37,29 +37,29 @@ async function generateImage(prompt, model = MODELS.default) {
     '--wait',
   ].join(' ');
 
-  console.log(`[higgsfield] starting: model=${model} | "${prompt.slice(0, 60)}…"`);
+  console.log('[higgsfield] CMD:', cmd);
 
   let result;
   try {
     result = await execAsync(cmd, { timeout: TIMEOUT });
   } catch (err) {
-    if (err.killed) {
-      throw new Error(`Higgsfield timed out after ${TIMEOUT / 1000}s`);
-    }
-    // err.stdout may have a partial result or error detail from the CLI
+    if (err.killed) throw new Error(`Higgsfield timed out after ${TIMEOUT / 1000}s`);
     const detail = err.stderr?.trim() || err.stdout?.trim() || err.message;
+    console.error('[higgsfield] exec failed:', detail.slice(0, 300));
     throw new Error(`Higgsfield generation failed: ${detail}`);
   }
 
-  const raw = result.stdout.trim();
-
-  if (!raw.startsWith('http')) {
-    console.error('[higgsfield] unexpected stdout:', raw.slice(0, 300));
-    throw new Error(`Higgsfield returned unexpected output (not a URL): ${raw.slice(0, 200)}`);
+  // Strip ANSI codes in case CLI emits them in non-TTY mode; extract first URL
+  const cleaned = result.stdout.replace(/\x1b\[[0-9;]*m/g, '').trim();
+  const urlMatch = cleaned.match(/https?:\/\/\S+/);
+  if (!urlMatch) {
+    console.error('[higgsfield] no URL in stdout:', cleaned.slice(0, 300));
+    throw new Error(`Higgsfield returned no URL: ${cleaned.slice(0, 200)}`);
   }
 
-  console.log(`[higgsfield] done: ${raw}`);
-  return raw;
+  const url = urlMatch[0];
+  console.log(`[higgsfield] done: ${url}`);
+  return url;
 }
 
 module.exports = { generateImage, MODELS };
