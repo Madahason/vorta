@@ -228,12 +228,17 @@ vorta/
 
 ## Build Phases
 
-### Phase 1 — Script input + Claude scene analyzer
+### Phase 1 — Script input + Claude scene analyzer ✅ COMPLETE
 - Script paste/upload UI
 - Project metadata form (title, niche, style preset, narrator tone)
 - Claude API integration: script → scene JSON array
 - Scene grid display with type badges and generated prompts
 - Manual override: edit any scene's shot type or prompt before generation
+
+**Deviations from original plan:**
+- Model updated to `claude-sonnet-4-6` (original `claude-sonnet-4-20250514` deprecated June 2026)
+- `NODE_TLS_REJECT_UNAUTHORIZED=0` added to `.env` for local dev — Node.js does not trust the local CA certificate on this machine; must be removed before any production deployment
+- Vite proxy (`/api → localhost:3001`) added to `client/vite.config.js`
 
 ### Phase 2 — Higgsfield image generation
 - Loop through `image` scenes, call Higgsfield CLI via child_process
