@@ -1,10 +1,14 @@
 require('dotenv').config({ path: '../.env' });
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
+
+// Serve generated project assets (images, etc.)
+app.use('/projects', express.static(path.join(__dirname, '../projects')));
 
 // Confirm env loaded
 const apiKeyLoaded = !!process.env.ANTHROPIC_API_KEY;

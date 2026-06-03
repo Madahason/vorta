@@ -240,12 +240,25 @@ vorta/
 - `NODE_TLS_REJECT_UNAUTHORIZED=0` added to `.env` for local dev — Node.js does not trust the local CA certificate on this machine; must be removed before any production deployment
 - Vite proxy (`/api → localhost:3001`) added to `client/vite.config.js`
 
-### Phase 2 — Higgsfield image generation
+### Phase 2 — Higgsfield image generation ✅ COMPLETE
 - Loop through `image` scenes, call Higgsfield CLI via child_process
 - Live generation progress grid (per-scene status: pending / generating / done / failed)
 - Preview images inline per scene card
 - Regenerate individual scenes
 - Auto-download and save images to `/projects/[id]/assets/`
+
+**Deviations from original plan:**
+- Higgsfield CLI command syntax differs from PLAN.md. Actual syntax discovered by running `higgsfield generate create --help` and `higgsfield model list`:
+  - Model is a **positional argument**, not a `--model` flag: `higgsfield generate create soul_cinematic --prompt "..." --json`
+  - `--json` flag **required** for JSON output — without it, CLI prints formatted text
+  - `wait` and `get` take a **positional job ID**, not `--job-id`: `higgsfield generate wait <id> --quiet`
+  - `create` returns `["job-uuid"]` (a JSON array), not `{ job_id: "..." }`
+  - `wait` returns the result URL directly on stdout (used as shortcut; `get` is fallback)
+  - `get` returns `{ result_url: "..." }`, not `{ output_url: "..." }`
+- Model used: `soul_cinematic` (PLAN.md said `soul`; confirmed `soul_cinematic` is the correct job_set_type)
+- SSE (Server-Sent Events) used for live per-scene progress updates — no extra library, uses browser's native `EventSource`
+- Projects static files served via `express.static` at `/projects` route and proxied through Vite
+- `generate.js` in-memory `progressStore` Map resets on server restart — clients receive 404 on SSE reconnect if server was restarted mid-generation
 
 ### Phase 3 — Clip library + matching
 - Clip library browser UI (search, filter by category/mood/tags)
