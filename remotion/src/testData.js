@@ -92,3 +92,8 @@ export const TEST_SELECTED_CLIPS = {
     mood: 'tense',
   },
 }
+
+// Lowercase aliases — used by Root.jsx and any code following the prompt spec
+export const testScenes        = TEST_SCENES
+export const testImagePaths    = TEST_IMAGE_PATHS
+export const testSelectedClips = TEST_SELECTED_CLIPS

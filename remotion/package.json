@@ -4,8 +4,9 @@
   "description": "Remotion video compositions for Vorta",
   "private": true,
   "scripts": {
-    "start": "remotion studio src/index.jsx",
-    "render": "remotion render src/index.jsx Documentary out/video.mp4"
+    "studio": "remotion studio src/index.jsx",
+    "render": "remotion render src/index.jsx Documentary",
+    "build": "remotion render src/index.jsx Documentary out/documentary.mp4"
   },
   "dependencies": {
     "@remotion/cli": "^4.0.0",

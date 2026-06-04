@@ -5,40 +5,27 @@ import TimelineBar     from './components/TimelineBar'
 import ComparisonChart from './components/ComparisonChart'
 import QuoteCard       from './components/QuoteCard'
 import MapHighlight    from './components/MapHighlight'
-import { TEST_SCENES, TEST_IMAGE_PATHS, TEST_SELECTED_CLIPS } from './testData'
+import { testScenes, testImagePaths, testSelectedClips } from './testData'
 
-export function RemotionRoot() {
+export const RemotionRoot = () => {
   return (
     <>
-      {/* Main production composition — receives data from render pipeline */}
+      {/* Main composition — wired to test data for Studio preview */}
       <Composition
         id="Documentary"
         component={Documentary}
+        durationInFrames={testScenes.reduce((sum, s) => sum + (s.duration_seconds || 5) * 30, 0)}
         fps={30}
         width={1920}
         height={1080}
-        defaultProps={{ scenes: [], imagePaths: {}, selectedClips: {} }}
-        calculateMetadata={({ props }) => ({
-          durationInFrames: calculateDocumentaryDuration(props.scenes),
-        })}
-      />
-
-      {/* Test composition — 5 mixed scenes for development preview */}
-      <Composition
-        id="DocumentaryTest"
-        component={Documentary}
-        fps={30}
-        width={1920}
-        height={1080}
-        durationInFrames={calculateDocumentaryDuration(TEST_SCENES)}
         defaultProps={{
-          scenes:        TEST_SCENES,
-          imagePaths:    TEST_IMAGE_PATHS,
-          selectedClips: TEST_SELECTED_CLIPS,
+          scenes:        testScenes,
+          imagePaths:    testImagePaths,
+          selectedClips: testSelectedClips,
         }}
       />
 
-      {/* Individual component previews for Remotion Studio */}
+      {/* Individual template previews */}
       <Composition id="AnimatedCounter" component={AnimatedCounter} fps={30} width={1920} height={1080} durationInFrames={150}
         defaultProps={{ value: 3000000000, label: 'Revenue', prefix: '$' }} />
 
