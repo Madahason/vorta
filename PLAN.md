@@ -421,16 +421,52 @@ All Video Creator state survives a page refresh via `localStorage`. No backend c
 - Audio track sync to scene durations
 
 **Implementation details:**
-- `AnimatedCounter.jsx` — spring-eased count-up with prefix/suffix, comma formatting, animated underline
-- `TimelineBar.jsx` — horizontal timeline with staggered dot reveals, year labels above, event labels below
-- `ComparisonChart.jsx` — vertical bar chart with spring grow animation per bar, value label above each bar
-- `QuoteCard.jsx` — full-screen pull quote in serif italic with fade+slide entrance, attribution line
-- `MapHighlight.jsx` — SVG world map with pulsing dot marker at lat/lng coordinate and region label
-- All templates registered as individual Remotion Studio compositions for preview
-- `Documentary.jsx` updated: motion_graphic scenes dispatched to correct template via `MotionGraphicScene` dispatcher using `scene.motion_graphic_type` and `scene.motion_graphic_props`
-- Ken Burns: `ImageScene.jsx` uses `scene.motion.type` + `scene.motion.intensity` to drive scale/translate transforms via `interpolate()` — direction varies per scene as set by Claude
-- Transitions: dissolve (12-frame cross-fade opacity), cut (no overlap), dip_black/dip_white (8-frame solid frame inserted between scenes)
-- Film look: `FilmLook.jsx` applies animated grain (canvas PRNG per frame), vignette, and color grade tint on every image scene
+
+**Compositions:**
+- `Documentary.jsx` — layout engine computes per-scene start frames accounting for dissolve overlap (12 frames) and dip gaps (8 frames). Accepts `scenes`, `imagePaths`, `selectedClips` props. Dispatches each scene to correct component via `renderScene()`. Uses `<Sequence>` per scene + separate dip-frame sequences for dip_black/dip_white transitions.
+- `Root.jsx` — registers `Documentary` (production) and `DocumentaryTest` (5-scene dev preview using `testData.js`) as Remotion Studio compositions. Also registers all 5 motion graphic templates as individual compositions.
+
+**ImageScene (`components/ImageScene.jsx`):**
+- Ken Burns: `scene.motion.type` + `scene.motion.intensity` → `interpolate()` over full scene duration
+- push_in: scale 1.0→1.06/1.10/1.16 (subtle/moderate/strong)
+- pull_out: scale 1.06/1.10/1.16→1.0
+- drift_left/right: translateX 0→-4/-7/-10% and 0→+4/+7/+10%
+- drift_up: translateY 0→-4/-7/-10%
+- static: no transform
+- Renders LowerThird, DateStamp, KineticText overlays from `scene.overlays` array
+- FilmLook applied on top
+
+**FilmLook (`components/overlays/FilmLook.jsx`):**
+- Grain: 512×512 canvas redrawn every render via `useEffect` (no deps) with frame-seeded PRNG for animation
+- Vignette: radial-gradient div, default intensity 0.45
+- cool_blue: `rgba(20,40,80,0.12)` multiply blend
+- warm_amber: `rgba(100,60,10,0.10)` multiply blend
+- desaturated: `filter: saturate(0.55)` on outer wrapper div
+- neutral: grain + vignette only, no tint
+
+**Overlay components:**
+- `LowerThird.jsx` — spring slide from left at `appearAt`, auto-reverses after 90 frames. Blue 3px left border #3b82f6, dark bg.
+- `DateStamp.jsx` — bottom-right pill, 12-frame fade in, holds until near end, 20-frame fade out.
+- `KineticText.jsx` — center (52px) or bottom (22px) text, 20-frame fade in and out, `textShadow` for legibility.
+
+**Motion graphic templates (all 150 frames, dark palette #0a0a0a):**
+- `AnimatedCounter.jsx` — spring count-up with prefix/suffix, comma formatting, animated underline
+- `TimelineBar.jsx` — horizontal line draws left→right over 60 frames, dots stagger in with spring
+- `ComparisonChart.jsx` — vertical bars spring up staggered, value labels above each bar
+- `QuoteCard.jsx` — serif italic pull quote with fade+slide, attribution fades after
+- `MapHighlight.jsx` — SVG world outline, pulsing dot at lat/lng, region label
+
+**Scene type routing:**
+- `FootageScene.jsx` — `<Video>` from Remotion + FilmLook overlay. Used for real_footage when `selectedClips[scene_id]` is set.
+- `PlaceholderScene.jsx` — dark bg, oversized scene number, script excerpt, shot type badge. Used when image not yet generated or no clip selected.
+
+**Test data (`testData.js`):** 5 scenes covering all types: 2 image (push_in strong + drift_left moderate), 1 motion_graphic (AnimatedCounter), 1 real_footage (with selectedClip), 1 image with kinetic_text overlay and static motion. Image paths are empty strings by default — update with actual generated asset paths for visual testing.
+
+**Deviations from original plan:**
+- Audio track sync deferred to Phase 5 (render pipeline) — Remotion's audio API requires asset paths resolved at render time
+- `selectedClips` accepted as a prop on Documentary rather than embedded in scene objects, keeping scene JSON clean
+- `FootageScene.jsx` and `PlaceholderScene.jsx` were not in the original spec but added for robustness
+- `desaturated` grade applied as CSS `filter` on FilmLook wrapper (not as a tint overlay) — more accurate saturation reduction
 
 ### Phase 5 — Full pipeline integration + render
 - End-to-end flow: script in → MP4 out

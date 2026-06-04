@@ -1,5 +1,7 @@
 import { AbsoluteFill, Sequence, useCurrentFrame, useVideoConfig, interpolate } from 'remotion'
-import ImageScene     from '../components/ImageScene'
+import ImageScene      from '../components/ImageScene'
+import FootageScene    from '../components/FootageScene'
+import PlaceholderScene from '../components/PlaceholderScene'
 import AnimatedCounter from '../components/AnimatedCounter'
 import TimelineBar     from '../components/TimelineBar'
 import ComparisonChart from '../components/ComparisonChart'
@@ -62,7 +64,7 @@ export function calculateDocumentaryDuration(scenes) {
 }
 
 // ── SceneLayer — handles per-scene fade in/out for dissolve ──────────────────
-function SceneLayer({ scene, imagePath, fadeIn, fadeOut }) {
+function SceneLayer({ scene, imagePath, selectedClip, fadeIn, fadeOut }) {
   const frame = useCurrentFrame()
   const { durationInFrames } = useVideoConfig()
 
@@ -83,25 +85,31 @@ function SceneLayer({ scene, imagePath, fadeIn, fadeOut }) {
     )
   }
 
+  const renderScene = () => {
+    if (scene.shot_type === 'image') {
+      if (!imagePath) return <PlaceholderScene scene={scene} />
+      return <ImageScene scene={scene} imagePath={imagePath} />
+    }
+    if (scene.shot_type === 'motion_graphic') {
+      return <MotionGraphicScene scene={scene} />
+    }
+    if (scene.shot_type === 'real_footage') {
+      if (selectedClip) return <FootageScene clip={selectedClip} />
+      return <PlaceholderScene scene={scene} />
+    }
+    return <PlaceholderScene scene={scene} />
+  }
+
   return (
     <AbsoluteFill style={{ opacity }}>
-      {scene.shot_type === 'image' && (
-        <ImageScene scene={scene} imagePath={imagePath} />
-      )}
-      {scene.shot_type === 'motion_graphic' && (
-        <MotionGraphicScene scene={scene} />
-      )}
-      {scene.shot_type === 'real_footage' && (
-        <AbsoluteFill style={{ background: '#0a0a0a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ color: '#333', fontSize: 14, fontFamily: 'sans-serif' }}>real footage</div>
-        </AbsoluteFill>
-      )}
+      {renderScene()}
     </AbsoluteFill>
   )
 }
 
 // ── Documentary composition ───────────────────────────────────────────────────
-export function Documentary({ scenes = [], imagePaths = {} }) {
+// selectedClips: { [scene_id]: clip_object } — passed from the render pipeline
+export function Documentary({ scenes = [], imagePaths = {}, selectedClips = {} }) {
   if (!scenes.length) {
     return (
       <AbsoluteFill style={{ background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -126,6 +134,7 @@ export function Documentary({ scenes = [], imagePaths = {} }) {
             <SceneLayer
               scene={scene}
               imagePath={imagePaths[scene.scene_id]}
+              selectedClip={selectedClips[scene.scene_id] || null}
               fadeIn={prevTrans === 'dissolve'}
               fadeOut={myTrans === 'dissolve'}
             />

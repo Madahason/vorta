@@ -38,12 +38,15 @@ export default function FilmLook({
   })  // runs every render (every frame)
 
   const gradeColor = {
-    cool_blue:  'rgba(30, 60, 120, 0.12)',
-    warm_amber: 'rgba(120, 80, 20, 0.10)',
+    cool_blue:  'rgba(20, 40, 80, 0.12)',
+    warm_amber: 'rgba(100, 60, 10, 0.10)',
   }
 
+  // desaturated grade is applied as a CSS filter on the outer wrapper
+  const wrapperFilter = grade === 'desaturated' ? 'saturate(0.55)' : 'none'
+
   return (
-    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', filter: wrapperFilter }}>
       {/* Animated grain */}
       <canvas
         ref={canvasRef}

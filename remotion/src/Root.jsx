@@ -5,20 +5,37 @@ import TimelineBar     from './components/TimelineBar'
 import ComparisonChart from './components/ComparisonChart'
 import QuoteCard       from './components/QuoteCard'
 import MapHighlight    from './components/MapHighlight'
+import { TEST_SCENES, TEST_IMAGE_PATHS, TEST_SELECTED_CLIPS } from './testData'
 
 export function RemotionRoot() {
   return (
     <>
+      {/* Main production composition — receives data from render pipeline */}
       <Composition
         id="Documentary"
         component={Documentary}
         fps={30}
         width={1920}
         height={1080}
-        defaultProps={{ scenes: [], imagePaths: {} }}
+        defaultProps={{ scenes: [], imagePaths: {}, selectedClips: {} }}
         calculateMetadata={({ props }) => ({
           durationInFrames: calculateDocumentaryDuration(props.scenes),
         })}
+      />
+
+      {/* Test composition — 5 mixed scenes for development preview */}
+      <Composition
+        id="DocumentaryTest"
+        component={Documentary}
+        fps={30}
+        width={1920}
+        height={1080}
+        durationInFrames={calculateDocumentaryDuration(TEST_SCENES)}
+        defaultProps={{
+          scenes:        TEST_SCENES,
+          imagePaths:    TEST_IMAGE_PATHS,
+          selectedClips: TEST_SELECTED_CLIPS,
+        }}
       />
 
       {/* Individual component previews for Remotion Studio */}
