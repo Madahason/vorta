@@ -24,5 +24,8 @@ npm-debug.log*
 # Vite
 client/dist/
 
-# Projects output
-projects/*/output/
+# Projects output (generated at runtime — not source)
+projects/
+
+# Claude Code internal state
+.claude/

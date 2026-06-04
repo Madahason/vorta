@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
-import { Loader2, Zap, Trash2 } from 'lucide-react'
+import { Loader2, Zap, Trash2, Play } from 'lucide-react'
 import ScriptInput from '../components/video-creator/ScriptInput'
 import SceneGrid from '../components/video-creator/SceneGrid'
+import VideoPreviewPlayer from '../components/video-creator/VideoPreviewPlayer'
 
 // EventSource must connect directly to Express — Vite's proxy buffers text/event-stream
 const SERVER_URL = 'http://localhost:3001'
@@ -62,6 +63,7 @@ export default function VideoCreator() {
 
   // Key to force ScriptInput remount when session is cleared
   const [resetKey, setResetKey] = useState(0)
+  const [showVideoPlayer, setShowVideoPlayer] = useState(false)
 
   const eventSourceRef = useRef(null)
 
@@ -248,9 +250,14 @@ export default function VideoCreator() {
   }
 
   const imageSceneCount = scenes.filter(s => s.shot_type === 'image').length
+  const hasAnyAsset = scenes.some(s =>
+    (s.shot_type === 'image' && sceneStatuses[s.scene_id]?.status === 'done') ||
+    (s.shot_type === 'motion_graphic' && !!s.motion_component)
+  )
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
+    <>
     <div className="p-8 max-w-4xl">
       {/* Header */}
       <div className="mb-8">
@@ -263,6 +270,15 @@ export default function VideoCreator() {
               >
                 Session restored
               </span>
+            )}
+            {hasAnalyzed && hasAnyAsset && (
+              <button
+                onClick={() => setShowVideoPlayer(true)}
+                className="flex items-center gap-1.5 text-xs text-white/30 hover:text-white/60 transition-colors"
+              >
+                <Play size={11} />
+                Preview Video
+              </button>
             )}
             <button
               onClick={handleClearSession}
@@ -337,5 +353,14 @@ export default function VideoCreator() {
         )}
       </div>
     </div>
+
+    {showVideoPlayer && (
+      <VideoPreviewPlayer
+        scenes={scenes}
+        sceneStatuses={sceneStatuses}
+        onClose={() => setShowVideoPlayer(false)}
+      />
+    )}
+    </>
   )
 }

@@ -45,19 +45,89 @@ Every scene is classified as one of three types:
   "script_excerpt": "The moment Lehman collapsed...",
   "shot_type": "image",
   "mood": "tense",
-  "higgsfield_prompt": "Cinematic aerial view of empty Wall Street at dawn, 2008, dark moody grade, shallow depth of field, slow dolly movement",
+  "higgsfield_prompt": "Traders on the Lehman Brothers trading floor in Midtown Manhattan clearing personal belongings on September 15 2008, shocked expressions, cardboard boxes, LHMAN ticker plummeting on screens behind them",
+  "subject_anchors": ["Lehman Brothers", "September 15 2008", "trading floor", "financial crisis"],
   "style_lock": "dark cinematic 4K shallow depth of field slow dolly documentary",
   "real_footage_flag": false,
   "clip_search_tags": [],
-  "duration_seconds": 5
+  "duration_seconds": 5,
+  "motion": { "type": "static", "intensity": "moderate" },
+  "overlays": [{ "type": "date_stamp", "text": "New York · September 2008" }],
+  "transition_out": "dip_black",
+  "grade": "desaturated"
 }
 ```
+
+### Documentary Composition Layer (added Phase 2 polish)
+
+Each image scene carries full composition metadata assigned by Claude and overridable per-card in the UI.
+
+**`motion`** — controls the camera animation applied to the still image:
+
+| type | use when |
+|------|----------|
+| `push_in` | building tension, approaching a subject, reveals |
+| `pull_out` | showing scale, consequences, stepping back |
+| `drift_left` / `drift_right` | establishing shots, locations, timelines |
+| `drift_up` | aspirational moments, launches, achievements |
+| `static` | death, failure, shock — stillness has impact |
+
+intensity: `subtle` (background), `moderate` (main narrative), `strong` (climax/turning points)
+
+Scale/translate ranges:
+- push_in: scale 1.0 → 1.06 / 1.10 / 1.16
+- pull_out: scale 1.06 → 1.0 / 1.10 → 1.0 / 1.16 → 1.0
+- drift_*: translate 0 → ±4% / ±7% / ±10%
+- static: no transform
+
+**`overlays`** — array of overlay specs rendered on top of the image:
+- `lower_third` — person/company introduction, slides in from left, holds 3s, slides out
+- `date_stamp` — year/location pill, bottom-right, fades in and stays
+- `kinetic_text` — punchy statement, center or bottom, fade in/hold/fade out. Max 1 per 4 scenes.
+
+Rules: never lower_third AND date_stamp on same scene. Leave `[]` for atmospheric scenes.
+
+**`transition_out`** — how the scene exits:
+- `dissolve` — 12-frame cross-fade overlap (default)
+- `cut` — hard cut, no overlap
+- `dip_black` — 8-frame black frame (chapter breaks, deaths, endings)
+- `dip_white` — 8-frame white frame (reveals, memory sequences)
+
+**`grade`** — color grade applied via FilmLook overlay:
+- `cool_blue` — default documentary grade (rgba(30,60,120,0.12) multiply)
+- `warm_amber` — historical/nostalgia (rgba(120,80,20,0.10) multiply)
+- `desaturated` — crisis/failure (CSS saturate(0.6))
+- `neutral` — product shots/clean context (no tint)
+
+**FilmLook overlay** (`remotion/src/components/overlays/FilmLook.jsx`) — applied to every image scene:
+- Animated grain: 512×512 canvas redrawn per frame with frame-seeded PRNG, scaled up via CSS
+- Vignette: radial-gradient div, default intensity 0.45
+- Color grade tint: multiply blend div
+
+**Remotion project** (`remotion/`):
+- Entry: `remotion/src/index.jsx` → `Root.jsx` → registers Documentary composition
+- `Documentary.jsx` computes layout (start frames per scene based on transitions) and sequences all scenes with `<Sequence>`
+- `ImageScene.jsx` applies motion transform + FilmLook + overlay components
+- Each overlay component: `LowerThird.jsx`, `DateStamp.jsx`, `KineticText.jsx`
+- Install: `cd remotion && npm install`
+- Preview: `npm start` (opens Remotion Studio)
+- Render: `npm run render`
 
 ### Style Lock
 Every Higgsfield prompt must include the style lock string to enforce visual consistency across all scenes:
 > "dark cinematic 4K shallow depth of field slow dolly movement documentary aesthetic muted tones"
 
 This string is injected automatically by the backend service — never rely on Claude to remember it per scene.
+
+### Prompt Grounding Rules
+Claude is instructed to generate prompts that are anchored to the specific subject of the video — not generic cinematic stand-ins. The system prompt enforces:
+
+1. **Subject anchoring** — every image prompt must reference the actual subject (real company, product, person, place) not a generic substitute
+2. **Script anchoring** — the prompt describes what is literally happening in the excerpt, not a thematic interpretation
+3. **Specificity** — real place names, years, product names, people described by appearance/role
+4. **Banned concepts** — the words `businessman`, `office`, `technology`, `modern`, `futuristic`, `abstract`, `concept`, `idea`, `success`, `growth`, `innovation`, `digital`, `corporate`, `professional` are explicitly forbidden
+
+**`subject_anchors` field** — Claude extracts 3–6 specific real-world entities per scene (company names, person names, product names, locations, years, events). At least 2 must appear directly in the `higgsfield_prompt`. A post-processing validator in `claude.js` checks this on every image scene and appends the top anchor if the check fails.
 
 ### Clip Library Structure
 Each clip entry in the library:
@@ -169,9 +239,27 @@ higgsfield generate create nano_banana_2 \
 ```
 `--wait` blocks until generation is complete and prints the image URL directly to stdout as a plain string (not JSON). No separate `wait` or `get` step needed.
 
-### Available models
-- `nano_banana_2` — fast, cinematic quality (default for all scenes)
-- `gpt_image_2` — higher quality, slower (opt-in per project)
+### Available models (job set types from `higgsfield model list`)
+
+**Active:**
+
+| Job set type | Display name | Use |
+|---|---|---|
+| `nano_banana_2` | Nano Banana Pro (Gemini 3 Pro) | Default — highest quality (`MODELS.default`) |
+| `nano_banana_flash` | Nano Banana 2 | Fast tier — drafts (`MODELS.fast`) |
+
+Note: the job set type `nano_banana_2` resolves to the product named "Nano Banana Pro". The names are counter-intuitive — always use the job set type, not the display name.
+
+**Confirmed available — commented options for future use:**
+
+| Job set type | Best for |
+|---|---|
+| `cinematic_studio_2_5` | Cinematic/film-tuned; good alternative for documentary B-roll |
+| `flux_kontext` | Precise subject placement, complex prompt following |
+| `seedream_v4_5` | Painterly/editorial mood; good for historical or atmospheric scenes |
+| `veo3`, `veo3_1` | Video generation — reserved for future optional video scenes |
+
+To switch model without a code change: set `HIGGSFIELD_MODEL=<job_set_type>` in `.env` and restart the server.
 
 ### Key behaviours
 - Authentication session is persisted locally by the CLI — no token management needed in code
@@ -269,8 +357,8 @@ vorta/
   - Single `--wait` command replaces the three-step create/wait/get flow entirely
   - Model is a **positional argument**: `higgsfield generate create nano_banana_2 --prompt "..." --aspect_ratio 16:9 --resolution 2k --wait`
   - stdout is a **plain URL string**, not JSON — do not parse it
-  - Model used: `nano_banana_2` (PLAN.md said `soul`; that model does not exist)
-  - `gpt_image_2` available as quality alternative, exported as `MODELS.quality`
+  - Model used: `nano_banana_2` (PLAN.md originally said `soul`; that model does not exist; `nano_banana_2` used in early sessions, upgraded to `nano_banana_2` for production quality)
+  - `nano_banana_2` retained as `MODELS.fast` for draft generation
   - On Windows, `cmd.exe` quoting requires `""` escaping (not bash-style `\"`) — `quoteCmdArg()` handles this
 - SSE (Server-Sent Events) used for live per-scene progress updates — no extra library, uses browser's native `EventSource`
 - `EventSource` must connect directly to Express (`http://localhost:3001`), NOT through Vite proxy — Vite's http-proxy buffers `text/event-stream` responses

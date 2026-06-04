@@ -2,10 +2,15 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
 
-// Available image models
+// Available image models (job set types from `higgsfield model list`)
+// To switch default without touching code: set HIGGSFIELD_MODEL in .env
 const MODELS = {
-  default: 'nano_banana_2', // Fast, cinematic quality — default for all scenes
-  quality: 'gpt_image_2',   // Higher quality, slower — opt-in per project
+  default: process.env.HIGGSFIELD_MODEL || 'nano_banana_2', // Nano Banana Pro (Gemini 3 Pro)
+  fast:    'nano_banana_flash',                              // Fast tier
+  // cinematic_studio_2_5  — cinematic/film tuned, good alternative for documentary B-roll
+  // flux_kontext          — precise subject placement, complex prompt following
+  // seedream_v4_5         — painterly/editorial mood, good for historical/atmospheric scenes
+  // veo3, veo3_1          — video generation, reserved for future optional video scenes
 };
 
 // 6 min covers both job creation + wait for worst-case generation times
