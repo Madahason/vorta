@@ -1,11 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
 import {
-  Loader2, RefreshCw, CheckCircle, XCircle, SkipForward,
+  Loader2, RefreshCw, CheckCircle, XCircle,
   ChevronDown, ChevronUp, Copy, Code2, Eye, ImageIcon, Film,
   Layers, X, AlignLeft, Calendar, Zap, Circle, Sparkles, Palette, Plus,
 } from 'lucide-react'
 import { buildPreviewHTML } from '../../utils/buildPreviewHTML'
-import ScenePreviewModal from './ScenePreviewModal'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -65,8 +64,8 @@ export default function SceneGrid({
   onConvertToImage,
   onManualMatch,
   onOpenLibrary,
+  onPreviewScene,
 }) {
-  const [previewIndex, setPreviewIndex] = useState(null)
 
   const updateScene = (index, patch) =>
     onScenesChange(scenes.map((s, i) => (i === index ? { ...s, ...patch } : s)))
@@ -107,22 +106,11 @@ export default function SceneGrid({
             onConvertToImage={() => onConvertToImage?.(scene.scene_id)}
             onManualMatch={() => onManualMatch?.(scene)}
             onOpenLibrary={onOpenLibrary}
-            onPreview={() => setPreviewIndex(i)}
+            onPreview={() => onPreviewScene?.(scene)}
           />
         ))}
       </div>
 
-      {previewIndex !== null && (
-        <ScenePreviewModal
-          scene={scenes[previewIndex]}
-          sceneIndex={previewIndex}
-          totalScenes={scenes.length}
-          genStatus={sceneStatuses[scenes[previewIndex]?.scene_id] || null}
-          onClose={() => setPreviewIndex(null)}
-          onPrev={() => setPreviewIndex(i => Math.max(0, i - 1))}
-          onNext={() => setPreviewIndex(i => Math.min(scenes.length - 1, i + 1))}
-        />
-      )}
     </div>
   )
 }

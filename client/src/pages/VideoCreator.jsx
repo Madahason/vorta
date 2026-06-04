@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect } from 'react'
-import { Loader2, Zap, Trash2, Play, Library } from 'lucide-react'
+import { useState, useRef, useEffect, useMemo } from 'react'
+import { Loader2, Zap, Trash2, Play, Library, X } from 'lucide-react'
 import ScriptInput from '../components/video-creator/ScriptInput'
 import SceneGrid from '../components/video-creator/SceneGrid'
-import VideoPreviewPlayer from '../components/video-creator/VideoPreviewPlayer'
+import { VideoPlayer } from '../components/video-creator/VideoPlayer'
 import ClipLibrary from '../components/video-creator/ClipLibrary'
 
 // EventSource must connect directly to Express — Vite's proxy buffers text/event-stream
@@ -90,8 +90,9 @@ export default function VideoCreator() {
   const [badgeFading, setBadgeFading] = useState(false)
 
   // Key to force ScriptInput remount when session is cleared
-  const [resetKey, setResetKey] = useState(0)
-  const [showVideoPlayer, setShowVideoPlayer] = useState(false)
+  const [resetKey, setResetKey]     = useState(0)
+  const [showPlayer, setShowPlayer] = useState(false)   // inline full-timeline player
+  const [previewScene, setPreviewScene] = useState(null) // single-scene compact modal
 
   const eventSourceRef = useRef(null)
 
@@ -116,6 +117,15 @@ export default function VideoCreator() {
     })
     lsWrite(LS.clipMatches, toSave)
   }, [clipMatches])
+
+  // ─── Derive imagePaths from sceneStatuses for the Remotion player ───────────
+  const imagePaths = useMemo(() => {
+    const paths = {}
+    Object.entries(sceneStatuses).forEach(([sid, st]) => {
+      if (st.status === 'done' && st.image_path) paths[sid] = st.image_path
+    })
+    return paths
+  }, [sceneStatuses])
 
   // ─── Re-run clip matching on load if scenes restored but matches missing ──
   useEffect(() => {
@@ -143,6 +153,8 @@ export default function VideoCreator() {
     setClipMatches({})
     setSelectedClips({})
     setShowClipLibrary(false)
+    setShowPlayer(false)
+    setPreviewScene(null)
     setSessionRestored(false)
     setBadgeFading(false)
     setResetKey(k => k + 1)  // remounts ScriptInput → reads now-empty localStorage
@@ -405,13 +417,15 @@ export default function VideoCreator() {
                 Clip Library
               </button>
             )}
-            {hasAnalyzed && hasAnyAsset && (
+            {hasAnalyzed && scenes.length > 0 && (
               <button
-                onClick={() => setShowVideoPlayer(true)}
-                className="flex items-center gap-1.5 text-xs text-white/30 hover:text-white/60 transition-colors"
+                onClick={() => setShowPlayer(p => !p)}
+                className={`flex items-center gap-1.5 text-xs transition-colors ${
+                  showPlayer ? 'text-blue-400' : 'text-white/30 hover:text-white/60'
+                }`}
               >
                 <Play size={11} />
-                Preview Video
+                {showPlayer ? 'Hide Player' : 'Preview Video'}
               </button>
             )}
             <button
@@ -475,6 +489,16 @@ export default function VideoCreator() {
               </div>
             )}
 
+            {showPlayer && (
+              <div className="rounded-xl overflow-hidden border border-white/[0.08]">
+                <VideoPlayer
+                  scenes={scenes}
+                  imagePaths={imagePaths}
+                  selectedClips={selectedClips}
+                />
+              </div>
+            )}
+
             <SceneGrid
               scenes={scenes}
               onScenesChange={setScenes}
@@ -488,18 +512,52 @@ export default function VideoCreator() {
               onConvertToImage={handleConvertToImage}
               onManualMatch={handleManualMatch}
               onOpenLibrary={() => setShowClipLibrary(true)}
+              onPreviewScene={setPreviewScene}
             />
           </>
         )}
       </div>
     </div>
 
-    {showVideoPlayer && (
-      <VideoPreviewPlayer
-        scenes={scenes}
-        sceneStatuses={sceneStatuses}
-        onClose={() => setShowVideoPlayer(false)}
-      />
+    {/* Single-scene compact preview modal */}
+    {previewScene && (
+      <div
+        onClick={e => { if (e.target === e.currentTarget) setPreviewScene(null) }}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 50,
+          background: 'rgba(0,0,0,0.88)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '24px',
+        }}
+      >
+        <div style={{ width: '100%', maxWidth: 680, position: 'relative' }}>
+          <button
+            onClick={() => setPreviewScene(null)}
+            style={{
+              position: 'absolute', top: -40, right: 0,
+              display: 'flex', alignItems: 'center', gap: 6,
+              color: 'rgba(255,255,255,0.35)', background: 'none',
+              border: 'none', cursor: 'pointer', fontSize: 13,
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = 'rgba(255,255,255,0.65)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.35)'}
+          >
+            <X size={14} /> Close
+          </button>
+          <VideoPlayer
+            scenes={[previewScene]}
+            imagePaths={imagePaths}
+            selectedClips={selectedClips}
+            style={{ width: '100%', aspectRatio: '16 / 9', borderRadius: '10px', overflow: 'hidden' }}
+          />
+          <p style={{
+            marginTop: 12, fontSize: 12,
+            color: 'rgba(255,255,255,0.25)', textAlign: 'center',
+          }}>
+            {previewScene.script_excerpt}
+          </p>
+        </div>
+      </div>
     )}
 
     {showClipLibrary && (
