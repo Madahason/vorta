@@ -404,11 +404,23 @@ All Video Creator state survives a page refresh via `localStorage`. No backend c
 - `ClipMatchSection` component in `SceneGrid.jsx` — shows loading state, candidate cards with tags/mood/duration, select button, and "Use AI image instead" fallback
 - Selected clip stored as `scene.selected_clip` on the scene object
 
-### Phase 4 — Remotion templates + Ken Burns
+### Phase 4 — Remotion templates + Ken Burns ✅ COMPLETE
 - Build all 5 motion graphic component templates
 - Ken Burns implementation on ImageScene (varied zoom direction per scene to avoid repetition)
 - Cross-dissolve transitions between scenes (8 frames)
 - Audio track sync to scene durations
+
+**Implementation details:**
+- `AnimatedCounter.jsx` — spring-eased count-up with prefix/suffix, comma formatting, animated underline
+- `TimelineBar.jsx` — horizontal timeline with staggered dot reveals, year labels above, event labels below
+- `ComparisonChart.jsx` — vertical bar chart with spring grow animation per bar, value label above each bar
+- `QuoteCard.jsx` — full-screen pull quote in serif italic with fade+slide entrance, attribution line
+- `MapHighlight.jsx` — SVG world map with pulsing dot marker at lat/lng coordinate and region label
+- All templates registered as individual Remotion Studio compositions for preview
+- `Documentary.jsx` updated: motion_graphic scenes dispatched to correct template via `MotionGraphicScene` dispatcher using `scene.motion_graphic_type` and `scene.motion_graphic_props`
+- Ken Burns: `ImageScene.jsx` uses `scene.motion.type` + `scene.motion.intensity` to drive scale/translate transforms via `interpolate()` — direction varies per scene as set by Claude
+- Transitions: dissolve (12-frame cross-fade opacity), cut (no overlap), dip_black/dip_white (8-frame solid frame inserted between scenes)
+- Film look: `FilmLook.jsx` applies animated grain (canvas PRNG per frame), vignette, and color grade tint on every image scene
 
 ### Phase 5 — Full pipeline integration + render
 - End-to-end flow: script in → MP4 out

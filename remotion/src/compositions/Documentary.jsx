@@ -1,5 +1,29 @@
 import { AbsoluteFill, Sequence, useCurrentFrame, useVideoConfig, interpolate } from 'remotion'
-import ImageScene from '../components/ImageScene'
+import ImageScene     from '../components/ImageScene'
+import AnimatedCounter from '../components/AnimatedCounter'
+import TimelineBar     from '../components/TimelineBar'
+import ComparisonChart from '../components/ComparisonChart'
+import QuoteCard       from '../components/QuoteCard'
+import MapHighlight    from '../components/MapHighlight'
+
+// Dispatch motion_graphic scene to the correct template component
+function MotionGraphicScene({ scene }) {
+  const type  = scene.motion_graphic_type
+  const props = scene.motion_graphic_props || {}
+
+  if (type === 'AnimatedCounter') return <AnimatedCounter {...props} />
+  if (type === 'TimelineBar')     return <TimelineBar     {...props} />
+  if (type === 'ComparisonChart') return <ComparisonChart {...props} />
+  if (type === 'QuoteCard')       return <QuoteCard       {...props} />
+  if (type === 'MapHighlight')    return <MapHighlight    {...props} />
+
+  // Fallback placeholder
+  return (
+    <AbsoluteFill style={{ background: '#0a0a0a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ color: '#333', fontSize: 16, fontFamily: 'sans-serif' }}>{type || 'motion graphic'}</div>
+    </AbsoluteFill>
+  )
+}
 
 const FPS              = 30
 const DISSOLVE_OVERLAP = 12  // frames
@@ -64,12 +88,12 @@ function SceneLayer({ scene, imagePath, fadeIn, fadeOut }) {
       {scene.shot_type === 'image' && (
         <ImageScene scene={scene} imagePath={imagePath} />
       )}
-      {/* motion_graphic and real_footage scenes will be wired in Phase 4/5 */}
-      {scene.shot_type !== 'image' && (
+      {scene.shot_type === 'motion_graphic' && (
+        <MotionGraphicScene scene={scene} />
+      )}
+      {scene.shot_type === 'real_footage' && (
         <AbsoluteFill style={{ background: '#0a0a0a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ color: '#333', fontSize: 16, fontFamily: 'sans-serif' }}>
-            {scene.shot_type}
-          </div>
+          <div style={{ color: '#333', fontSize: 14, fontFamily: 'sans-serif' }}>real footage</div>
         </AbsoluteFill>
       )}
     </AbsoluteFill>
