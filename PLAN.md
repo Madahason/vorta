@@ -396,11 +396,17 @@ All Video Creator state survives a page refresh via `localStorage`. No backend c
 
 **Implementation details:**
 - `server/services/clipMatcher.js` — tag overlap scoring (+ 0.5 bonus for mood match), returns top 3
-- `server/routes/library.js` — `GET /api/library` (list + filter), `POST /api/library/match` (single scene), `POST /api/library/match-all` (bulk)
-- `library/gaps.json` — auto-written when no clips match; records scene_id, tags, timestamp
+- `server/routes/library.js` — `GET /api/library` (list + filter), `GET /api/library/gaps` (gap insights), `POST /api/library/match`, `POST /api/library/match-all`, `POST /api/library/add`, `DELETE /api/library/:clip_id`
+- `GET /gaps` is declared before `DELETE /:clip_id` in the router to prevent Express matching "gaps" as a param
+- `library/gaps.json` — auto-written when no clips match; deduplicates by sorted tag set (same tag set never logged twice)
 - `library/clips.json` — seeded with 15 test clips across finance, tech, politics, industry, cities categories
 - Matching auto-fires via `POST /api/library/match-all` immediately after Claude analysis completes
-- `ClipLibrary.jsx` — fullscreen browser panel with live search + category/mood filters, accessible from header button
+- `ClipLibrary.jsx` — **slide-in side panel** (480px, right edge, animated with CSS transform), not a modal
+  - Header: "Library · N clips" count
+  - Add Clip inline form: file path, tags (comma-separated), mood select, category, duration, description, source URL
+  - Delete button with confirm step on each clip card
+  - Gap insights footer: "X scenes need clips — most requested tags: ..."
+  - Live search + category/mood filters
 - `ClipMatchSection` component in `SceneGrid.jsx` — shows loading state, candidate cards with tags/mood/duration, select button, and "Use AI image instead" fallback
 - Selected clip stored as `scene.selected_clip` on the scene object
 
