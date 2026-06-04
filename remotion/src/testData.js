@@ -83,15 +83,11 @@ export const TEST_IMAGE_PATHS = {
   '005': '',
 }
 
-// Selected clip for real_footage scene
-export const TEST_SELECTED_CLIPS = {
-  '004': {
-    clip_id: '001',
-    file: '/library/clips/wall_street_trading_floor.mp4',
-    duration: 6,
-    mood: 'tense',
-  },
-}
+// Selected clips — empty until actual .mp4 files are copied to remotion/public/clips/.
+// Workflow: source clips with yt-dlp, copy to remotion/public/clips/[filename].mp4,
+// then add entries here: { clip_id, file, filename, duration, mood }
+// Scene 004 (real_footage) will render as PlaceholderScene until a clip is available.
+export const TEST_SELECTED_CLIPS = {}
 
 // Lowercase aliases — used by Root.jsx and any code following the prompt spec
 export const testScenes        = TEST_SCENES

@@ -145,6 +145,21 @@ Each clip entry in the library:
 
 Library is stored as a flat JSON file (`/library/clips.json`) alongside the clip files.
 
+### Clip Workflow for Remotion
+
+Remotion only serves static files from its own `remotion/public/` folder. The backend library path and the Remotion path are separate:
+
+| Layer | Path | Purpose |
+|-------|------|---------|
+| Backend (`clips.json`) | `/library/clips/[filename].mp4` | Metadata store, tag matching |
+| Remotion | `remotion/public/clips/[filename].mp4` | Actual video served during render |
+
+**To add a clip to Remotion rendering:**
+1. Source the clip: `yt-dlp -o "%(title)s.%(ext)s" <url>`
+2. Copy/move it to `remotion/public/clips/[filename].mp4`
+3. The backend `clipMatcher.js` automatically derives a `filename` field (basename of `file`) on every returned clip — `FootageScene.jsx` uses `clip.filename` to call `staticFile("clips/[filename]")`
+4. If a clip file is missing from `remotion/public/clips/`, `FootageScene` catches the `onError` event and renders `PlaceholderScene` instead of crashing
+
 ### Remotion Motion Graphic Templates
 Pre-built components to build and maintain:
 - `AnimatedCounter` — counts up to a number (revenue, users, dates)

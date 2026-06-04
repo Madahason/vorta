@@ -5,7 +5,12 @@ const LIBRARY_PATH = path.join(__dirname, '../../library/clips.json')
 
 function loadClips() {
   const raw = fs.readFileSync(LIBRARY_PATH, 'utf8')
-  return JSON.parse(raw).clips
+  const clips = JSON.parse(raw).clips
+  // Augment each clip with `filename` (basename of `file`) for Remotion static serving
+  return clips.map(c => ({
+    ...c,
+    filename: c.filename || (c.file ? c.file.split('/').pop() : ''),
+  }))
 }
 
 // Returns up to `limit` clips sorted by tag overlap score (highest first).
