@@ -17,6 +17,7 @@ console.log(`ANTHROPIC_API_KEY loaded: ${apiKeyLoaded}`);
 // Routes (stubs — wired in Phase 1)
 app.use('/api/analyze', require('./routes/analyze'));
 app.use('/api/generate', require('./routes/generate'));
+app.use('/api/motion', require('./routes/motion'));
 app.use('/api/library', require('./routes/library'));
 app.use('/api/render', require('./routes/render'));
 

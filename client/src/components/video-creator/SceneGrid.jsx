@@ -1,21 +1,31 @@
 import { useState } from 'react'
-import { Loader2, RefreshCw, CheckCircle, XCircle, SkipForward } from 'lucide-react'
+import {
+  Loader2, RefreshCw, CheckCircle, XCircle, SkipForward,
+  ChevronDown, ChevronUp, Copy, Code2,
+} from 'lucide-react'
 
 const TYPE_STYLES = {
-  image:         'bg-blue-500/15 text-blue-300 border-blue-500/25',
-  motion_graphic:'bg-teal-500/15 text-teal-300 border-teal-500/25',
-  real_footage:  'bg-amber-500/15 text-amber-300 border-amber-500/25',
+  image:          'bg-blue-500/15 text-blue-300 border-blue-500/25',
+  motion_graphic: 'bg-teal-500/15 text-teal-300 border-teal-500/25',
+  real_footage:   'bg-amber-500/15 text-amber-300 border-amber-500/25',
 }
 
 const TYPE_LABEL = {
-  image:         'image',
-  motion_graphic:'motion graphic',
-  real_footage:  'real footage',
+  image:          'image',
+  motion_graphic: 'motion graphic',
+  real_footage:   'real footage',
 }
 
 const SHOT_TYPES = ['image', 'motion_graphic', 'real_footage']
 
-export default function SceneGrid({ scenes, onScenesChange, sceneStatuses = {}, onRetry }) {
+export default function SceneGrid({
+  scenes,
+  onScenesChange,
+  sceneStatuses = {},
+  onRetry,
+  motionStatuses = {},
+  onBuildComponent,
+}) {
   const updateScene = (index, patch) =>
     onScenesChange(scenes.map((s, i) => (i === index ? { ...s, ...patch } : s)))
 
@@ -49,6 +59,8 @@ export default function SceneGrid({ scenes, onScenesChange, sceneStatuses = {}, 
             onChange={patch => updateScene(i, patch)}
             genStatus={sceneStatuses[scene.scene_id] || null}
             onRetry={onRetry}
+            motionStatus={motionStatuses[scene.scene_id] || null}
+            onBuildComponent={onBuildComponent}
           />
         ))}
       </div>
@@ -56,26 +68,33 @@ export default function SceneGrid({ scenes, onScenesChange, sceneStatuses = {}, 
   )
 }
 
-function SceneCard({ scene, index, onChange, genStatus, onRetry }) {
+function SceneCard({ scene, index, onChange, genStatus, onRetry, motionStatus, onBuildComponent }) {
   const [editingPrompt, setEditingPrompt] = useState(false)
-  const [promptDraft, setPromptDraft] = useState(scene.higgsfield_prompt)
+  const [promptDraft, setPromptDraft]     = useState(scene.higgsfield_prompt)
+  const [codeExpanded, setCodeExpanded]   = useState(false)
+  const [copied, setCopied]               = useState(false)
 
-  const savePrompt = () => {
-    onChange({ higgsfield_prompt: promptDraft })
-    setEditingPrompt(false)
+  const savePrompt = () => { onChange({ higgsfield_prompt: promptDraft }); setEditingPrompt(false) }
+  const cancelPrompt = () => { setPromptDraft(scene.higgsfield_prompt); setEditingPrompt(false) }
+
+  const copyCode = () => {
+    navigator.clipboard.writeText(scene.motion_component)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
   }
 
-  const cancelPrompt = () => {
-    setPromptDraft(scene.higgsfield_prompt)
-    setEditingPrompt(false)
-  }
-
-  const status = genStatus?.status || null
+  // Image generation status
+  const status      = genStatus?.status || null
   const isGenerating = status === 'generating'
   const isDone       = status === 'done'
   const isFailed     = status === 'failed'
   const isPending    = status === 'pending'
   const isSkipped    = status === 'skipped'
+
+  // Motion component build status
+  const motionBuilding = motionStatus?.status === 'generating'
+  const motionFailed   = motionStatus?.status === 'failed'
+  const hasComponent   = !!scene.motion_component
 
   const borderClass = isGenerating
     ? 'border-blue-500/40'
@@ -96,12 +115,14 @@ function SceneCard({ scene, index, onChange, genStatus, onRetry }) {
           {scene.script_excerpt}
         </p>
         <div className="flex items-center gap-2 shrink-0">
-          {/* Generation status indicator */}
-          {isPending   && <span className="text-[10px] text-white/25 font-mono">pending</span>}
+          {/* Image generation status indicators */}
+          {isPending    && <span className="text-[10px] text-white/25 font-mono">pending</span>}
           {isGenerating && <Loader2 size={12} className="animate-spin text-blue-400" />}
-          {isDone      && <CheckCircle size={13} className="text-green-400" />}
-          {isFailed    && <XCircle size={13} className="text-red-400" />}
-          {isSkipped   && <SkipForward size={13} className="text-white/20" />}
+          {isDone       && <CheckCircle size={13} className="text-green-400" />}
+          {isFailed     && <XCircle size={13} className="text-red-400" />}
+          {isSkipped    && scene.shot_type !== 'motion_graphic' && (
+            <SkipForward size={13} className="text-white/20" />
+          )}
 
           <select
             value={scene.shot_type}
@@ -136,21 +157,83 @@ function SceneCard({ scene, index, onChange, genStatus, onRetry }) {
 
       {/* Content area */}
       <div className="ml-10 space-y-2">
-        {/* Motion graphic */}
+
+        {/* ── MOTION GRAPHIC ─────────────────────────────────────────────── */}
         {scene.shot_type === 'motion_graphic' && (
-          <div className="flex items-center justify-between">
-            <div className="text-[11px] text-teal-400/50 bg-teal-500/[0.05] rounded-lg px-3 py-2 border border-teal-500/[0.12]">
-              Template: <span className="font-mono">{scene.motion_graphic_type || 'TBD'}</span>
+          <div className="space-y-2">
+            {/* Template label + action button row */}
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] text-teal-400/50 bg-teal-500/[0.05] rounded-lg px-3 py-2 border border-teal-500/[0.12]">
+                Template: <span className="font-mono">{scene.motion_graphic_type || 'TBD'}</span>
+              </div>
+
+              {/* Build / generating / (nothing when code exists) */}
+              {!hasComponent && !motionBuilding && !motionFailed && (
+                <button
+                  onClick={() => onBuildComponent(scene)}
+                  className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/20 rounded-lg text-teal-300 transition-colors"
+                >
+                  <Code2 size={11} />
+                  Build Component
+                </button>
+              )}
+              {motionBuilding && (
+                <span className="flex items-center gap-1.5 text-[11px] text-teal-400/60">
+                  <Loader2 size={11} className="animate-spin" />
+                  Generating component…
+                </span>
+              )}
             </div>
-            {isSkipped && (
-              <span className="text-[10px] text-white/20 flex items-center gap-1">
-                <SkipForward size={10} /> not sent to Higgsfield
-              </span>
+
+            {/* Error state */}
+            {motionFailed && (
+              <div className="rounded-lg border border-red-500/20 bg-red-500/[0.04] px-3 py-2.5 flex items-start justify-between gap-3">
+                <p className="text-[11px] text-red-400/80 leading-relaxed flex-1">
+                  {motionStatus?.error || 'Component generation failed'}
+                </p>
+                <button
+                  onClick={() => onBuildComponent(scene)}
+                  className="flex items-center gap-1 text-[11px] px-2.5 py-1 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded text-red-400 transition-colors shrink-0"
+                >
+                  <RefreshCw size={10} /> Retry
+                </button>
+              </div>
+            )}
+
+            {/* Generated code block */}
+            {hasComponent && (
+              <div className="rounded-lg border border-teal-500/[0.18] bg-black/40 overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-1.5 border-b border-teal-500/[0.10]">
+                  <span className="text-[10px] text-teal-400/50 font-mono">SceneComponent.jsx</span>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={copyCode}
+                      className="flex items-center gap-1 text-[10px] text-teal-400/50 hover:text-teal-300 transition-colors"
+                    >
+                      <Copy size={9} />
+                      {copied ? 'Copied!' : 'Copy'}
+                    </button>
+                    <button
+                      onClick={() => setCodeExpanded(e => !e)}
+                      className="text-teal-400/40 hover:text-teal-300 transition-colors"
+                    >
+                      {codeExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                    </button>
+                  </div>
+                </div>
+                <pre
+                  className={`text-[10px] font-mono text-teal-100/55 leading-relaxed p-3 overflow-x-auto transition-all duration-200 ${
+                    codeExpanded ? 'max-h-[32rem] overflow-y-auto' : 'max-h-[4.5rem] overflow-y-hidden'
+                  }`}
+                >
+                  {scene.motion_component}
+                </pre>
+              </div>
             )}
           </div>
         )}
 
-        {/* Real footage skipped */}
+        {/* ── REAL FOOTAGE skipped ────────────────────────────────────────── */}
         {scene.shot_type === 'real_footage' && isSkipped && (
           <div className="text-[11px] text-amber-400/40 bg-amber-500/[0.04] rounded-lg px-3 py-2 border border-amber-500/[0.10] flex items-center gap-2">
             <SkipForward size={11} />
@@ -158,7 +241,7 @@ function SceneCard({ scene, index, onChange, genStatus, onRetry }) {
           </div>
         )}
 
-        {/* Prompt (image + real_footage) */}
+        {/* ── PROMPT (image + real_footage) ───────────────────────────────── */}
         {(scene.shot_type === 'image' || scene.shot_type === 'real_footage') && (
           <>
             {editingPrompt ? (
@@ -188,7 +271,7 @@ function SceneCard({ scene, index, onChange, genStatus, onRetry }) {
           </>
         )}
 
-        {/* Generated image preview */}
+        {/* ── GENERATED IMAGE PREVIEW ─────────────────────────────────────── */}
         {isDone && genStatus.image_path && (
           <div className="mt-2 rounded-lg overflow-hidden border border-white/[0.08]">
             <img
@@ -200,7 +283,7 @@ function SceneCard({ scene, index, onChange, genStatus, onRetry }) {
           </div>
         )}
 
-        {/* Generating pulse */}
+        {/* ── GENERATING PULSE ────────────────────────────────────────────── */}
         {isGenerating && (
           <div className="h-24 rounded-lg bg-white/[0.03] border border-blue-500/[0.15] flex items-center justify-center gap-2">
             <Loader2 size={14} className="animate-spin text-blue-400/60" />
@@ -208,7 +291,7 @@ function SceneCard({ scene, index, onChange, genStatus, onRetry }) {
           </div>
         )}
 
-        {/* Failed state */}
+        {/* ── IMAGE FAILED ────────────────────────────────────────────────── */}
         {isFailed && (
           <div className="rounded-lg border border-red-500/20 bg-red-500/[0.04] px-3 py-2.5 flex items-start justify-between gap-3">
             <p className="text-[11px] text-red-400/80 leading-relaxed flex-1">
@@ -224,6 +307,7 @@ function SceneCard({ scene, index, onChange, genStatus, onRetry }) {
             )}
           </div>
         )}
+
       </div>
     </div>
   )

@@ -44,6 +44,9 @@ export default function VideoCreator() {
     })
   })
 
+  // Per-scene motion component build status — not persisted (transient)
+  const [motionStatuses, setMotionStatuses] = useState({})
+
   // Never persist these — always start false
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [analyzeError, setAnalyzeError] = useState(null)
@@ -90,6 +93,7 @@ export default function VideoCreator() {
     setGenerateError(null)
     setAnalyzeError(null)
     setIsGenerating(false)
+    setMotionStatuses({})
     setSessionRestored(false)
     setBadgeFading(false)
     setResetKey(k => k + 1)  // remounts ScriptInput → reads now-empty localStorage
@@ -183,6 +187,39 @@ export default function VideoCreator() {
     } catch (err) {
       setGenerateError(err.message)
       setIsGenerating(false)
+    }
+  }
+
+  // ─── Build motion component ───────────────────────────────────────────────
+  const handleBuildComponent = async (scene) => {
+    setMotionStatuses(prev => ({ ...prev, [scene.scene_id]: { status: 'generating', error: null } }))
+
+    try {
+      const res  = await fetch('/api/motion', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          scene_id:       scene.scene_id,
+          script_excerpt: scene.script_excerpt,
+          mood:           scene.mood,
+          shot_type:      scene.shot_type,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Component generation failed')
+
+      // Embed component code directly on the scene object (persisted via vorta_scenes)
+      setScenes(prev => prev.map(s =>
+        s.scene_id === scene.scene_id ? { ...s, motion_component: data.component_code } : s
+      ))
+
+      // Also write to the dedicated motion components key
+      const existing = lsRead(LS.motionComps) || {}
+      lsWrite(LS.motionComps, { ...existing, [scene.scene_id]: data.component_code })
+
+      setMotionStatuses(prev => ({ ...prev, [scene.scene_id]: { status: 'done', error: null } }))
+    } catch (err) {
+      setMotionStatuses(prev => ({ ...prev, [scene.scene_id]: { status: 'failed', error: err.message } }))
     }
   }
 
@@ -293,6 +330,8 @@ export default function VideoCreator() {
               onScenesChange={setScenes}
               sceneStatuses={sceneStatuses}
               onRetry={handleRetry}
+              motionStatuses={motionStatuses}
+              onBuildComponent={handleBuildComponent}
             />
           </>
         )}
