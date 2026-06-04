@@ -387,28 +387,32 @@ All Video Creator state survives a page refresh via `localStorage`. No backend c
 - A subtle **"Session restored"** badge appears in the header for 3 seconds when saved data is detected on load (fades out with CSS transition)
 - A **"Clear session"** button in the header wipes all `vorta_*` keys and resets all state to blank, including force-remounting `ScriptInput` via React `key` prop
 
-### Phase 3 — Clip library + matching ✅ COMPLETE
+### Phase 3 — Clip library + matching ⚠️ PARTIAL
 - Clip library browser UI (search, filter by category/mood/tags)
 - Auto-match `real_footage` scenes against library tags
 - Show top 3 candidates per scene, user picks or skips
 - Fallback: auto-convert unmatched scenes to `image` type
 - Gap logger: records unmatched tags to help grow the library
 
+**What works (confirmed):**
+- All backend endpoints confirmed working: `GET /api/library`, `GET /api/library/gaps`, `POST /api/library/match`, `POST /api/library/match-all`, `POST /api/library/add`, `DELETE /api/library/:clip_id`
+- `gaps.json` logging with deduplication
+- Clip Library slide-in panel (search, filters, Add Clip form, delete with confirm, gap insights footer)
+- "Convert to image" fallback on scene cards
+- 16 seed clips in library (IDs 001–016) including Apple keynote, Wall Street, Silicon Valley, US Capitol, etc.
+
+**Known issue — to fix after Phase 5:**
+- Clip candidate cards do not render on `real_footage` scene cards despite the backend returning correct match results. Root cause: frontend state/props wiring between `VideoCreator.jsx` (`clipMatches`, `selectedClips` state) and `ClipMatchSection` in `SceneGrid.jsx`. The backend match logic is correct; this is a React state threading bug to be diagnosed and fixed as a follow-up.
+
 **Implementation details:**
 - `server/services/clipMatcher.js` — tag overlap scoring (+ 0.5 bonus for mood match), returns top 3
-- `server/routes/library.js` — `GET /api/library` (list + filter), `GET /api/library/gaps` (gap insights), `POST /api/library/match`, `POST /api/library/match-all`, `POST /api/library/add`, `DELETE /api/library/:clip_id`
-- `GET /gaps` is declared before `DELETE /:clip_id` in the router to prevent Express matching "gaps" as a param
-- `library/gaps.json` — auto-written when no clips match; deduplicates by sorted tag set (same tag set never logged twice)
-- `library/clips.json` — seeded with 15 test clips across finance, tech, politics, industry, cities categories
-- Matching auto-fires via `POST /api/library/match-all` immediately after Claude analysis completes
-- `ClipLibrary.jsx` — **slide-in side panel** (480px, right edge, animated with CSS transform), not a modal
-  - Header: "Library · N clips" count
-  - Add Clip inline form: file path, tags (comma-separated), mood select, category, duration, description, source URL
-  - Delete button with confirm step on each clip card
-  - Gap insights footer: "X scenes need clips — most requested tags: ..."
-  - Live search + category/mood filters
-- `ClipMatchSection` component in `SceneGrid.jsx` — shows loading state, candidate cards with tags/mood/duration, select button, and "Use AI image instead" fallback
-- Selected clip stored as `scene.selected_clip` on the scene object
+- `server/routes/library.js` — all CRUD + match endpoints; `GET /gaps` sorted most-recent-first; declared before `DELETE /:clip_id` to prevent Express param collision
+- `library/gaps.json` — auto-written on zero matches; deduplicates by sorted tag set
+- `library/clips.json` — 16 seed clips across finance, tech, politics, industry, cities, transportation categories
+- Matching auto-fires via `POST /api/library/match-all` immediately after Claude analysis completes; also re-runs on page load if scenes are restored from localStorage but `clipMatches` is empty
+- `clipMatches` and `selectedClips` persisted to `vorta_clip_matches` / `vorta_selected_clips` in localStorage
+- `ClipLibrary.jsx` — 480px slide-in side panel with Add Clip form, delete-with-confirm, gap insights footer
+- `ClipMatchSection` in `SceneGrid.jsx` — state/props wiring incomplete (see known issue above)
 
 ### Phase 4 — Remotion templates + Ken Burns ✅ COMPLETE
 - Build all 5 motion graphic component templates
