@@ -277,6 +277,28 @@ vorta/
 - Projects static files served via `express.static` at `/projects` route
 - `generate.js` in-memory `store` Map resets on server restart — clients receive 404 on SSE reconnect if server was restarted mid-generation
 
+### Browser Persistence (localStorage) — added in Phase 2 polish
+
+All Video Creator state survives a page refresh via `localStorage`. No backend changes required — images are already saved to `/projects/[id]/assets/` on the filesystem and remain accessible as long as the server is running.
+
+**Keys written:**
+
+| Key | Contents | Managed by |
+|-----|----------|------------|
+| `vorta_scenes` | Full scenes array (prompts, shot types, manual overrides) | `VideoCreator.jsx` |
+| `vorta_project_id` | Current project ID string | `VideoCreator.jsx` |
+| `vorta_scene_statuses` | Per-scene `{ status, image_path, error }` — images reappear on load | `VideoCreator.jsx` |
+| `vorta_script_metadata` | `{ title, niche, stylePreset, narratorTone, script }` | `ScriptInput.jsx` |
+| `vorta_motion_components` | Reserved for Phase 4 Remotion component code per scene | unused |
+
+**Behaviour:**
+- State is lazy-initialised from localStorage before first render — scenes, statuses, and images appear instantly on reload
+- `isAnalyzing` and `isGenerating` are **never** persisted — they always reset to `false` on load to prevent a stuck spinner
+- `generateDone` is derived on load from persisted statuses (true if all image scenes are done/failed)
+- All reads are wrapped in `try/catch` — any parse or quota error silently starts a fresh session
+- A subtle **"Session restored"** badge appears in the header for 3 seconds when saved data is detected on load (fades out with CSS transition)
+- A **"Clear session"** button in the header wipes all `vorta_*` keys and resets all state to blank, including force-remounting `ScriptInput` via React `key` prop
+
 ### Phase 3 — Clip library + matching
 - Clip library browser UI (search, filter by category/mood/tags)
 - Auto-match `real_footage` scenes against library tags

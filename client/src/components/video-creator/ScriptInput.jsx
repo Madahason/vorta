@@ -1,18 +1,38 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
 
-const NICHES = ['Finance', 'History', 'Technology', 'Science', 'Business', 'Politics', 'Culture']
-const STYLE_PRESETS = ['Dark Cinematic', 'Clean Modern', 'Gritty Documentary', 'High Contrast']
-const NARRATOR_TONES = ['Authoritative', 'Conversational', 'Dramatic', 'Measured', 'Urgent']
+const NICHES          = ['Finance', 'History', 'Technology', 'Science', 'Business', 'Politics', 'Culture']
+const STYLE_PRESETS   = ['Dark Cinematic', 'Clean Modern', 'Gritty Documentary', 'High Contrast']
+const NARRATOR_TONES  = ['Authoritative', 'Conversational', 'Dramatic', 'Measured', 'Urgent']
+const LS_KEY          = 'vorta_script_metadata'
+
+const DEFAULTS = {
+  title:        '',
+  niche:        'Finance',
+  stylePreset:  'Dark Cinematic',
+  narratorTone: 'Authoritative',
+}
+
+function lsRead() {
+  try { return JSON.parse(localStorage.getItem(LS_KEY)) } catch { return null }
+}
+function lsWrite(value) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(value)) } catch {}
+}
 
 export default function ScriptInput({ onAnalyze, isAnalyzing }) {
-  const [script, setScript] = useState('')
-  const [metadata, setMetadata] = useState({
-    title: '',
-    niche: 'Finance',
-    stylePreset: 'Dark Cinematic',
-    narratorTone: 'Authoritative',
+  const [script, setScript] = useState(() => lsRead()?.script || '')
+  const [metadata, setMetadata] = useState(() => {
+    const saved = lsRead()
+    if (!saved) return DEFAULTS
+    const { script: _ignored, ...rest } = saved
+    return { ...DEFAULTS, ...rest }
   })
+
+  // Persist script + metadata together on every change
+  useEffect(() => {
+    lsWrite({ ...metadata, script })
+  }, [script, metadata])
 
   const wordCount = script.split(/\s+/).filter(Boolean).length
 
