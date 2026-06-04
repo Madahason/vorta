@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
-import { Loader2, Zap, Trash2, Play } from 'lucide-react'
+import { Loader2, Zap, Trash2, Play, Library } from 'lucide-react'
 import ScriptInput from '../components/video-creator/ScriptInput'
 import SceneGrid from '../components/video-creator/SceneGrid'
 import VideoPreviewPlayer from '../components/video-creator/VideoPreviewPlayer'
+import ClipLibrary from '../components/video-creator/ClipLibrary'
 
 // EventSource must connect directly to Express — Vite's proxy buffers text/event-stream
 const SERVER_URL = 'http://localhost:3001'
@@ -47,6 +48,10 @@ export default function VideoCreator() {
 
   // Per-scene motion component build status — not persisted (transient)
   const [motionStatuses, setMotionStatuses] = useState({})
+
+  // Clip library matches — { [scene_id]: { matches: [], loading: bool } }
+  const [clipMatches, setClipMatches]       = useState({})
+  const [showClipLibrary, setShowClipLibrary] = useState(false)
 
   // Never persist these — always start false
   const [isAnalyzing, setIsAnalyzing] = useState(false)
@@ -151,6 +156,7 @@ export default function VideoCreator() {
       if (!res.ok) throw new Error(data.error || 'Analysis failed')
       setScenes(data.scenes)
       setHasAnalyzed(true)
+      matchClipsForScenes(data.scenes)
     } catch (err) {
       setAnalyzeError(err.message)
     } finally {
@@ -225,6 +231,44 @@ export default function VideoCreator() {
     }
   }
 
+  // ─── Clip matching ────────────────────────────────────────────────────────
+  const matchClipsForScenes = async (allScenes) => {
+    const realScenes = allScenes.filter(s => s.shot_type === 'real_footage')
+    if (!realScenes.length) return
+
+    // Set all real footage scenes to loading
+    setClipMatches(prev => {
+      const next = { ...prev }
+      realScenes.forEach(s => { next[s.scene_id] = { matches: [], loading: true } })
+      return next
+    })
+
+    try {
+      const res  = await fetch('/api/library/match-all', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ scenes: realScenes }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Match failed')
+
+      setClipMatches(prev => {
+        const next = { ...prev }
+        Object.entries(data.results).forEach(([sid, matches]) => {
+          next[sid] = { matches, loading: false }
+        })
+        return next
+      })
+    } catch {
+      // Clear loading states silently — scenes still work, just no auto-matches
+      setClipMatches(prev => {
+        const next = { ...prev }
+        realScenes.forEach(s => { next[s.scene_id] = { matches: [], loading: false } })
+        return next
+      })
+    }
+  }
+
   // ─── Retry ────────────────────────────────────────────────────────────────
   const handleRetry = async (scene_id, higgsfield_prompt) => {
     setSceneStatuses(prev => ({
@@ -249,6 +293,19 @@ export default function VideoCreator() {
     }
   }
 
+  // ─── Clip selection ───────────────────────────────────────────────────────
+  const handleSelectClip = (scene_id, clip) => {
+    setScenes(prev => prev.map(s =>
+      s.scene_id === scene_id ? { ...s, selected_clip: clip } : s
+    ))
+  }
+
+  const handleConvertToImage = (scene_id) => {
+    setScenes(prev => prev.map(s =>
+      s.scene_id === scene_id ? { ...s, shot_type: 'image', real_footage_flag: false } : s
+    ))
+  }
+
   const imageSceneCount = scenes.filter(s => s.shot_type === 'image').length
   const hasAnyAsset = scenes.some(s =>
     (s.shot_type === 'image' && sceneStatuses[s.scene_id]?.status === 'done') ||
@@ -270,6 +327,15 @@ export default function VideoCreator() {
               >
                 Session restored
               </span>
+            )}
+            {hasAnalyzed && (
+              <button
+                onClick={() => setShowClipLibrary(true)}
+                className="flex items-center gap-1.5 text-xs text-white/30 hover:text-white/60 transition-colors"
+              >
+                <Library size={11} />
+                Clip Library
+              </button>
             )}
             {hasAnalyzed && hasAnyAsset && (
               <button
@@ -348,6 +414,9 @@ export default function VideoCreator() {
               onRetry={handleRetry}
               motionStatuses={motionStatuses}
               onBuildComponent={handleBuildComponent}
+              clipMatches={clipMatches}
+              onSelectClip={handleSelectClip}
+              onConvertToImage={handleConvertToImage}
             />
           </>
         )}
@@ -360,6 +429,10 @@ export default function VideoCreator() {
         sceneStatuses={sceneStatuses}
         onClose={() => setShowVideoPlayer(false)}
       />
+    )}
+
+    {showClipLibrary && (
+      <ClipLibrary onClose={() => setShowClipLibrary(false)} />
     )}
     </>
   )

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   Loader2, RefreshCw, CheckCircle, XCircle, SkipForward,
-  ChevronDown, ChevronUp, Copy, Code2, Eye,
+  ChevronDown, ChevronUp, Copy, Code2, Eye, ImageIcon, Film,
 } from 'lucide-react'
 import { buildPreviewHTML } from '../../utils/buildPreviewHTML'
 import ScenePreviewModal from './ScenePreviewModal'
@@ -29,6 +29,9 @@ export default function SceneGrid({
   onRetry,
   motionStatuses = {},
   onBuildComponent,
+  clipMatches = {},
+  onSelectClip,
+  onConvertToImage,
 }) {
   const [previewIndex, setPreviewIndex] = useState(null)
 
@@ -65,6 +68,9 @@ export default function SceneGrid({
             onRetry={onRetry}
             motionStatus={motionStatuses[scene.scene_id] || null}
             onBuildComponent={onBuildComponent}
+            clipMatch={clipMatches[scene.scene_id] || null}
+            onSelectClip={clip => onSelectClip?.(scene.scene_id, clip)}
+            onConvertToImage={() => onConvertToImage?.(scene.scene_id)}
             onPreview={() => setPreviewIndex(i)}
           />
         ))}
@@ -87,7 +93,7 @@ export default function SceneGrid({
 
 // ─── SceneCard ────────────────────────────────────────────────────────────────
 
-function SceneCard({ scene, index, onChange, genStatus, onRetry, motionStatus, onBuildComponent, onPreview }) {
+function SceneCard({ scene, index, onChange, genStatus, onRetry, motionStatus, onBuildComponent, clipMatch, onSelectClip, onConvertToImage, onPreview }) {
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft, setPromptDraft]     = useState(scene.higgsfield_prompt)
   const [codeExpanded, setCodeExpanded]   = useState(false)
@@ -133,7 +139,7 @@ function SceneCard({ scene, index, onChange, genStatus, onRetry, motionStatus, o
           {isGenerating && <Loader2 size={12} className="animate-spin text-blue-400" />}
           {isDone       && <CheckCircle size={13} className="text-green-400" />}
           {isFailed     && <XCircle size={13} className="text-red-400" />}
-          {isSkipped && scene.shot_type !== 'motion_graphic' && (
+          {isSkipped && scene.shot_type === 'image' && (
             <SkipForward size={13} className="text-white/20" />
           )}
           <button
@@ -277,12 +283,14 @@ function SceneCard({ scene, index, onChange, genStatus, onRetry, motionStatus, o
           </div>
         )}
 
-        {/* ════ REAL FOOTAGE skipped ══════════════════════════════════════════ */}
-        {scene.shot_type === 'real_footage' && isSkipped && (
-          <div className="text-[11px] text-amber-400/40 bg-amber-500/[0.04] rounded-lg px-3 py-2 border border-amber-500/[0.10] flex items-center gap-2">
-            <SkipForward size={11} />
-            Skipped — will be matched to clip library in Phase 3
-          </div>
+        {/* ════ REAL FOOTAGE — clip matching ══════════════════════════════════ */}
+        {scene.shot_type === 'real_footage' && (
+          <ClipMatchSection
+            scene={scene}
+            clipMatch={clipMatch}
+            onSelectClip={onSelectClip}
+            onConvertToImage={onConvertToImage}
+          />
         )}
 
         {/* ════ PROMPT (image + real_footage) ════════════════════════════════ */}
@@ -358,6 +366,124 @@ function SceneCard({ scene, index, onChange, genStatus, onRetry, motionStatus, o
         )}
 
       </div>
+    </div>
+  )
+}
+
+// ─── ClipMatchSection ─────────────────────────────────────────────────────────
+
+const MOOD_STYLES = {
+  tense:    'bg-red-500/[0.07] text-red-400/60 border-red-500/[0.14]',
+  formal:   'bg-slate-500/[0.07] text-slate-400/60 border-slate-500/[0.14]',
+  intense:  'bg-orange-500/[0.07] text-orange-400/60 border-orange-500/[0.14]',
+  neutral:  'bg-white/[0.04] text-white/30 border-white/[0.08]',
+}
+
+function ClipMatchSection({ scene, clipMatch, onSelectClip, onConvertToImage }) {
+  const loading    = clipMatch?.loading ?? false
+  const matches    = clipMatch?.matches ?? []
+  const noMatches  = clipMatch && !loading && matches.length === 0
+  const isSelected = !!scene.selected_clip
+
+  return (
+    <div className="space-y-2">
+
+      {/* Search tags */}
+      {scene.clip_search_tags?.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {scene.clip_search_tags.map(tag => (
+            <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/[0.06] text-amber-400/50 border border-amber-500/[0.10]">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Loading state */}
+      {loading && (
+        <div className="flex items-center gap-2 text-[11px] text-amber-400/40">
+          <Loader2 size={11} className="animate-spin" />
+          Searching clip library…
+        </div>
+      )}
+
+      {/* Selected clip banner */}
+      {isSelected && (
+        <div className="flex items-center justify-between rounded-lg bg-amber-500/[0.06] border border-amber-500/[0.15] px-3 py-2">
+          <div className="flex items-center gap-2">
+            <Film size={11} className="text-amber-400/60" />
+            <span className="text-[11px] text-amber-300/70 font-mono">{scene.selected_clip.clip_id}</span>
+            <span className="text-[11px] text-white/30">{scene.selected_clip.description}</span>
+          </div>
+          <button
+            onClick={() => onSelectClip(null)}
+            className="text-[10px] text-white/20 hover:text-white/45 transition-colors"
+          >
+            Change
+          </button>
+        </div>
+      )}
+
+      {/* Clip candidates */}
+      {!loading && !isSelected && matches.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-[10px] text-white/25 uppercase tracking-wider">
+            {matches.length} match{matches.length !== 1 ? 'es' : ''} found
+          </p>
+          {matches.map(clip => (
+            <div
+              key={clip.clip_id}
+              className="flex items-center justify-between rounded-lg border border-amber-500/[0.08] bg-amber-500/[0.02] hover:bg-amber-500/[0.05] px-3 py-2 transition-colors"
+            >
+              <div className="flex-1 min-w-0 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono text-amber-400/50">{clip.clip_id}</span>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded border ${MOOD_STYLES[clip.mood] || MOOD_STYLES.neutral}`}>
+                    {clip.mood}
+                  </span>
+                  <span className="text-[10px] text-white/25">{clip.duration}s</span>
+                </div>
+                <p className="text-[11px] text-white/40 truncate">{clip.description}</p>
+                <div className="flex flex-wrap gap-1">
+                  {clip.tags.slice(0, 4).map(t => (
+                    <span key={t} className="text-[9px] px-1 py-0 rounded bg-white/[0.04] text-white/25">
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <button
+                onClick={() => onSelectClip(clip)}
+                className="ml-3 shrink-0 text-[11px] px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded-lg text-amber-300 transition-colors"
+              >
+                Select
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* No matches */}
+      {noMatches && !isSelected && (
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-3 space-y-2">
+          <p className="text-[11px] text-white/30">No matching clips in library for these tags.</p>
+          <button
+            onClick={onConvertToImage}
+            className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded-lg text-blue-300 transition-colors"
+          >
+            <ImageIcon size={11} />
+            Use AI image instead
+          </button>
+        </div>
+      )}
+
+      {/* Not yet matched (no clipMatch data yet) */}
+      {!clipMatch && !loading && (
+        <div className="text-[11px] text-white/20 italic">
+          Clip matching will run automatically on analysis
+        </div>
+      )}
+
     </div>
   )
 }

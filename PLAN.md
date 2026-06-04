@@ -387,12 +387,22 @@ All Video Creator state survives a page refresh via `localStorage`. No backend c
 - A subtle **"Session restored"** badge appears in the header for 3 seconds when saved data is detected on load (fades out with CSS transition)
 - A **"Clear session"** button in the header wipes all `vorta_*` keys and resets all state to blank, including force-remounting `ScriptInput` via React `key` prop
 
-### Phase 3 — Clip library + matching
+### Phase 3 — Clip library + matching ✅ COMPLETE
 - Clip library browser UI (search, filter by category/mood/tags)
 - Auto-match `real_footage` scenes against library tags
 - Show top 3 candidates per scene, user picks or skips
 - Fallback: auto-convert unmatched scenes to `image` type
 - Gap logger: records unmatched tags to help grow the library
+
+**Implementation details:**
+- `server/services/clipMatcher.js` — tag overlap scoring (+ 0.5 bonus for mood match), returns top 3
+- `server/routes/library.js` — `GET /api/library` (list + filter), `POST /api/library/match` (single scene), `POST /api/library/match-all` (bulk)
+- `library/gaps.json` — auto-written when no clips match; records scene_id, tags, timestamp
+- `library/clips.json` — seeded with 15 test clips across finance, tech, politics, industry, cities categories
+- Matching auto-fires via `POST /api/library/match-all` immediately after Claude analysis completes
+- `ClipLibrary.jsx` — fullscreen browser panel with live search + category/mood filters, accessible from header button
+- `ClipMatchSection` component in `SceneGrid.jsx` — shows loading state, candidate cards with tags/mood/duration, select button, and "Use AI image instead" fallback
+- Selected clip stored as `scene.selected_clip` on the scene object
 
 ### Phase 4 — Remotion templates + Ken Burns
 - Build all 5 motion graphic component templates

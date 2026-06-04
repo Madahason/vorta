@@ -1,3 +1,154 @@
 {
-  "clips": []
+  "clips": [
+    {
+      "clip_id": "001",
+      "file": "/library/clips/wall_street_trading_floor.mp4",
+      "tags": ["wall street", "finance", "trading", "stock market", "traders", "new york"],
+      "mood": "tense",
+      "category": "finance",
+      "duration": 6,
+      "description": "Traders on a busy stock exchange floor, screens flashing",
+      "source_url": ""
+    },
+    {
+      "clip_id": "002",
+      "file": "/library/clips/silicon_valley_aerial.mp4",
+      "tags": ["silicon valley", "tech", "california", "aerial", "suburban", "bay area"],
+      "mood": "neutral",
+      "category": "technology",
+      "duration": 8,
+      "description": "Aerial over Silicon Valley suburban sprawl",
+      "source_url": ""
+    },
+    {
+      "clip_id": "003",
+      "file": "/library/clips/us_capitol_exterior.mp4",
+      "tags": ["washington dc", "capitol", "government", "politics", "congress", "usa"],
+      "mood": "formal",
+      "category": "politics",
+      "duration": 5,
+      "description": "Wide shot of the US Capitol building",
+      "source_url": ""
+    },
+    {
+      "clip_id": "004",
+      "file": "/library/clips/protest_crowd.mp4",
+      "tags": ["protest", "crowd", "demonstration", "movement", "street", "people"],
+      "mood": "intense",
+      "category": "social",
+      "duration": 7,
+      "description": "Large crowd of protesters in city street",
+      "source_url": ""
+    },
+    {
+      "clip_id": "005",
+      "file": "/library/clips/factory_assembly_line.mp4",
+      "tags": ["factory", "manufacturing", "assembly", "workers", "industrial", "production"],
+      "mood": "neutral",
+      "category": "industry",
+      "duration": 6,
+      "description": "Workers on a factory assembly line",
+      "source_url": ""
+    },
+    {
+      "clip_id": "006",
+      "file": "/library/clips/new_york_skyline.mp4",
+      "tags": ["new york", "skyline", "city", "urban", "manhattan", "skyscrapers"],
+      "mood": "neutral",
+      "category": "cities",
+      "duration": 8,
+      "description": "New York City skyline at dusk",
+      "source_url": ""
+    },
+    {
+      "clip_id": "007",
+      "file": "/library/clips/boardroom_meeting.mp4",
+      "tags": ["boardroom", "meeting", "executives", "business", "corporate", "negotiation"],
+      "mood": "formal",
+      "category": "business",
+      "duration": 5,
+      "description": "Executives around a boardroom table",
+      "source_url": ""
+    },
+    {
+      "clip_id": "008",
+      "file": "/library/clips/server_room.mp4",
+      "tags": ["data center", "servers", "cloud", "infrastructure", "tech", "computing"],
+      "mood": "neutral",
+      "category": "technology",
+      "duration": 6,
+      "description": "Rows of servers in a data center",
+      "source_url": ""
+    },
+    {
+      "clip_id": "009",
+      "file": "/library/clips/stock_market_crash.mp4",
+      "tags": ["stock market", "crash", "recession", "finance", "crisis", "red"],
+      "mood": "tense",
+      "category": "finance",
+      "duration": 5,
+      "description": "Stock tickers in red showing market decline",
+      "source_url": ""
+    },
+    {
+    "clip_id": "010",
+      "file": "/library/clips/london_financial_district.mp4",
+      "tags": ["london", "city of london", "finance", "banking", "uk", "europe"],
+      "mood": "formal",
+      "category": "finance",
+      "duration": 7,
+      "description": "Canary Wharf financial towers in London",
+      "source_url": ""
+    },
+    {
+      "clip_id": "011",
+      "file": "/library/clips/courtroom.mp4",
+      "tags": ["courtroom", "trial", "legal", "justice", "law", "judge"],
+      "mood": "tense",
+      "category": "legal",
+      "duration": 5,
+      "description": "Empty courtroom with judge's bench",
+      "source_url": ""
+    },
+    {
+      "clip_id": "012",
+      "file": "/library/clips/white_house.mp4",
+      "tags": ["white house", "washington dc", "president", "politics", "usa", "government"],
+      "mood": "formal",
+      "category": "politics",
+      "duration": 6,
+      "description": "White House exterior, South Lawn",
+      "source_url": ""
+    },
+    {
+      "clip_id": "013",
+      "file": "/library/clips/press_conference.mp4",
+      "tags": ["press conference", "media", "journalists", "announcement", "podium", "cameras"],
+      "mood": "neutral",
+      "category": "media",
+      "duration": 5,
+      "description": "Crowded press conference with reporters",
+      "source_url": ""
+    },
+    {
+      "clip_id": "014",
+      "file": "/library/clips/oil_refinery.mp4",
+      "tags": ["oil", "energy", "refinery", "fossil fuel", "industry", "petroleum"],
+      "mood": "neutral",
+      "category": "energy",
+      "duration": 7,
+      "description": "Oil refinery towers at twilight",
+      "source_url": ""
+    },
+    {
+      "clip_id": "015",
+      "file": "/library/clips/airport_timelapse.mp4",
+      "tags": ["airport", "travel", "aviation", "global", "transportation", "busy"],
+      "mood": "neutral",
+      "category": "transportation",
+      "duration": 6,
+      "description": "Time-lapse of busy international airport",
+      "source_url": ""
+    }
+  ]
 }
