@@ -57,6 +57,9 @@ router.get('/gaps', (req, res) => {
     let gaps = []
     try { gaps = JSON.parse(fs.readFileSync(GAPS_PATH, 'utf8')).gaps } catch {}
 
+    // Most recent first
+    gaps = [...gaps].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+
     const tagCount = {}
     gaps.forEach(g => {
       ;(g.tags || []).forEach(t => { tagCount[t] = (tagCount[t] || 0) + 1 })

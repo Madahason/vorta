@@ -149,6 +149,16 @@
       "duration": 6,
       "description": "Time-lapse of busy international airport",
       "source_url": ""
+    },
+    {
+      "clip_id": "016",
+      "file": "/library/clips/apple_keynote_stage.mp4",
+      "tags": ["apple", "steve jobs", "keynote", "moscone", "product launch", "2007"],
+      "mood": "anticipatory",
+      "category": "tech",
+      "duration": 7,
+      "description": "Speaker on a dark stage with spotlight at a major product keynote event",
+      "source_url": ""
     }
   ]
 }

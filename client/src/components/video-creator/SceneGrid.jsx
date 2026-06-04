@@ -60,8 +60,11 @@ export default function SceneGrid({
   motionStatuses = {},
   onBuildComponent,
   clipMatches = {},
+  selectedClips = {},
   onSelectClip,
   onConvertToImage,
+  onManualMatch,
+  onOpenLibrary,
 }) {
   const [previewIndex, setPreviewIndex] = useState(null)
 
@@ -98,9 +101,12 @@ export default function SceneGrid({
             onRetry={onRetry}
             motionStatus={motionStatuses[scene.scene_id] || null}
             onBuildComponent={onBuildComponent}
-            clipMatch={clipMatches[scene.scene_id] || null}
+            clipMatch={clipMatches[scene.scene_id]}
+            selectedClip={selectedClips[scene.scene_id] || null}
             onSelectClip={clip => onSelectClip?.(scene.scene_id, clip)}
             onConvertToImage={() => onConvertToImage?.(scene.scene_id)}
+            onManualMatch={() => onManualMatch?.(scene)}
+            onOpenLibrary={onOpenLibrary}
             onPreview={() => setPreviewIndex(i)}
           />
         ))}
@@ -126,7 +132,7 @@ export default function SceneGrid({
 function SceneCard({
   scene, index, onChange, genStatus, onRetry,
   motionStatus, onBuildComponent,
-  clipMatch, onSelectClip, onConvertToImage, onPreview,
+  clipMatch, selectedClip, onSelectClip, onConvertToImage, onManualMatch, onOpenLibrary, onPreview,
 }) {
   const [editingPrompt,    setEditingPrompt]    = useState(false)
   const [promptDraft,      setPromptDraft]      = useState(scene.higgsfield_prompt)
@@ -848,7 +854,7 @@ function ClipMatchSection({ scene, clipMatch, onSelectClip, onConvertToImage }) 
           <p className="text-[11px] text-white/30">No matching clips in library for these tags.</p>
           <button onClick={onConvertToImage} className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded-lg text-blue-300 transition-colors">
             <ImageIcon size={11} />
-            Use AI image instead
+            Convert to image
           </button>
         </div>
       )}
