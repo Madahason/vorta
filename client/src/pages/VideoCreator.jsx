@@ -9,11 +9,13 @@ import ClipLibrary from '../components/video-creator/ClipLibrary'
 const SERVER_URL = 'http://localhost:3001'
 
 const LS = {
-  scenes:      'vorta_scenes',
-  projectId:   'vorta_project_id',
-  statuses:    'vorta_scene_statuses',
-  metadata:    'vorta_script_metadata',
-  motionComps: 'vorta_motion_components',
+  scenes:        'vorta_scenes',
+  projectId:     'vorta_project_id',
+  statuses:      'vorta_scene_statuses',
+  metadata:      'vorta_script_metadata',
+  motionComps:   'vorta_motion_components',
+  clipMatches:   'vorta_clip_matches',
+  selectedClips: 'vorta_selected_clips',
 }
 
 function lsRead(key) {
@@ -49,8 +51,29 @@ export default function VideoCreator() {
   // Per-scene motion component build status — not persisted (transient)
   const [motionStatuses, setMotionStatuses] = useState({})
 
-  // Clip library matches — { [scene_id]: { matches: [], loading: bool } }
-  const [clipMatches, setClipMatches]       = useState({})
+  // Clip matches — { [scene_id]: { matches: [], loading: bool } }
+  // Rehydrate from localStorage, stripping any stale loading:true entries
+  const [clipMatches, setClipMatches] = useState(() => {
+    const saved = lsRead(LS.clipMatches) || {}
+    // Ensure no stale loading states survive a refresh
+    const clean = {}
+    Object.entries(saved).forEach(([sid, v]) => {
+      clean[sid] = { matches: v.matches || [], loading: false }
+    })
+    return clean
+  })
+
+  // Selected clips — { [scene_id]: clip_object } — separate from scene objects
+  const [selectedClips, setSelectedClips] = useState(() => {
+    const saved = lsRead(LS.selectedClips)
+    if (saved) return saved
+    // Migrate from old scene.selected_clip if present
+    const savedScenes = lsRead(LS.scenes) || []
+    const migrated = {}
+    savedScenes.forEach(s => { if (s.selected_clip) migrated[s.scene_id] = s.selected_clip })
+    return migrated
+  })
+
   const [showClipLibrary, setShowClipLibrary] = useState(false)
 
   // Never persist these — always start false
@@ -81,9 +104,25 @@ export default function VideoCreator() {
   }, []) // run once on mount only
 
   // ─── Persist on every change ─────────────────────────────────────────────
-  useEffect(() => { lsWrite(LS.scenes,    scenes)       }, [scenes])
-  useEffect(() => { lsWrite(LS.projectId, projectId)    }, [projectId])
-  useEffect(() => { lsWrite(LS.statuses,  sceneStatuses)}, [sceneStatuses])
+  useEffect(() => { lsWrite(LS.scenes,        scenes)        }, [scenes])
+  useEffect(() => { lsWrite(LS.projectId,     projectId)     }, [projectId])
+  useEffect(() => { lsWrite(LS.statuses,      sceneStatuses) }, [sceneStatuses])
+  useEffect(() => { lsWrite(LS.selectedClips, selectedClips) }, [selectedClips])
+  useEffect(() => {
+    // Strip loading:true before writing — loading is always transient
+    const toSave = {}
+    Object.entries(clipMatches).forEach(([sid, v]) => {
+      if (!v.loading) toSave[sid] = v
+    })
+    lsWrite(LS.clipMatches, toSave)
+  }, [clipMatches])
+
+  // ─── Re-run clip matching on load if scenes restored but matches missing ──
+  useEffect(() => {
+    const realScenes = scenes.filter(s => s.shot_type === 'real_footage')
+    const unmatched  = realScenes.filter(s => !clipMatches[s.scene_id])
+    if (unmatched.length > 0) matchClipsForScenes(unmatched)
+  }, []) // runs once on mount
 
   // ─── SSE cleanup on unmount ───────────────────────────────────────────────
   useEffect(() => { return () => eventSourceRef.current?.close() }, [])
@@ -101,6 +140,9 @@ export default function VideoCreator() {
     setAnalyzeError(null)
     setIsGenerating(false)
     setMotionStatuses({})
+    setClipMatches({})
+    setSelectedClips({})
+    setShowClipLibrary(false)
     setSessionRestored(false)
     setBadgeFading(false)
     setResetKey(k => k + 1)  // remounts ScriptInput → reads now-empty localStorage
@@ -295,15 +337,41 @@ export default function VideoCreator() {
 
   // ─── Clip selection ───────────────────────────────────────────────────────
   const handleSelectClip = (scene_id, clip) => {
-    setScenes(prev => prev.map(s =>
-      s.scene_id === scene_id ? { ...s, selected_clip: clip } : s
-    ))
+    setSelectedClips(prev => {
+      const next = { ...prev }
+      if (clip === null) delete next[scene_id]
+      else next[scene_id] = clip
+      return next
+    })
   }
 
   const handleConvertToImage = (scene_id) => {
     setScenes(prev => prev.map(s =>
       s.scene_id === scene_id ? { ...s, shot_type: 'image', real_footage_flag: false } : s
     ))
+    setClipMatches(prev => { const n = { ...prev }; delete n[scene_id]; return n })
+    setSelectedClips(prev => { const n = { ...prev }; delete n[scene_id]; return n })
+  }
+
+  // ─── Manual match for a single scene ─────────────────────────────────────
+  const handleManualMatch = async (scene) => {
+    setClipMatches(prev => ({ ...prev, [scene.scene_id]: { matches: [], loading: true } }))
+    try {
+      const res  = await fetch('/api/library/match', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          tags:     scene.clip_search_tags || [],
+          scene_id: scene.scene_id,
+          mood:     scene.mood,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setClipMatches(prev => ({ ...prev, [scene.scene_id]: { matches: data.matches || [], loading: false } }))
+    } catch {
+      setClipMatches(prev => ({ ...prev, [scene.scene_id]: { matches: [], loading: false } }))
+    }
   }
 
   const imageSceneCount = scenes.filter(s => s.shot_type === 'image').length
@@ -415,8 +483,11 @@ export default function VideoCreator() {
               motionStatuses={motionStatuses}
               onBuildComponent={handleBuildComponent}
               clipMatches={clipMatches}
+              selectedClips={selectedClips}
               onSelectClip={handleSelectClip}
               onConvertToImage={handleConvertToImage}
+              onManualMatch={handleManualMatch}
+              onOpenLibrary={() => setShowClipLibrary(true)}
             />
           </>
         )}

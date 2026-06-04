@@ -1,0 +1,31 @@
+{
+  "gaps": [
+    {
+      "scene_id": "009",
+      "tags": [
+        "epic games apple lawsuit",
+        "eu antitrust apple",
+        "app store congressional hearing",
+        "apple competition investigation",
+        "tim sweeney testimony"
+      ],
+      "timestamp": "2026-06-04T21:35:22.501Z"
+    },
+    {
+      "scene_id": "001",
+      "tags": [],
+      "timestamp": "2026-06-04T21:50:18.031Z"
+    },
+    {
+      "scene_id": "009",
+      "tags": [
+        "epic games apple lawsuit",
+        "antitrust hearing",
+        "european union competition law",
+        "apple app store court",
+        "tim sweeney testimony"
+      ],
+      "timestamp": "2026-06-04T22:03:41.924Z"
+    }
+  ]
+}
