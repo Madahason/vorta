@@ -1,17 +1,17 @@
 import { Player } from '@remotion/player'
-import { Documentary } from '@remotion-compositions/compositions/Documentary'
+import { Documentary, calculateDocumentaryDuration } from '@remotion-compositions/compositions/Documentary'
 
 // imagePaths: { [scene_id]: url_string } — derived from sceneStatuses in VideoCreator
 // selectedClips: { [scene_id]: clip_object }
 export function VideoPlayer({ scenes, imagePaths, selectedClips, style }) {
-  const fps = 30
+  console.log('[VideoPlayer] scenes prop:', scenes?.length, 'imagePaths keys:', Object.keys(imagePaths || {}).length)
 
   if (!scenes?.length) return null
 
-  const totalFrames = Math.max(
-    scenes.reduce((sum, s) => sum + (s.duration_seconds || 5) * fps, 0),
-    30
-  )
+  const fps         = 30
+  const totalFrames = Math.max(calculateDocumentaryDuration(scenes), 30)
+
+  console.log('[VideoPlayer] totalFrames:', totalFrames)
 
   return (
     <Player
