@@ -56,7 +56,7 @@ function parseProgress(line, job) {
 
 // ── POST / — start render ──────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const { projectId, scenes, selectedClips } = req.body;
+  const { projectId, scenes, selectedClips, audio } = req.body;
 
   if (!projectId || !Array.isArray(scenes) || !scenes.length) {
     return res.status(400).json({ error: 'projectId and scenes array are required' });
@@ -85,10 +85,19 @@ router.post('/', async (req, res) => {
     if (s.image_path) imagePaths[s.scene_id] = s.image_path;
   });
 
+  // Transform audio path to HTTP URL if provided
+  const audioProps = audio?.path
+    ? {
+        ...audio,
+        path: `http://localhost:${SERVER_PORT}${audio.path.startsWith('/') ? '' : '/'}${audio.path}`,
+      }
+    : null;
+
   const propsData = {
     scenes:        absoluteScenes,
     imagePaths,
     selectedClips: selectedClips || {},
+    audio:         audioProps,
   };
 
   // Write project files

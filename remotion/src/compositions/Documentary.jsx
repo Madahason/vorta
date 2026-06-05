@@ -1,4 +1,4 @@
-import { AbsoluteFill, Series } from 'remotion'
+import { AbsoluteFill, Series, Audio, interpolate, useVideoConfig, useCurrentFrame } from 'remotion'
 import ImageScene      from '../components/ImageScene'
 import FootageScene    from '../components/FootageScene'
 import PlaceholderScene from '../components/PlaceholderScene'
@@ -68,9 +68,35 @@ function SceneRenderer({ scene, imagePath, selectedClip, globalSettings }) {
   return <PlaceholderScene scene={scene} />
 }
 
+// ── NarrationTrack ────────────────────────────────────────────────────────────
+function NarrationTrack({ audio }) {
+  const { durationInFrames, fps } = useVideoConfig()
+  const frame = useCurrentFrame()
+
+  const startFrom  = Math.round((audio.startFrom  || 0) * fps)
+  const vol        = audio.volume  !== undefined ? audio.volume  : 0.85
+  const fadeInF    = Math.round((audio.fadeIn  || 0.5) * fps)
+  const fadeOutF   = Math.round((audio.fadeOut || 2.0) * fps)
+  const fadeStart  = durationInFrames - fadeOutF
+
+  const volume = (f) => {
+    if (f < fadeInF)           return interpolate(f, [0, Math.max(fadeInF, 1)], [0, vol], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
+    if (f > fadeStart)         return interpolate(f, [fadeStart, durationInFrames], [vol, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
+    return vol
+  }
+
+  return (
+    <Audio
+      src={audio.path}
+      startFrom={startFrom}
+      volume={volume}
+    />
+  )
+}
+
 // ── Documentary composition ───────────────────────────────────────────────────
 // globalSettings: { grainIntensity?: number } — 0 disables grain across all scenes
-export function Documentary({ scenes = [], imagePaths = {}, selectedClips = {}, globalSettings = {} }) {
+export function Documentary({ scenes = [], imagePaths = {}, selectedClips = {}, globalSettings = {}, audio = null }) {
   console.log('[Documentary] received scenes:', scenes?.length, scenes)
 
   if (!scenes || scenes.length === 0) {
@@ -88,6 +114,7 @@ export function Documentary({ scenes = [], imagePaths = {}, selectedClips = {}, 
 
   return (
     <AbsoluteFill style={{ background: '#000' }}>
+      {audio?.path && <NarrationTrack audio={audio} />}
       <Series>
         {scenes.map((scene) => (
           <Series.Sequence

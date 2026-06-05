@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Download, Loader2, X, ChevronDown, ChevronUp, RefreshCw, AlertCircle } from 'lucide-react'
+import { Download, Loader2, X, ChevronDown, ChevronUp, RefreshCw, AlertCircle, Music, Upload } from 'lucide-react'
 
 // SSE must connect directly to Express — Vite proxy buffers text/event-stream
 const SERVER_URL = 'http://localhost:3001'
@@ -26,6 +26,13 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
   const [outputPath, setOutputPath]   = useState(null)
   const [fileSize, setFileSize]       = useState(null)
   const [totalRenderTime, setTotalRenderTime] = useState(null)
+
+  // ─── audio state ─────────────────────────────────────────────────────────────
+  const [audio, setAudio] = useState(null) // { path, filename, size, duration? }
+  const [audioUploading, setAudioUploading] = useState(false)
+  const [audioError, setAudioError]         = useState('')
+  const [audioSettings, setAudioSettings]   = useState({ startFrom: 0, volume: 85, fadeIn: 0.5, fadeOut: 2.0 })
+  const audioInputRef = useRef(null)
 
   const startTimeRef    = useRef(null)
   const elapsedRef      = useRef(null)
@@ -64,6 +71,33 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
     }
   }, [])
 
+  // ─── audio upload ────────────────────────────────────────────────────────────
+  const handleAudioFile = async (file) => {
+    if (!file) return
+    if (!projectId) { setAudioError('Run analysis first to create a project'); return }
+    const allowed = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/mp4', 'audio/m4a', 'audio/aac', 'audio/ogg']
+    if (!allowed.some(t => file.type.startsWith('audio/') || file.name.match(/\.(mp3|wav|m4a|aac|ogg)$/i))) {
+      setAudioError('Unsupported format — use MP3, WAV, or M4A')
+      return
+    }
+    setAudioUploading(true)
+    setAudioError('')
+    try {
+      const res  = await fetch(`${SERVER_URL}/api/audio/upload?projectId=${projectId}`, {
+        method:  'POST',
+        headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Filename': file.name },
+        body:    file,
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Upload failed')
+      setAudio({ path: data.path, filename: file.name, size: data.size })
+    } catch (err) {
+      setAudioError(err.message)
+    } finally {
+      setAudioUploading(false)
+    }
+  }
+
   // ─── start render ────────────────────────────────────────────────────────────
   const handleRender = async () => {
     if (!canRender) return
@@ -91,10 +125,18 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
     }))
 
     try {
+      const audioPayload = audio?.path ? {
+        path:      audio.path,
+        startFrom: audioSettings.startFrom,
+        volume:    audioSettings.volume / 100,
+        fadeIn:    audioSettings.fadeIn,
+        fadeOut:   audioSettings.fadeOut,
+      } : null
+
       const res  = await fetch(`${SERVER_URL}/api/render`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ projectId, scenes: scenesWithPaths, selectedClips }),
+        body:    JSON.stringify({ projectId, scenes: scenesWithPaths, selectedClips, audio: audioPayload }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to start render')
@@ -271,6 +313,80 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
               {imageScenes.length - imageReady} image scene{imageScenes.length - imageReady !== 1 ? 's' : ''} not yet generated — will render as placeholder
             </div>
           )}
+
+          {/* ── Audio upload section ── */}
+          <div style={{
+            marginBottom: 20,
+            padding: '14px 16px',
+            background: 'rgba(255,255,255,0.02)',
+            border: '1px solid rgba(255,255,255,0.06)',
+            borderRadius: 8,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: audio ? 12 : 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <Music size={12} style={{ color: 'rgba(255,255,255,0.30)' }} />
+                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.40)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  Narration audio
+                </span>
+                {!audio && <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.18)' }}>optional</span>}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {audio && (
+                  <button onClick={() => { setAudio(null); setAudioError('') }}
+                    style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', background: 'none', border: 'none', cursor: 'pointer' }}>
+                    Remove
+                  </button>
+                )}
+                <input ref={audioInputRef} type="file" accept="audio/*,.mp3,.wav,.m4a,.aac"
+                  style={{ display: 'none' }} onChange={e => handleAudioFile(e.target.files[0])} />
+                <button
+                  onClick={() => audioInputRef.current?.click()}
+                  disabled={audioUploading || !projectId}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 5,
+                    padding: '4px 10px',
+                    background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.10)',
+                    borderRadius: 5, color: projectId ? 'rgba(255,255,255,0.50)' : 'rgba(255,255,255,0.20)',
+                    fontSize: 11, cursor: projectId ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  {audioUploading ? <Loader2 size={10} className="animate-spin" /> : <Upload size={10} />}
+                  {audio ? 'Replace' : 'Upload'}
+                </button>
+              </div>
+            </div>
+
+            {audioError && (
+              <p style={{ fontSize: 11, color: '#f87171', marginTop: 6 }}>{audioError}</p>
+            )}
+
+            {audio && (
+              <div style={{ space: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                  <Music size={11} style={{ color: '#a78bfa' }} />
+                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.60)' }}>{audio.filename}</span>
+                  <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>{formatFileSize(audio.size)}</span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px' }}>
+                  {[
+                    { key: 'volume',    label: 'Volume',   unit: '%',  min: 0,   max: 100, step: 1   },
+                    { key: 'startFrom', label: 'Start at', unit: 's',  min: 0,   max: 60,  step: 0.5 },
+                    { key: 'fadeIn',    label: 'Fade in',  unit: 's',  min: 0,   max: 5,   step: 0.5 },
+                    { key: 'fadeOut',   label: 'Fade out', unit: 's',  min: 0,   max: 10,  step: 0.5 },
+                  ].map(({ key, label, unit, min, max, step }) => (
+                    <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.30)' }}>
+                        {label}: <strong style={{ color: 'rgba(255,255,255,0.55)' }}>{audioSettings[key]}{unit}</strong>
+                      </span>
+                      <input type="range" min={min} max={max} step={step} value={audioSettings[key]}
+                        onChange={e => setAudioSettings(p => ({ ...p, [key]: parseFloat(e.target.value) }))}
+                        style={{ width: '100%', accentColor: '#7c3aed' }} />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Render button */}
           <button
