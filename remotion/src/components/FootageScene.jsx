@@ -32,7 +32,7 @@ export default function FootageScene({ clip }) {
         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         onError={() => setError(true)}
       />
-      <FilmLook grade="neutral" grainIntensity={0.10} vignetteIntensity={0.35} />
+      <FilmLook grade="neutral" grainIntensity={0.04} vignetteIntensity={0.35} />
     </AbsoluteFill>
   )
 }

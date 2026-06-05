@@ -1,23 +1,13 @@
 import { Player } from '@remotion/player'
 import { Documentary, calculateDocumentaryDuration } from '@remotion-compositions/compositions/Documentary'
 
-// Fail loudly if the alias didn't resolve
-if (!Documentary) {
-  console.error('[VideoPlayer] Documentary import is undefined — check @remotion-compositions alias in vite.config.js')
-}
-
 // imagePaths: { [scene_id]: url_string } — derived from sceneStatuses in VideoCreator
 // selectedClips: { [scene_id]: clip_object }
-export function VideoPlayer({ scenes, imagePaths, selectedClips, style }) {
-  console.log('[VideoPlayer] scenes prop:', scenes?.length, 'imagePaths keys:', Object.keys(imagePaths || {}).length)
-  console.log('[VideoPlayer] Documentary:', typeof Documentary, 'calculateDocumentaryDuration:', typeof calculateDocumentaryDuration)
-
+export function VideoPlayer({ scenes, imagePaths, selectedClips, globalSettings, style }) {
   if (!scenes?.length) return null
 
   const fps         = 30
   const totalFrames = Math.max(calculateDocumentaryDuration(scenes), 30)
-
-  console.log('[VideoPlayer] totalFrames:', totalFrames)
 
   return (
     <Player
@@ -26,6 +16,7 @@ export function VideoPlayer({ scenes, imagePaths, selectedClips, style }) {
         scenes,
         imagePaths:    imagePaths    || {},
         selectedClips: selectedClips || {},
+        globalSettings: globalSettings || {},
       }}
       durationInFrames={totalFrames}
       fps={fps}

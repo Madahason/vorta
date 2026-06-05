@@ -53,10 +53,10 @@ function MotionGraphicScene({ scene }) {
 }
 
 // ── SceneRenderer — per-scene dispatch ───────────────────────────────────────
-function SceneRenderer({ scene, imagePath, selectedClip }) {
+function SceneRenderer({ scene, imagePath, selectedClip, globalSettings }) {
   if (scene.shot_type === 'image') {
     if (!imagePath) return <PlaceholderScene scene={scene} />
-    return <ImageScene scene={scene} imagePath={imagePath} />
+    return <ImageScene scene={scene} imagePath={imagePath} globalSettings={globalSettings} />
   }
   if (scene.shot_type === 'motion_graphic') {
     return <MotionGraphicScene scene={scene} />
@@ -69,7 +69,8 @@ function SceneRenderer({ scene, imagePath, selectedClip }) {
 }
 
 // ── Documentary composition ───────────────────────────────────────────────────
-export function Documentary({ scenes = [], imagePaths = {}, selectedClips = {} }) {
+// globalSettings: { grainIntensity?: number } — 0 disables grain across all scenes
+export function Documentary({ scenes = [], imagePaths = {}, selectedClips = {}, globalSettings = {} }) {
   console.log('[Documentary] received scenes:', scenes?.length, scenes)
 
   if (!scenes || scenes.length === 0) {
@@ -101,6 +102,7 @@ export function Documentary({ scenes = [], imagePaths = {}, selectedClips = {} }
                       scene={scene}
                       imagePath={imagePaths[scene.scene_id]}
                       selectedClip={selectedClips[scene.scene_id] || null}
+                      globalSettings={globalSettings}
                     />
                   )
                 } catch (e) {

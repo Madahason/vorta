@@ -1,73 +1,80 @@
-import { useCurrentFrame, useVideoConfig } from 'remotion'
+import { useCurrentFrame } from 'remotion'
 import { useEffect, useRef } from 'react'
 
-// Full-size overlay: animated grain + vignette + color grade tint.
-// Sits on top of every image scene via AbsoluteFill with pointerEvents: none.
-export default function FilmLook({
-  grade = 'cool_blue',
-  grainIntensity = 0.12,
-  vignetteIntensity = 0.45,
-}) {
-  const frame = useCurrentFrame()
-  const canvasRef = useRef(null)
+const GRADE_COLOR = {
+  cool_blue:  'rgba(20, 40, 80, 0.12)',
+  warm_amber: 'rgba(100, 60, 10, 0.10)',
+}
 
-  // Fixed grain texture size — scaled up via CSS for performance
-  const GRAIN_W = 512
-  const GRAIN_H = 512
+// Sparse random grain drawn per-frame using Math.random() seeded by frame.
+// Each pixel is independently decided — avoids correlated hash patterns
+// that produce vertical / horizontal strip artefacts.
+function Grain({ intensity = 0.06 }) {
+  const frame      = useCurrentFrame()
+  const canvasRef  = useRef(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
-    const imageData = ctx.createImageData(GRAIN_W, GRAIN_H)
-    const data = imageData.data
-    // Frame-based seed so grain animates each frame like real film
-    const seed = (frame * 2654435761) >>> 0
+    const { width, height } = canvas
+    ctx.clearRect(0, 0, width, height)
+
+    const imageData = ctx.createImageData(width, height)
+    const data      = imageData.data
 
     for (let i = 0; i < data.length; i += 4) {
-      const p = (i / 4 + seed) & 0xffffffff
-      // Fast integer hash
-      const h = (Math.imul(p ^ (p >>> 16), 0x45d9f3b) >>> 0) % 256
-      const bright = h > 128 ? 255 : 0
-      data[i]     = bright
-      data[i + 1] = bright
-      data[i + 2] = bright
-      data[i + 3] = Math.floor(h * grainIntensity)
+      const noise = Math.random() * 255
+      // Only ~intensity fraction of pixels are lit; rest are fully transparent
+      const alpha = Math.random() < intensity ? Math.floor(noise * intensity * 1.5) : 0
+      data[i]     = 200   // R
+      data[i + 1] = 200   // G
+      data[i + 2] = 200   // B
+      data[i + 3] = alpha // A
     }
+
     ctx.putImageData(imageData, 0, 0)
-  })  // runs every render (every frame)
+  }, [frame, intensity])  // re-draw every frame so grain animates
 
-  const gradeColor = {
-    cool_blue:  'rgba(20, 40, 80, 0.12)',
-    warm_amber: 'rgba(100, 60, 10, 0.10)',
-  }
+  return (
+    <canvas
+      ref={canvasRef}
+      width={1920}
+      height={1080}
+      style={{
+        position: 'absolute',
+        top: 0, left: 0,
+        width: '100%', height: '100%',
+        pointerEvents: 'none',
+        mixBlendMode: 'overlay',
+      }}
+    />
+  )
+}
 
-  // desaturated grade is applied as a CSS filter on the outer wrapper
+export default function FilmLook({
+  grade            = 'cool_blue',
+  grainIntensity   = 0.06,
+  vignetteIntensity = 0.45,
+}) {
   const wrapperFilter = grade === 'desaturated' ? 'saturate(0.55)' : 'none'
 
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', filter: wrapperFilter }}>
-      {/* Animated grain */}
-      <canvas
-        ref={canvasRef}
-        width={GRAIN_W}
-        height={GRAIN_H}
-        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
-      />
+      {/* Animated grain — skip entirely when intensity is 0 */}
+      {grainIntensity > 0 && <Grain intensity={grainIntensity} />}
 
       {/* Vignette */}
       <div style={{
-        position: 'absolute',
-        inset: 0,
+        position: 'absolute', inset: 0,
         background: `radial-gradient(ellipse at 50% 50%, transparent 35%, rgba(0,0,0,${vignetteIntensity}) 100%)`,
       }} />
 
-      {/* Color grade tint — multiply blend for cool_blue / warm_amber */}
+      {/* Color grade tint */}
       {(grade === 'cool_blue' || grade === 'warm_amber') && (
         <div style={{
-          position: 'absolute',
-          inset: 0,
-          background: gradeColor[grade],
+          position: 'absolute', inset: 0,
+          background: GRADE_COLOR[grade],
           mixBlendMode: 'multiply',
         }} />
       )}

@@ -382,49 +382,70 @@ function SceneCard({
 // ─── OverlayEditorPanel ───────────────────────────────────────────────────────
 
 function OverlayEditorPanel({ scene, onChange }) {
+  // ── Pending state — all edits accumulate here; nothing writes to scene until Apply ──
+  const buildInitial = () => ({
+    overlays:        [...(scene.overlays || [])],
+    motion:          scene.motion ? { ...scene.motion } : null,
+    transition_out:  scene.transition_out  || 'dissolve',
+    duration_seconds: scene.duration_seconds || 5,
+    grade:           scene.grade           || 'cool_blue',
+  })
+
+  const [pending, setPending]           = useState(buildInitial)
+  const initialRef                      = useRef(JSON.stringify(buildInitial()))
+  const [applied,  setApplied]          = useState(false)
   const [addDropdownOpen, setAddDropdownOpen] = useState(false)
   const dropdownRef = useRef(null)
 
-  // Close add dropdown when clicking outside
+  const isDirty = JSON.stringify(pending) !== initialRef.current
+
   useEffect(() => {
     const handler = e => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target))
         setAddDropdownOpen(false)
-      }
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const overlays = scene.overlays || []
-  const existingTypes = new Set(overlays.map(o => o.type))
+  // ── Overlay mutations (update pending, not scene) ────────────────────────
+  const existingTypes = new Set(pending.overlays.map(o => o.type))
 
   const addOverlay = (type) => {
     setAddDropdownOpen(false)
-    const defaults = OVERLAY_DEFAULTS[type]
+    const defaults  = OVERLAY_DEFAULTS[type]
     const singleton = OVERLAY_TYPES.find(o => o.type === type)?.singleton
-    // Prevent duplicate singletons
     if (singleton && existingTypes.has(type)) return
-    const next = [...overlays, { type, ...defaults }]
-    const patch = { overlays: next }
-    // Sync grade field for color_grade
-    if (type === 'color_grade') patch.grade = defaults.grade
-    onChange(patch)
+    setPending(prev => ({
+      ...prev,
+      ...(type === 'color_grade' ? { grade: defaults.grade } : {}),
+      overlays: [...prev.overlays, { type, ...defaults }],
+    }))
   }
 
   const updateOverlay = (i, patch) => {
-    const next = overlays.map((o, idx) => idx === i ? { ...o, ...patch } : o)
-    const upd = { overlays: next }
-    // Sync grade field when color_grade changes
-    if (overlays[i]?.type === 'color_grade' && patch.grade) upd.grade = patch.grade
-    onChange(upd)
+    setPending(prev => ({
+      ...prev,
+      ...(prev.overlays[i]?.type === 'color_grade' && patch.grade ? { grade: patch.grade } : {}),
+      overlays: prev.overlays.map((o, idx) => idx === i ? { ...o, ...patch } : o),
+    }))
   }
 
   const removeOverlay = (i) => {
-    const next = overlays.filter((_, idx) => idx !== i)
-    onChange({ overlays: next })
+    setPending(prev => ({ ...prev, overlays: prev.overlays.filter((_, idx) => idx !== i) }))
   }
 
+  // ── Apply / Reset ────────────────────────────────────────────────────────
+  const handleApply = () => {
+    onChange(pending)
+    initialRef.current = JSON.stringify(pending)
+    setApplied(true)
+    setTimeout(() => setApplied(false), 1500)
+  }
+
+  const handleReset = () => setPending(JSON.parse(initialRef.current))
+
+  // ── Styles ───────────────────────────────────────────────────────────────
   const panelStyle = {
     background: '#111111',
     borderTop: '1px solid rgba(255,255,255,0.08)',
@@ -432,31 +453,17 @@ function OverlayEditorPanel({ scene, onChange }) {
     borderBottomRightRadius: '12px',
     padding: '16px',
   }
-
   const sectionHeaderStyle = {
-    fontSize: '11px',
-    fontWeight: 500,
+    fontSize: '11px', fontWeight: 500,
     color: 'rgba(255,255,255,0.5)',
-    textTransform: 'uppercase',
-    letterSpacing: '0.1em',
-    marginBottom: '10px',
+    textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '10px',
   }
-
   const inputStyle = {
-    background: '#1a1a1a',
-    border: '1px solid rgba(255,255,255,0.12)',
-    borderRadius: '6px',
-    color: 'rgba(255,255,255,0.75)',
-    fontSize: '13px',
-    padding: '5px 8px',
-    outline: 'none',
-    width: '100%',
+    background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.12)',
+    borderRadius: '6px', color: 'rgba(255,255,255,0.75)',
+    fontSize: '13px', padding: '5px 8px', outline: 'none', width: '100%',
   }
-
-  const selectStyle = {
-    ...inputStyle,
-    cursor: 'pointer',
-  }
+  const selectStyle = { ...inputStyle, cursor: 'pointer' }
 
   return (
     <div style={panelStyle}>
@@ -466,7 +473,6 @@ function OverlayEditorPanel({ scene, onChange }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
           <span style={sectionHeaderStyle}>Overlays</span>
 
-          {/* Add Overlay dropdown */}
           <div style={{ position: 'relative' }} ref={dropdownRef}>
             <button
               onClick={() => setAddDropdownOpen(o => !o)}
@@ -493,23 +499,17 @@ function OverlayEditorPanel({ scene, onChange }) {
                 {OVERLAY_TYPES.map(({ type, label, icon: Icon, singleton }) => {
                   const disabled = singleton && existingTypes.has(type)
                   return (
-                    <button
-                      key={type}
-                      onClick={() => !disabled && addOverlay(type)}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: '8px',
-                        width: '100%', textAlign: 'left',
-                        fontSize: '12px',
-                        color: disabled ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.60)',
-                        padding: '6px 10px', borderRadius: '5px',
-                        background: 'transparent', cursor: disabled ? 'not-allowed' : 'pointer',
-                        border: 'none',
-                      }}
+                    <button key={type} onClick={() => !disabled && addOverlay(type)} style={{
+                      display: 'flex', alignItems: 'center', gap: '8px',
+                      width: '100%', textAlign: 'left', fontSize: '12px',
+                      color: disabled ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.60)',
+                      padding: '6px 10px', borderRadius: '5px',
+                      background: 'transparent', cursor: disabled ? 'not-allowed' : 'pointer', border: 'none',
+                    }}
                       onMouseEnter={e => { if (!disabled) e.currentTarget.style.background = 'rgba(255,255,255,0.07)' }}
                       onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
                     >
-                      <Icon size={12} />
-                      {label}
+                      <Icon size={12} /> {label}
                       {disabled && <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.2)', marginLeft: 'auto' }}>added</span>}
                     </button>
                   )
@@ -519,19 +519,18 @@ function OverlayEditorPanel({ scene, onChange }) {
           </div>
         </div>
 
-        {/* Overlay list */}
-        {overlays.length === 0 && (
+        {pending.overlays.length === 0 && (
           <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.20)', fontStyle: 'italic' }}>
             No overlays assigned. Use "Add Overlay" to add one.
           </p>
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {overlays.map((overlay, i) => (
+          {pending.overlays.map((overlay, i) => (
             <OverlayRow
               key={i}
               overlay={overlay}
-              scene={scene}
+              scene={{ duration_seconds: pending.duration_seconds }}
               onUpdate={patch => updateOverlay(i, patch)}
               onRemove={() => removeOverlay(i)}
               inputStyle={inputStyle}
@@ -548,19 +547,19 @@ function OverlayEditorPanel({ scene, onChange }) {
           <div style={{ flex: 1 }}>
             <label style={{ fontSize: '11px', color: 'rgba(255,255,255,0.30)', display: 'block', marginBottom: '4px' }}>Type</label>
             <select
-              value={scene.motion?.type || 'push_in'}
-              onChange={e => onChange({ motion: { ...(scene.motion || {}), type: e.target.value } })}
+              value={pending.motion?.type || 'push_in'}
+              onChange={e => setPending(prev => ({ ...prev, motion: { ...(prev.motion || {}), type: e.target.value } }))}
               style={selectStyle}
             >
               {MOTION_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
             </select>
           </div>
-          {(scene.motion?.type || 'push_in') !== 'static' && (
+          {(pending.motion?.type || 'push_in') !== 'static' && (
             <div style={{ flex: 1 }}>
               <label style={{ fontSize: '11px', color: 'rgba(255,255,255,0.30)', display: 'block', marginBottom: '4px' }}>Intensity</label>
               <select
-                value={scene.motion?.intensity || 'subtle'}
-                onChange={e => onChange({ motion: { ...(scene.motion || {}), intensity: e.target.value } })}
+                value={pending.motion?.intensity || 'subtle'}
+                onChange={e => setPending(prev => ({ ...prev, motion: { ...(prev.motion || {}), intensity: e.target.value } }))}
                 style={selectStyle}
               >
                 {MOTION_INTENS.map(v => <option key={v} value={v}>{v}</option>)}
@@ -574,8 +573,8 @@ function OverlayEditorPanel({ scene, onChange }) {
       <div style={{ marginBottom: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
         <p style={sectionHeaderStyle}>Transition Out</p>
         <select
-          value={scene.transition_out || 'dissolve'}
-          onChange={e => onChange({ transition_out: e.target.value })}
+          value={pending.transition_out}
+          onChange={e => setPending(prev => ({ ...prev, transition_out: e.target.value }))}
           style={{ ...selectStyle, maxWidth: '200px' }}
         >
           {TRANSITION_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
@@ -587,17 +586,49 @@ function OverlayEditorPanel({ scene, onChange }) {
         <p style={sectionHeaderStyle}>Duration</p>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <input
-            type="number"
-            min={2} max={30}
-            value={scene.duration_seconds || 5}
-            onChange={e => {
-              const v = Math.min(30, Math.max(2, Number(e.target.value)))
-              onChange({ duration_seconds: v })
-            }}
+            type="number" min={2} max={30}
+            value={pending.duration_seconds}
+            onChange={e => setPending(prev => ({
+              ...prev,
+              duration_seconds: Math.min(30, Math.max(2, Number(e.target.value))),
+            }))}
             style={{ ...inputStyle, width: '72px', textAlign: 'center' }}
           />
           <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.30)' }}>seconds</span>
         </div>
+      </div>
+
+      {/* ── Apply / Reset ── */}
+      <div style={{ display: 'flex', gap: '8px', marginTop: '20px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+        <button
+          onClick={handleReset}
+          disabled={!isDirty}
+          style={{
+            flex: '0 0 auto', height: '36px', padding: '0 16px',
+            fontSize: '13px', cursor: isDirty ? 'pointer' : 'not-allowed',
+            color: isDirty ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.18)',
+            background: 'transparent',
+            border: '1px solid ' + (isDirty ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.07)'),
+            borderRadius: '6px',
+          }}
+        >
+          Reset
+        </button>
+        <button
+          onClick={handleApply}
+          disabled={!isDirty && !applied}
+          style={{
+            flex: 1, height: '36px',
+            fontSize: '13px', fontWeight: 500,
+            cursor: isDirty ? 'pointer' : 'not-allowed',
+            color: '#fff',
+            background: applied ? '#16a34a' : (isDirty ? '#3b82f6' : 'rgba(255,255,255,0.08)'),
+            border: 'none', borderRadius: '6px',
+            transition: 'background 0.2s',
+          }}
+        >
+          {applied ? '✓ Applied' : 'Apply changes'}
+        </button>
       </div>
 
     </div>
