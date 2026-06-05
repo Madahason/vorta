@@ -44,8 +44,10 @@ function MotionGraphicScene({ scene }) {
   if (type === 'MapHighlight')    return <MapHighlight    {...props} />
 
   return (
-    <AbsoluteFill style={{ background: '#0a0a0a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ color: '#666', fontSize: 16, fontFamily: 'sans-serif' }}>{type || 'motion graphic'}</div>
+    <AbsoluteFill style={{ background: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 18, fontFamily: 'sans-serif' }}>
+        Motion graphic: {type || 'unknown type'}
+      </div>
     </AbsoluteFill>
   )
 }

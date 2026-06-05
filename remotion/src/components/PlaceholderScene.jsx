@@ -6,60 +6,79 @@ const TYPE_COLOR = {
   real_footage:   '#f59e0b',
 }
 
+const TYPE_LABEL = {
+  image:          'Image not generated yet',
+  motion_graphic: 'Motion graphic',
+  real_footage:   'No clip selected',
+}
+
 // Two usage modes:
-//   <PlaceholderScene scene={scene} />           — scene card placeholder
+//   <PlaceholderScene scene={scene} />           — scene placeholder (image/footage/motion)
 //   <PlaceholderScene label="X" sublabel="Y" />  — generic error/missing state
 export default function PlaceholderScene({ scene, label, sublabel }) {
   const isGeneric = !!label
 
-  const num    = scene?.scene_id || ''
-  const type   = scene?.shot_type || 'unknown'
-  const color  = TYPE_COLOR[type] || '#555'
-  const text   = isGeneric ? label : (scene?.script_excerpt || '')
-  const badge  = isGeneric ? null : type.replace(/_/g, ' ')
+  const type        = scene?.shot_type || 'image'
+  const color       = TYPE_COLOR[type] || '#888'
+  const statusLabel = isGeneric ? label : (TYPE_LABEL[type] || type)
+  const excerpt     = !isGeneric ? (scene?.script_excerpt || '') : ''
+  const sceneNum    = !isGeneric ? (scene?.scene_id || '') : ''
 
   return (
     <AbsoluteFill style={{
-      background: '#0a0a0a',
+      background: '#111',
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
-      gap: 24,
-      fontFamily: "'Helvetica Neue', sans-serif",
+      gap: 20,
+      fontFamily: "'Helvetica Neue', Arial, sans-serif",
     }}>
-      {/* Scene number (scene mode only) */}
-      {!isGeneric && num && (
-        <div style={{
-          fontSize: 120,
-          fontWeight: 700,
-          color: 'rgba(255,255,255,0.06)',
-          lineHeight: 1,
-          letterSpacing: -6,
-        }}>
-          {num}
-        </div>
-      )}
+      {/* Coloured indicator ring */}
+      <div style={{
+        width: 56,
+        height: 56,
+        borderRadius: '50%',
+        border: `2px solid ${color}`,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: 0.7,
+      }}>
+        {sceneNum && (
+          <span style={{ color, fontSize: 16, fontWeight: 600 }}>{sceneNum}</span>
+        )}
+      </div>
 
-      {/* Label / script excerpt */}
-      {text && (
+      {/* Status label */}
+      <div style={{
+        color: 'rgba(255,255,255,0.65)',
+        fontSize: 18,
+        fontWeight: 500,
+        textAlign: 'center',
+      }}>
+        {statusLabel}
+      </div>
+
+      {/* Script excerpt */}
+      {excerpt && (
         <div style={{
-          color: isGeneric ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.28)',
-          fontSize: isGeneric ? 22 : 18,
-          maxWidth: 600,
+          color: 'rgba(255,255,255,0.35)',
+          fontSize: 14,
+          maxWidth: 560,
           textAlign: 'center',
           lineHeight: 1.6,
           padding: '0 40px',
         }}>
-          {text}
+          {excerpt}
         </div>
       )}
 
       {/* Sublabel (generic mode) */}
       {isGeneric && sublabel && (
         <div style={{
-          color: 'rgba(255,255,255,0.18)',
-          fontSize: 13,
+          color: 'rgba(255,255,255,0.30)',
+          fontSize: 12,
           fontFamily: 'monospace',
           textAlign: 'center',
         }}>
@@ -67,24 +86,25 @@ export default function PlaceholderScene({ scene, label, sublabel }) {
         </div>
       )}
 
-      {/* Shot type badge (scene mode only) */}
-      {badge && (
+      {/* Shot type pill */}
+      {!isGeneric && (
         <div style={{
           position: 'absolute',
-          bottom: 40,
+          bottom: 32,
           left: '50%',
           transform: 'translateX(-50%)',
           fontSize: 11,
           fontWeight: 500,
-          letterSpacing: '0.15em',
+          letterSpacing: '0.12em',
           textTransform: 'uppercase',
-          color: color,
-          border: `1px solid ${color}44`,
-          background: `${color}11`,
+          color,
+          border: `1px solid ${color}66`,
+          background: `${color}18`,
           borderRadius: 20,
-          padding: '5px 16px',
+          padding: '4px 14px',
+          whiteSpace: 'nowrap',
         }}>
-          {badge}
+          {type.replace(/_/g, ' ')}
         </div>
       )}
     </AbsoluteFill>
