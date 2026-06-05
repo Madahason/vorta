@@ -30,6 +30,7 @@ export default function ImageScene({ scene, imagePath, globalSettings = {} }) {
   const grainIntensity = globalSettings.grainIntensity !== undefined
     ? globalSettings.grainIntensity
     : (grainOverlay ? grainOverlay.intensity : 0.06)
+  const grainPattern   = grainOverlay?.animation?.pattern ?? 'random'
 
   // Vignette: per-scene overlay or default
   const vignetteOverlay   = overlays.find(o => o.type === 'vignette')
@@ -67,12 +68,12 @@ export default function ImageScene({ scene, imagePath, globalSettings = {} }) {
         />
       </div>
 
-      <FilmLook grade={grade} grainIntensity={grainIntensity} vignetteIntensity={vignetteIntensity} />
+      <FilmLook grade={grade} grainIntensity={grainIntensity} grainPattern={grainPattern} vignetteIntensity={vignetteIntensity} />
 
       {overlays.map((o, i) => {
-        if (o.type === 'lower_third') return <LowerThird key={i} line1={o.line1} line2={o.line2} appearAt={o.appearAt ?? 20} />
-        if (o.type === 'date_stamp')  return <DateStamp  key={i} text={o.text} appearAt={o.appearAt ?? 20} />
-        if (o.type === 'kinetic_text') return <KineticText key={i} text={o.text} style={o.style ?? 'center'} appearAt={o.appearAt ?? 30} />
+        if (o.type === 'lower_third')  return <LowerThird  key={i} overlay={o} />
+        if (o.type === 'date_stamp')   return <DateStamp   key={i} overlay={o} />
+        if (o.type === 'kinetic_text') return <KineticText key={i} overlay={o} />
         return null
       })}
     </AbsoluteFill>
