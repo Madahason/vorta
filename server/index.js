@@ -10,6 +10,9 @@ app.use(express.json({ limit: '2mb' }));
 // Serve generated project assets (images, etc.)
 app.use('/projects', express.static(path.join(__dirname, '../projects')));
 
+// /output also serves the projects folder — clean URL for MP4 downloads
+app.use('/output', express.static(path.join(__dirname, '../projects')));
+
 // Confirm env loaded
 const apiKeyLoaded = !!process.env.ANTHROPIC_API_KEY;
 console.log(`ANTHROPIC_API_KEY loaded: ${apiKeyLoaded}`);

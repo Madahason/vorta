@@ -483,11 +483,45 @@ All Video Creator state survives a page refresh via `localStorage`. No backend c
 - `FootageScene.jsx` and `PlaceholderScene.jsx` were not in the original spec but added for robustness
 - `desaturated` grade applied as CSS `filter` on FilmLook wrapper (not as a tint overlay) — more accurate saturation reduction
 
-### Phase 5 — Full pipeline integration + render
+### Phase 5 — Full pipeline integration + render ✅ COMPLETE
 - End-to-end flow: script in → MP4 out
 - Render trigger via Remotion CLI from backend
 - Export panel with progress indicator
 - Download final MP4
+
+**Implementation details:**
+
+**server/routes/render.js** — full render pipeline:
+- `POST /api/render` — accepts `{ projectId, scenes, selectedClips }`, transforms image paths to `http://localhost:3001/projects/...` URLs (so Remotion's headless Chrome can fetch images from the running Express server), builds `scenes.json` with `{ scenes, imagePaths, selectedClips }`, spawns Remotion CLI via `child_process.spawn` with `shell: true`, returns `{ started: true }` immediately
+- `GET /api/render/progress/:projectId` — SSE stream; parses stdout/stderr line-by-line for `X/Y` frame and `N%` percent patterns; sends `{ type: 'progress', percent, frame, totalFrames }` events; sends `{ type: 'done', outputPath, fileSize }` or `{ type: 'error', message }` on close
+- `DELETE /api/render/:projectId` — kills the render process and clears the job from the in-memory `renderJobs` Map
+- Jobs stored in `renderJobs` Map (projectId → `{ process, progress, status, stderr, sseClients: Set }`)
+- ANSI escape codes stripped before progress parsing
+- `NODE_TLS_REJECT_UNAUTHORIZED=0` passed in env (matches server `.env` requirement for this machine)
+
+**server/index.js** — `/output` static route added (serves `../projects`), complementing existing `/projects` route
+
+**remotion/src/Root.jsx** — added `calculateMetadata` to the Documentary composition so the duration is computed from `props.scenes` when `--props` overrides the default test data; without this the render would use the hardcoded `testScenes` duration
+
+**client/src/components/video-creator/ExportPanel.jsx** — export panel with:
+- Pre-render checklist grid (6 cards: total scenes, image ready count, motion graphic count, footage matched/unmatched, estimated duration, estimated render time)
+- Amber warning if any image scenes not yet generated
+- Render MP4 button (disabled with tooltip if no project or readyPercent < 50%)
+- Progress bar with frame counter, elapsed time, estimated remaining (calculated from current rate)
+- Cancel render button (red, calls DELETE /api/render/:projectId)
+- Done state: green progress bar, download button, "Render again" reset
+- Error state: red error card with expandable log panel, Retry and Reset buttons
+
+**client/src/pages/VideoCreator.jsx** — ExportPanel imported and rendered below SceneGrid, receives `scenes`, `sceneStatuses`, `selectedClips`, `projectId`
+
+**Deviations from original plan:**
+- Image paths converted to full HTTP URLs (`http://localhost:3001/projects/...`) rather than absolute filesystem paths — Chrome Headless Shell can fetch from the running Express server; file:// URLs would require `--allow-file-access-from-files` flag in Chrome which Remotion does not set by default
+- `spawn` used instead of `exec` to get real-time stdout streaming for SSE progress; `shell: true` needed on Windows to find `npx.cmd` in PATH and handle path quoting
+- ANSI escape code stripping added to progress parser (Remotion emits colored output even when not in a terminal)
+- `calculateMetadata` added to Root.jsx — not in original plan but required for correct render duration when `--props` overrides default scenes
+- Progress capped at 99% until the `done` event fires (prevents false "complete" display during final encoding pass)
+- SSE clients stored in a `Set` (not an array) per job for O(1) add/delete on client disconnect
+- `outputPath` returned as a relative URL (`/projects/[id]/output/final.mp4`) rather than absolute filesystem path — client can construct the full download URL with `SERVER_URL` prefix
 
 ---
 

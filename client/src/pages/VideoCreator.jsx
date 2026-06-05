@@ -4,6 +4,7 @@ import ScriptInput from '../components/video-creator/ScriptInput'
 import SceneGrid from '../components/video-creator/SceneGrid'
 import { VideoPlayer } from '../components/video-creator/VideoPlayer'
 import ClipLibrary from '../components/video-creator/ClipLibrary'
+import ExportPanel from '../components/video-creator/ExportPanel'
 
 // EventSource must connect directly to Express — Vite's proxy buffers text/event-stream
 const SERVER_URL = 'http://localhost:3001'
@@ -558,6 +559,13 @@ export default function VideoCreator() {
               onManualMatch={handleManualMatch}
               onOpenLibrary={() => setShowClipLibrary(true)}
               onPreviewScene={setPreviewScene}
+            />
+
+            <ExportPanel
+              scenes={scenes}
+              sceneStatuses={sceneStatuses}
+              selectedClips={selectedClips}
+              projectId={projectId}
             />
           </>
         )}

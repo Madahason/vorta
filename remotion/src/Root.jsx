@@ -23,6 +23,15 @@ export const RemotionRoot = () => {
           imagePaths:    testImagePaths,
           selectedClips: testSelectedClips,
         }}
+        calculateMetadata={({ props }) => {
+          const scenes = props.scenes?.length ? props.scenes : testScenes;
+          return {
+            durationInFrames: Math.max(
+              scenes.reduce((sum, s) => sum + (s.duration_seconds || 5) * 30, 0),
+              30
+            ),
+          };
+        }}
       />
 
       {/* Individual template previews */}
