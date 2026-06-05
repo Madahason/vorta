@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { analyzeScript } = require('../services/claude');
+const { loadDefaults }  = require('./settings');
 
 router.post('/', async (req, res) => {
   const { script, metadata } = req.body;
@@ -9,11 +10,12 @@ router.post('/', async (req, res) => {
   }
 
   if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'your_key_here') {
-    return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured in .env' });
+    return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured — add it to .env' });
   }
 
   try {
-    const scenes = await analyzeScript({ script, metadata: metadata || {} });
+    const defaults = loadDefaults();
+    const scenes   = await analyzeScript({ script, metadata: metadata || {}, defaults });
     res.json({ scenes });
   } catch (err) {
     console.error('analyze error:', err.message);

@@ -113,8 +113,15 @@ router.post('/', async (req, res) => {
     return res.status(500).json({ error: 'Failed to write project files', details: err.message });
   }
 
-  const remotionDir = path.resolve(__dirname, '../../remotion');
-  const cmd = `npx remotion render src/index.jsx Documentary ${q(outputPath)} --props ${q(propsPath)} --overwrite`;
+  const remotionDir  = path.resolve(__dirname, '../../remotion');
+
+  // Load render settings from defaults.json
+  let renderDefaults = {};
+  try { renderDefaults = require('../config/defaults.json').render || {}; } catch {}
+  const concurrency = Math.max(1, parseInt(renderDefaults.concurrency) || 1);
+  const fps         = [24, 30, 60].includes(parseInt(renderDefaults.fps)) ? parseInt(renderDefaults.fps) : 30;
+
+  const cmd = `npx remotion render src/index.jsx Documentary ${q(outputPath)} --props ${q(propsPath)} --overwrite --concurrency=${concurrency}`;
 
   console.log(`[render] Starting render for project ${projectId}`);
   console.log(`[render] ${cmd}`);

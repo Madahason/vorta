@@ -104,7 +104,7 @@ function validateAndGroundPrompts(scenes) {
   })
 }
 
-async function analyzeScript({ script, metadata }) {
+async function analyzeScript({ script, metadata, defaults = {} }) {
   const client = new Anthropic()
 
   const userMessage = `Project Title: ${metadata.title || 'Untitled'}
@@ -125,15 +125,20 @@ ${script}`
   const raw = message.content[0].text.trim()
   const scenes = JSON.parse(raw)
 
+  const style = defaults.style || {}
+
   const processed = scenes.map((scene, i) => ({
     ...scene,
     scene_id: String(i + 1).padStart(3, '0'),
     style_lock: STYLE_LOCK,
     subject_anchors:  scene.subject_anchors  || [],
-    motion:           scene.shot_type === 'image' ? (scene.motion || { type: 'push_in', intensity: 'subtle' }) : null,
+    motion:           scene.shot_type === 'image'
+      ? (scene.motion || { type: style.motionType || 'push_in', intensity: 'subtle' })
+      : null,
     overlays:         scene.shot_type === 'image' ? (scene.overlays || []) : [],
-    transition_out:   scene.transition_out || 'dissolve',
-    grade:            scene.shot_type === 'image' ? (scene.grade || 'cool_blue') : null,
+    transition_out:   scene.transition_out || style.transition || 'dissolve',
+    grade:            scene.shot_type === 'image' ? (scene.grade || style.grade || 'cool_blue') : null,
+    duration_seconds: scene.duration_seconds || style.durationSeconds || 5,
     higgsfield_prompt:
       scene.shot_type === 'image' || scene.shot_type === 'real_footage'
         ? `${scene.higgsfield_prompt}, ${STYLE_LOCK}`

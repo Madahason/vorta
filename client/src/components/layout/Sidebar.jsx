@@ -79,7 +79,7 @@ export default function Sidebar({ activePage, onNavigate }) {
 
       {/* Footer */}
       <div className="px-6 py-4 border-t border-white/[0.06]">
-        <p className="text-[11px] text-white/20">Phase 1 — Scene Analyzer</p>
+        <p className="text-[11px] text-white/20">Phase 5 — Full Pipeline</p>
       </div>
     </aside>
   )

@@ -1,0 +1,15 @@
+{
+  "style": {
+    "grade": "cool_blue",
+    "grainIntensity": 0.06,
+    "vignetteIntensity": 0.45,
+    "motionType": "push_in",
+    "transition": "dissolve",
+    "durationSeconds": 5
+  },
+  "render": {
+    "resolution": "1080p",
+    "fps": 30,
+    "concurrency": 1
+  }
+}
