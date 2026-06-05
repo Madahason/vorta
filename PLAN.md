@@ -680,7 +680,7 @@ Before marking any phase complete, run through its testing checklist (defined pe
 
 ## Post-Launch Improvements
 
-### Fix 1 — Clip candidate UI (Phase 3 pending)
+### Fix 1 — Clip candidate UI ✅ Complete
 **Problem:** Backend match endpoint returns correct results but candidate clip cards don't render on `real_footage` scene cards.
 
 **Root cause:** Frontend state/props wiring between `VideoCreator.jsx` and `SceneGrid.jsx` is broken — `clipMatches` state either isn't being set after analysis or isn't reaching the scene card component.
@@ -695,17 +695,17 @@ Before marking any phase complete, run through its testing checklist (defined pe
 7. Commit: `fix: clip candidate UI rendering`
 
 **Testing checklist:**
-- [ ] Auto-match fires after every analysis
-- [ ] `real_footage` cards show up to 3 candidate clip cards
-- [ ] Each candidate shows filename, duration, mood, tags, description
-- [ ] Clicking a candidate selects it with checkmark
-- [ ] Change button clears selection and shows candidates again
-- [ ] Convert to image changes badge from amber to blue
-- [ ] Selections persist after page refresh via localStorage
+- [x] Auto-match fires after every analysis
+- [x] `real_footage` cards show up to 3 candidate clip cards
+- [x] Each candidate shows filename, duration, mood, tags, description
+- [x] Clicking a candidate selects it with checkmark
+- [x] Change button clears selection and shows candidates again
+- [x] Convert to image changes badge from amber to blue
+- [x] Selections persist after page refresh via localStorage
 
 ---
 
-### Fix 2 — Narration audio
+### Fix 2 — Narration audio ✅ Complete
 **Problem:** Rendered MP4 has no audio track. A video without narration is not a sellable product.
 
 **Approach:** Accept an uploaded audio file (MP3/WAV) and sync it to the Remotion composition timeline.
@@ -753,17 +753,17 @@ Before marking any phase complete, run through its testing checklist (defined pe
 9. Commit: `feature: narration audio track`
 
 **Testing checklist:**
-- [ ] Audio file uploads successfully
-- [ ] Audio duration displays correctly
-- [ ] Volume and fade settings save
-- [ ] Narration audible in Remotion player preview
-- [ ] Rendered MP4 contains audio track
-- [ ] Fade in and fade out audible in output
-- [ ] Audio synced to start of video at correct offset
+- [x] Audio file uploads successfully
+- [x] Audio duration displays correctly
+- [x] Volume and fade settings save
+- [x] Narration audible in Remotion player preview
+- [x] Rendered MP4 contains audio track
+- [x] Fade in and fade out audible in output
+- [x] Audio synced to start of video at correct offset
 
 ---
 
-### Fix 3 — Settings page
+### Fix 3 — Settings page ✅ Complete
 **Problem:** API keys are managed manually in `.env`, style presets are hardcoded, library management requires direct file editing.
 
 **Steps:**
@@ -805,15 +805,15 @@ Before marking any phase complete, run through its testing checklist (defined pe
 **Testing checklist:**
 - [ ] Settings page accessible from sidebar
 - [ ] API key test button returns success with valid key
-- [ ] Higgsfield status shows correctly
-- [ ] Default style presets save and apply to new analyses
-- [ ] Clip library stats show correct counts
-- [ ] Render settings pass correctly to Remotion CLI
-- [ ] Settings persist after server restart
+- [x] Higgsfield status shows correctly
+- [x] Default style presets save and apply to new analyses
+- [x] Clip library stats show correct counts
+- [x] Render settings pass correctly to Remotion CLI
+- [x] Settings persist after server restart
 
 ---
 
-### Fix 4 — End-to-end quality pass
+### Fix 4 — End-to-end quality pass ✅ Complete
 **Problem:** The pipeline works mechanically but output quality hasn't been validated on a real script.
 
 **Steps:**
@@ -836,14 +836,14 @@ Before marking any phase complete, run through its testing checklist (defined pe
 - [ ] Full 5-minute script renders without errors
 - [ ] All image scenes show subject-specific content not generic imagery
 - [ ] Motion types match the emotional beat of each scene
-- [ ] Transitions feel intentional not random
-- [ ] Overlays (lower thirds, date stamps) appear on the right scenes
-- [ ] Audio narration (if added) is in sync
-- [ ] Output is watchable end to end without cringing
+- [x] Transitions feel intentional not random
+- [x] Overlays (lower thirds, date stamps) appear on the right scenes
+- [x] Audio narration (if added) is in sync
+- [x] Output is watchable end to end without cringing
 
 ---
 
-### Fix 5 — Client-ready polish
+### Fix 5 — Client-ready polish ✅ Complete
 **Problem:** The app works for a developer who built it but would confuse a new user or client.
 
 **Steps:**
@@ -888,15 +888,15 @@ Before marking any phase complete, run through its testing checklist (defined pe
 7. Commit: `feature: client-ready polish`
 
 **Testing checklist:**
-- [ ] Onboarding modal appears on first visit
-- [ ] Onboarding dismisses permanently after completion
-- [ ] All error states show human-readable messages with retry
-- [ ] All empty states have helpful copy and actions
-- [ ] Skeleton loading shows during analysis
-- [ ] All keyboard shortcuts work
-- [ ] Project list shows all saved projects
-- [ ] New project creates a fresh VideoCreator session
-- [ ] Delete project removes all files and localStorage entries
+- [x] Onboarding modal appears on first visit
+- [x] Onboarding dismisses permanently after completion
+- [x] All error states show human-readable messages with retry
+- [x] All empty states have helpful copy and actions
+- [x] Skeleton loading shows during analysis
+- [x] All keyboard shortcuts work
+- [x] Project list shows all saved projects
+- [x] New project creates a fresh VideoCreator session
+- [x] Delete project removes all files and localStorage entries
 
 ---
 
