@@ -17,7 +17,7 @@ function lsRead() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) } catch { return null }
 }
 function lsWrite(value) {
-  try { localStorage.setItem(LS_KEY, JSON.stringify(value)) } catch {}
+  try { localStorage.setItem(LS_KEY, JSON.stringify(value)) } catch { /* storage unavailable */ }
 }
 
 export default function ScriptInput({ onAnalyze, isAnalyzing }) {
@@ -25,8 +25,12 @@ export default function ScriptInput({ onAnalyze, isAnalyzing }) {
   const [metadata, setMetadata] = useState(() => {
     const saved = lsRead()
     if (!saved) return DEFAULTS
-    const { script: _ignored, ...rest } = saved
-    return { ...DEFAULTS, ...rest }
+    return {
+      title:        saved.title        ?? DEFAULTS.title,
+      niche:        saved.niche        ?? DEFAULTS.niche,
+      stylePreset:  saved.stylePreset  ?? DEFAULTS.stylePreset,
+      narratorTone: saved.narratorTone ?? DEFAULTS.narratorTone,
+    }
   })
 
   // Persist script + metadata together on every change
@@ -89,7 +93,13 @@ export default function ScriptInput({ onAnalyze, isAnalyzing }) {
         <textarea
           value={script}
           onChange={e => setScript(e.target.value)}
-          placeholder="Paste your documentary script here..."
+          onKeyDown={e => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && script.trim() && !isAnalyzing) {
+              e.preventDefault()
+              onAnalyze({ script, metadata })
+            }
+          }}
+          placeholder="Paste your documentary script here…  Cmd+Enter to analyze"
           rows={14}
           className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2.5 text-sm text-white placeholder-white/20 focus:outline-none focus:border-white/20 resize-none font-mono leading-relaxed transition-colors"
         />

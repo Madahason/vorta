@@ -1,10 +1,16 @@
-import { Film, Search, PenLine, ImageIcon, Settings } from 'lucide-react'
+import { Film, Search, PenLine, ImageIcon, Settings, FolderOpen } from 'lucide-react'
 
 const NAV_ITEMS = [
   {
     id: 'video-creator',
     label: 'Video Creator',
     icon: Film,
+    available: true,
+  },
+  {
+    id: 'projects',
+    label: 'Projects',
+    icon: FolderOpen,
     available: true,
   },
   {
@@ -48,7 +54,7 @@ export default function Sidebar({ activePage, onNavigate }) {
       <nav className="flex-1 px-3 py-4 space-y-1">
         {NAV_ITEMS.map(({ id, label, icon: Icon, available }) => {
           const isActive = activePage === id
-          const isComingSoon = !available && id !== 'settings'
+          const isComingSoon = !available && id !== 'settings' && id !== 'projects'
 
           return (
             <button

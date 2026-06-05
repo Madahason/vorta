@@ -6,7 +6,6 @@ import { VideoPlayer } from '../components/video-creator/VideoPlayer'
 import ClipLibrary from '../components/video-creator/ClipLibrary'
 import ExportPanel from '../components/video-creator/ExportPanel'
 
-// EventSource must connect directly to Express — Vite's proxy buffers text/event-stream
 const SERVER_URL = 'http://localhost:3001'
 
 const LS = {
@@ -17,16 +16,76 @@ const LS = {
   motionComps:   'vorta_motion_components',
   clipMatches:   'vorta_clip_matches',
   selectedClips: 'vorta_selected_clips',
+  sessionKey:    'vorta_session_key',
 }
 
 function lsRead(key) {
   try { return JSON.parse(localStorage.getItem(key)) } catch { return null }
 }
 function lsWrite(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)) } catch {}
+  try { localStorage.setItem(key, JSON.stringify(value)) } catch { /* storage unavailable */ }
 }
 function lsClearAll() {
   Object.values(LS).forEach(k => localStorage.removeItem(k))
+}
+
+function formatError(msg) {
+  if (!msg) return 'Something went wrong. Try again.'
+  const m = msg.toLowerCase()
+  if (m.includes('anthropic_api_key') || m.includes('not configured') || m.includes('api key not'))
+    return 'API key missing. Add ANTHROPIC_API_KEY to your .env file and restart the server.'
+  if (m.includes('invalid x-api-key') || m.includes('authentication_error') || m.includes('invalid api key'))
+    return 'Invalid API key. Check ANTHROPIC_API_KEY in your .env file.'
+  if (m.includes('rate_limit') || m.includes('overloaded'))
+    return 'Claude API is overloaded. Wait 30 seconds and try again.'
+  if (m.includes('econnrefused') || m.includes('failed to fetch') || m.includes('networkerror') || m.includes('load failed'))
+    return 'Cannot reach the server. Is the backend running on port 3001?'
+  if (m.includes('timeout') || m.includes('etimedout'))
+    return 'Request timed out. Check your connection and try again.'
+  if (m.includes('higgsfield'))
+    return 'Higgsfield error. Run `higgsfield auth login` in your terminal and retry.'
+  if (m.includes('unexpected token') || m.includes('unexpected end') || m.includes('syntaxerror'))
+    return 'Unexpected server response. Check server logs and try again.'
+  return msg
+}
+
+function saveProjectToList(key, title, scenes, sceneStatuses, selectedClips, clipMatches, projectId) {
+  const thumbnail = Object.values(sceneStatuses || {}).find(s => s.status === 'done')?.image_path || null
+  const entry = {
+    key,
+    title: title || 'Untitled',
+    sceneCount: scenes.length,
+    thumbnail,
+    lastUpdated: Date.now(),
+  }
+  const existing = JSON.parse(localStorage.getItem('vorta_projects') || '[]')
+  const updated  = [entry, ...existing.filter(p => p.key !== key)].slice(0, 20)
+  localStorage.setItem('vorta_projects', JSON.stringify(updated))
+  localStorage.setItem(`vorta_project_data_${key}`, JSON.stringify({
+    scenes,
+    sceneStatuses: sceneStatuses || {},
+    selectedClips: selectedClips || {},
+    clipMatches:   clipMatches   || {},
+    projectId,
+    metadata: lsRead(LS.metadata) || {},
+  }))
+}
+
+function SkeletonCard() {
+  return (
+    <div
+      className="animate-pulse rounded-xl overflow-hidden border border-white/[0.05]"
+      style={{ background: 'rgba(255,255,255,0.025)' }}
+    >
+      <div className="w-full bg-white/[0.04]" style={{ paddingTop: '56.25%' }} />
+      <div className="p-3 space-y-2">
+        <div className="h-2.5 bg-white/[0.05] rounded-full w-3/5" />
+        <div className="h-2 bg-white/[0.03] rounded-full w-11/12" />
+        <div className="h-2 bg-white/[0.03] rounded-full w-4/5" />
+        <div className="h-2 bg-white/[0.03] rounded-full w-2/3" />
+      </div>
+    </div>
+  )
 }
 
 export default function VideoCreator() {
@@ -34,6 +93,7 @@ export default function VideoCreator() {
   const [scenes, setScenes] = useState(() => lsRead(LS.scenes) || [])
   const [projectId, setProjectId] = useState(() => lsRead(LS.projectId) || null)
   const [sceneStatuses, setSceneStatuses] = useState(() => lsRead(LS.statuses) || {})
+  const [sessionKey, setSessionKey] = useState(() => lsRead(LS.sessionKey) || null)
   const [hasAnalyzed, setHasAnalyzed] = useState(() => {
     const s = lsRead(LS.scenes)
     return Array.isArray(s) && s.length > 0
@@ -53,10 +113,8 @@ export default function VideoCreator() {
   const [motionStatuses, setMotionStatuses] = useState({})
 
   // Clip matches — { [scene_id]: { matches: [], loading: bool } }
-  // Rehydrate from localStorage, stripping any stale loading:true entries
   const [clipMatches, setClipMatches] = useState(() => {
     const saved = lsRead(LS.clipMatches) || {}
-    // Ensure no stale loading states survive a refresh
     const clean = {}
     Object.entries(saved).forEach(([sid, v]) => {
       clean[sid] = { matches: v.matches || [], loading: false }
@@ -64,11 +122,10 @@ export default function VideoCreator() {
     return clean
   })
 
-  // Selected clips — { [scene_id]: clip_object } — separate from scene objects
+  // Selected clips — { [scene_id]: clip_object }
   const [selectedClips, setSelectedClips] = useState(() => {
     const saved = lsRead(LS.selectedClips)
     if (saved) return saved
-    // Migrate from old scene.selected_clip if present
     const savedScenes = lsRead(LS.scenes) || []
     const migrated = {}
     savedScenes.forEach(s => { if (s.selected_clip) migrated[s.scene_id] = s.selected_clip })
@@ -77,20 +134,17 @@ export default function VideoCreator() {
 
   const [showClipLibrary, setShowClipLibrary] = useState(false)
 
-  // Never persist these — always start false
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [analyzeError, setAnalyzeError] = useState(null)
   const [isGenerating, setIsGenerating] = useState(false)
   const [generateError, setGenerateError] = useState(null)
 
-  // Session-restored badge
   const [sessionRestored, setSessionRestored] = useState(() => {
     const s = lsRead(LS.scenes)
     return Array.isArray(s) && s.length > 0
   })
   const [badgeFading, setBadgeFading] = useState(false)
 
-  // Key to force ScriptInput remount when session is cleared
   const [resetKey, setResetKey]         = useState(0)
   const [showPlayer, setShowPlayer]     = useState(false)
   const [playerStuck, setPlayerStuck]   = useState(false)
@@ -104,10 +158,10 @@ export default function VideoCreator() {
   // ─── Session-restored fade-out ───────────────────────────────────────────
   useEffect(() => {
     if (!sessionRestored) return
-    const fade   = setTimeout(() => setBadgeFading(true),          2500)
-    const remove = setTimeout(() => setSessionRestored(false),     3000)
+    const fade   = setTimeout(() => setBadgeFading(true),      2500)
+    const remove = setTimeout(() => setSessionRestored(false), 3000)
     return () => { clearTimeout(fade); clearTimeout(remove) }
-  }, []) // run once on mount only
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Persist on every change ─────────────────────────────────────────────
   useEffect(() => { lsWrite(LS.scenes,        scenes)        }, [scenes])
@@ -115,7 +169,6 @@ export default function VideoCreator() {
   useEffect(() => { lsWrite(LS.statuses,      sceneStatuses) }, [sceneStatuses])
   useEffect(() => { lsWrite(LS.selectedClips, selectedClips) }, [selectedClips])
   useEffect(() => {
-    // Strip loading:true before writing — loading is always transient
     const toSave = {}
     Object.entries(clipMatches).forEach(([sid, v]) => {
       if (!v.loading) toSave[sid] = v
@@ -123,7 +176,32 @@ export default function VideoCreator() {
     lsWrite(LS.clipMatches, toSave)
   }, [clipMatches])
 
-  // ─── Derive imagePaths from sceneStatuses for the Remotion player ───────────
+  // ─── Auto-save snapshot when generation completes (thumbnail available) ──
+  useEffect(() => {
+    if (!generateDone || !sessionKey || !scenes.length) return
+    const title = lsRead(LS.metadata)?.title || 'Untitled'
+    saveProjectToList(sessionKey, title, scenes, sceneStatuses, selectedClips, clipMatches, projectId)
+  }, [generateDone]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── Keyboard shortcuts ───────────────────────────────────────────────────
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape') {
+        if (previewScene) { setPreviewScene(null); return }
+        if (showClipLibrary) { setShowClipLibrary(false); return }
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+        if (hasAnalyzed && scenes.length > 0) {
+          e.preventDefault()
+          document.getElementById('vorta-export-panel')?.scrollIntoView({ behavior: 'smooth' })
+        }
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [previewScene, showClipLibrary, hasAnalyzed, scenes.length])
+
+  // ─── Derive imagePaths from sceneStatuses for the Remotion player ────────
   const imagePaths = useMemo(() => {
     const paths = {}
     Object.entries(sceneStatuses).forEach(([sid, st]) => {
@@ -136,7 +214,7 @@ export default function VideoCreator() {
     grainIntensity: filmGrain ? undefined : 0,
   }), [filmGrain])
 
-  // ─── Sticky player — IntersectionObserver on sentinel div ────────────────
+  // ─── Sticky player — IntersectionObserver on sentinel div ─────────────────
   useEffect(() => {
     if (!sentinelRef.current || !showPlayer) {
       setPlayerStuck(false)
@@ -155,7 +233,7 @@ export default function VideoCreator() {
     const realScenes = scenes.filter(s => s.shot_type === 'real_footage')
     const unmatched  = realScenes.filter(s => !clipMatches[s.scene_id])
     if (unmatched.length > 0) matchClipsForScenes(unmatched)
-  }, []) // runs once on mount
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── SSE cleanup on unmount ───────────────────────────────────────────────
   useEffect(() => { return () => eventSourceRef.current?.close() }, [])
@@ -167,6 +245,7 @@ export default function VideoCreator() {
     setScenes([])
     setHasAnalyzed(false)
     setProjectId(null)
+    setSessionKey(null)
     setSceneStatuses({})
     setGenerateDone(false)
     setGenerateError(null)
@@ -182,7 +261,7 @@ export default function VideoCreator() {
     setPreviewScene(null)
     setSessionRestored(false)
     setBadgeFading(false)
-    setResetKey(k => k + 1)  // remounts ScriptInput → reads now-empty localStorage
+    setResetKey(k => k + 1)
   }
 
   // ─── SSE subscription ─────────────────────────────────────────────────────
@@ -236,6 +315,14 @@ export default function VideoCreator() {
       setScenes(data.scenes)
       setHasAnalyzed(true)
       matchClipsForScenes(data.scenes)
+
+      // Register in project list for project management
+      const key = sessionKey || `proj_${Date.now()}`
+      if (!sessionKey) {
+        setSessionKey(key)
+        lsWrite(LS.sessionKey, key)
+      }
+      saveProjectToList(key, metadata.title, data.scenes, {}, {}, {}, null)
     } catch (err) {
       setAnalyzeError(err.message)
     } finally {
@@ -295,12 +382,10 @@ export default function VideoCreator() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Component generation failed')
 
-      // Embed component code directly on the scene object (persisted via vorta_scenes)
       setScenes(prev => prev.map(s =>
         s.scene_id === scene.scene_id ? { ...s, motion_component: data.component_code } : s
       ))
 
-      // Also write to the dedicated motion components key
       const existing = lsRead(LS.motionComps) || {}
       lsWrite(LS.motionComps, { ...existing, [scene.scene_id]: data.component_code })
 
@@ -315,7 +400,6 @@ export default function VideoCreator() {
     const realScenes = allScenes.filter(s => s.shot_type === 'real_footage')
     if (!realScenes.length) return
 
-    // Set all real footage scenes to loading
     setClipMatches(prev => {
       const next = { ...prev }
       realScenes.forEach(s => { next[s.scene_id] = { matches: [], loading: true } })
@@ -339,7 +423,6 @@ export default function VideoCreator() {
         return next
       })
     } catch {
-      // Clear loading states silently — scenes still work, just no auto-matches
       setClipMatches(prev => {
         const next = { ...prev }
         realScenes.forEach(s => { next[s.scene_id] = { matches: [], loading: false } })
@@ -412,10 +495,6 @@ export default function VideoCreator() {
   }
 
   const imageSceneCount = scenes.filter(s => s.shot_type === 'image').length
-  const hasAnyAsset = scenes.some(s =>
-    (s.shot_type === 'image' && sceneStatuses[s.scene_id]?.status === 'done') ||
-    (s.shot_type === 'motion_graphic' && !!s.motion_component)
-  )
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
@@ -488,7 +567,24 @@ export default function VideoCreator() {
 
         {analyzeError && (
           <div className="rounded-lg border border-red-500/20 bg-red-500/[0.04] px-4 py-3 text-sm text-red-400">
-            {analyzeError}
+            {formatError(analyzeError)}
+          </div>
+        )}
+
+        {/* Skeleton cards while analyzing */}
+        {isAnalyzing && (
+          <div>
+            <p className="text-xs text-white/25 mb-4">Breaking script into scenes…</p>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+              {Array.from({ length: 9 }).map((_, i) => <SkeletonCard key={i} />)}
+            </div>
+          </div>
+        )}
+
+        {hasAnalyzed && !isAnalyzing && scenes.length === 0 && (
+          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-8 py-12 text-center">
+            <p className="text-white/30 text-sm mb-2">No scenes were generated.</p>
+            <p className="text-white/20 text-xs">Try a longer script or check your API key in Settings.</p>
           </div>
         )}
 
@@ -521,7 +617,7 @@ export default function VideoCreator() {
 
             {generateError && (
               <div className="rounded-lg border border-red-500/20 bg-red-500/[0.04] px-4 py-3 text-sm text-red-400">
-                {generateError}
+                {formatError(generateError)}
               </div>
             )}
 
@@ -561,12 +657,14 @@ export default function VideoCreator() {
               onPreviewScene={setPreviewScene}
             />
 
-            <ExportPanel
-              scenes={scenes}
-              sceneStatuses={sceneStatuses}
-              selectedClips={selectedClips}
-              projectId={projectId}
-            />
+            <div id="vorta-export-panel">
+              <ExportPanel
+                scenes={scenes}
+                sceneStatuses={sceneStatuses}
+                selectedClips={selectedClips}
+                projectId={projectId}
+              />
+            </div>
           </>
         )}
       </div>
@@ -626,7 +724,6 @@ export default function VideoCreator() {
         boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
         overflow: 'hidden',
       }}>
-        {/* Label row */}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '7px 12px',
@@ -646,7 +743,6 @@ export default function VideoCreator() {
           </button>
         </div>
 
-        {/* Player — hidden when minimized */}
         {!playerMinimized && (
           <VideoPlayer
             scenes={scenes}
