@@ -675,3 +675,234 @@ Before marking any phase complete, run through its testing checklist (defined pe
 - [ ] Audio is present and in sync
 - [ ] Project files are saved to `/projects/[id]/` and persist across sessions
 - [ ] Phase 5 committed to GitHub: `phase-5: full pipeline integration and MP4 export`
+
+---
+
+## Post-Launch Improvements
+
+### Fix 1 — Clip candidate UI (Phase 3 pending)
+**Problem:** Backend match endpoint returns correct results but candidate clip cards don't render on `real_footage` scene cards.
+
+**Root cause:** Frontend state/props wiring between `VideoCreator.jsx` and `SceneGrid.jsx` is broken — `clipMatches` state either isn't being set after analysis or isn't reaching the scene card component.
+
+**Steps:**
+1. Add `console.log` to `VideoCreator.jsx` immediately after the auto-match loop fires — log `clipMatches` state to confirm it's being populated
+2. Add `console.log` inside the `real_footage` scene card render block — log the `clipMatches[scene.scene_id]` value it receives
+3. If `clipMatches` is populated but not reaching the card — fix the props chain: `VideoCreator → SceneGrid → individual scene card`
+4. If `clipMatches` is empty — the auto-match loop after `setScenes()` isn't firing. Fix the `useEffect` dependency array
+5. Once candidate cards render, test: select a clip, confirm `selectedClips` state updates, confirm player reflects the selected clip
+6. Test Convert to image flow end to end
+7. Commit: `fix: clip candidate UI rendering`
+
+**Testing checklist:**
+- [ ] Auto-match fires after every analysis
+- [ ] `real_footage` cards show up to 3 candidate clip cards
+- [ ] Each candidate shows filename, duration, mood, tags, description
+- [ ] Clicking a candidate selects it with checkmark
+- [ ] Change button clears selection and shows candidates again
+- [ ] Convert to image changes badge from amber to blue
+- [ ] Selections persist after page refresh via localStorage
+
+---
+
+### Fix 2 — Narration audio
+**Problem:** Rendered MP4 has no audio track. A video without narration is not a sellable product.
+
+**Approach:** Accept an uploaded audio file (MP3/WAV) and sync it to the Remotion composition timeline.
+
+**Steps:**
+1. Add an audio upload section to the ExportPanel: drag-and-drop or file picker accepting MP3/WAV/M4A
+2. On upload, save the audio file to `/projects/[projectId]/audio/narration.mp3` via `POST /api/audio/upload`
+3. Display audio waveform summary: filename, duration, file size
+4. Add audio sync options:
+   - **Start at:** time offset in seconds (default 0)
+   - **Volume:** slider 0–100 (default 85)
+   - **Fade in:** slider 0–3 seconds (default 0.5)
+   - **Fade out:** slider 0–5 seconds (default 2.0)
+5. Pass audio settings to Remotion via `scenes.json` props:
+   ```json
+   {
+     "scenes": [...],
+     "selectedClips": {},
+     "audio": {
+       "path": "/absolute/path/to/narration.mp3",
+       "startFrom": 0,
+       "volume": 0.85,
+       "fadeIn": 15,
+       "fadeOut": 60
+     }
+   }
+   ```
+6. Update `Documentary.jsx` to render the audio track:
+   ```jsx
+   import { Audio } from 'remotion';
+   {audio?.path && (
+     <Audio
+       src={audio.path}
+       startFrom={audio.startFrom * fps}
+       volume={(frame) => {
+         if (frame < audio.fadeIn) return interpolate(frame, [0, audio.fadeIn], [0, audio.volume]);
+         if (frame > totalFrames - audio.fadeOut) return interpolate(frame, [totalFrames - audio.fadeOut, totalFrames], [audio.volume, 0]);
+         return audio.volume;
+       }}
+     />
+   )}
+   ```
+7. Show audio track in the Remotion player preview — user should hear the narration while scrubbing
+8. Render test MP4 with audio and confirm sound is present in VLC
+9. Commit: `feature: narration audio track`
+
+**Testing checklist:**
+- [ ] Audio file uploads successfully
+- [ ] Audio duration displays correctly
+- [ ] Volume and fade settings save
+- [ ] Narration audible in Remotion player preview
+- [ ] Rendered MP4 contains audio track
+- [ ] Fade in and fade out audible in output
+- [ ] Audio synced to start of video at correct offset
+
+---
+
+### Fix 3 — Settings page
+**Problem:** API keys are managed manually in `.env`, style presets are hardcoded, library management requires direct file editing.
+
+**Steps:**
+1. Build the Settings page at `client/src/pages/Settings.jsx` with four sections:
+
+   **API Keys section:**
+   - Anthropic API key: password input + test button that fires a test Claude call and shows success/fail
+   - Higgsfield auth status: read-only display showing 'Authenticated' or 'Not authenticated' by calling `higgsfield account` via `GET /api/settings/higgsfield-status`
+   - A 'Re-authenticate Higgsfield' button that runs `higgsfield auth login` via backend
+
+   **Default style presets section:**
+   - Default color grade: dropdown (`cool_blue` / `warm_amber` / `desaturated` / `neutral`)
+   - Default grain intensity: slider
+   - Default vignette intensity: slider
+   - Default motion type: dropdown
+   - Default transition: dropdown
+   - Default scene duration: number input (seconds)
+   - These values get injected into every new scene during analysis instead of hardcoded defaults
+   - Save button writes to `/server/config/defaults.json`
+
+   **Clip library management section:**
+   - Show total clip count
+   - Show `gaps.json` insights: most requested missing tags
+   - Bulk import: drop a folder of `.mp4` files and auto-generate metadata entries using Claude to analyze filenames and generate tags
+   - Export library: download `clips.json` as backup
+   - Import library: upload a `clips.json` to restore
+
+   **Render settings section:**
+   - Output resolution: dropdown (1080p / 4K)
+   - Output format: MP4 only for now
+   - Frame rate: 24 / 30 / 60 fps
+   - Remotion concurrency: number input (default 1, higher = faster render but more CPU)
+   - These get passed to the Remotion render command as flags
+
+2. Persist settings to `/server/config/defaults.json` via `POST /api/settings`
+3. Load settings on server start and inject into all relevant services
+4. Commit: `feature: settings page`
+
+**Testing checklist:**
+- [ ] Settings page accessible from sidebar
+- [ ] API key test button returns success with valid key
+- [ ] Higgsfield status shows correctly
+- [ ] Default style presets save and apply to new analyses
+- [ ] Clip library stats show correct counts
+- [ ] Render settings pass correctly to Remotion CLI
+- [ ] Settings persist after server restart
+
+---
+
+### Fix 4 — End-to-end quality pass
+**Problem:** The pipeline works mechanically but output quality hasn't been validated on a real script.
+
+**Steps:**
+1. Write or source a real 5-minute documentary script on a specific topic (Apple, Tesla, a financial crisis — something with rich named subjects)
+2. Run the full pipeline: analyze → generate all images → build all motion graphic components → render MP4
+3. Watch the full output and log every weak moment:
+   - Generic images that don't match the scene
+   - Motion graphics that feel disconnected
+   - Transitions that feel wrong
+   - Pacing issues (scenes too long or too short)
+   - Missing overlays where they'd add value
+   - Grain/vignette too strong or too weak
+4. For each weak moment note: scene number, what's wrong, what it should be
+5. Fix the top 5 issues found — prioritise image prompt quality and motion graphic variety
+6. Re-render and compare
+7. Repeat until the output is something you'd be comfortable showing a client
+8. Commit: `quality: end-to-end quality pass v1`
+
+**Testing checklist:**
+- [ ] Full 5-minute script renders without errors
+- [ ] All image scenes show subject-specific content not generic imagery
+- [ ] Motion types match the emotional beat of each scene
+- [ ] Transitions feel intentional not random
+- [ ] Overlays (lower thirds, date stamps) appear on the right scenes
+- [ ] Audio narration (if added) is in sync
+- [ ] Output is watchable end to end without cringing
+
+---
+
+### Fix 5 — Client-ready polish
+**Problem:** The app works for a developer who built it but would confuse a new user or client.
+
+**Steps:**
+1. **Onboarding flow** — first-time user sees a welcome modal with 4 steps:
+   - Step 1: Add your Anthropic API key
+   - Step 2: Authenticate Higgsfield (`higgsfield auth login`)
+   - Step 3: Paste your first script
+   - Step 4: Click Analyze
+   - Each step has a status indicator (done/pending) and a direct action button
+   - Modal dismisses permanently once all 4 steps are complete
+   - Stored in localStorage: `vorta_onboarded: true`
+
+2. **Error handling** — every async operation needs a human-readable error state:
+   - Analysis fails: 'Claude API error — check your API key in Settings'
+   - Image generation fails: 'Higgsfield error — run `higgsfield account` to check auth'
+   - Render fails: show the specific Remotion error, link to fix
+   - All errors show a retry button
+
+3. **Empty states** — every section needs a clear empty state:
+   - No scenes yet: illustration + 'Paste your script above to get started'
+   - Clip library empty: 'No clips yet — add your first clip or download some from YouTube using yt-dlp'
+   - No projects yet: clean welcome state
+
+4. **Loading states** — every async operation needs a skeleton or spinner:
+   - Scene grid: skeleton cards while analyzing
+   - Image generation: shimmer effect on pending cards
+   - Render: animated progress with estimated time
+
+5. **Keyboard shortcuts:**
+   - `Space` — play/pause the Remotion player
+   - `Escape` — close any open modal or panel
+   - `Cmd/Ctrl + Enter` — trigger Analyze when script is focused
+   - `Cmd/Ctrl + R` — trigger Render when scenes are ready
+
+6. **Project management** — currently every session is one project. Add basic multi-project support:
+   - Project list page as the home screen
+   - Each project shows: title, scene count, last edited, thumbnail of first generated image
+   - New project button
+   - Delete project button with confirmation
+   - Clicking a project opens it in the VideoCreator
+
+7. Commit: `feature: client-ready polish`
+
+**Testing checklist:**
+- [ ] Onboarding modal appears on first visit
+- [ ] Onboarding dismisses permanently after completion
+- [ ] All error states show human-readable messages with retry
+- [ ] All empty states have helpful copy and actions
+- [ ] Skeleton loading shows during analysis
+- [ ] All keyboard shortcuts work
+- [ ] Project list shows all saved projects
+- [ ] New project creates a fresh VideoCreator session
+- [ ] Delete project removes all files and localStorage entries
+
+---
+
+### Build order recommendation
+1. **Fix 1 first** — it's a bug fix, takes 1–2 hours maximum.
+2. **Fix 2 second** — audio is the single biggest missing feature for client work.
+3. **Fix 3 third** — settings unlock better defaults and make the app self-contained.
+4. **Fix 4 fourth** — quality pass before showing anyone.
+5. **Fix 5 last** — polish after the core is solid.
