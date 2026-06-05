@@ -284,8 +284,10 @@ function SceneCard({
             <ClipMatchSection
               scene={scene}
               clipMatch={clipMatch}
+              selectedClip={selectedClip}
               onSelectClip={onSelectClip}
               onConvertToImage={onConvertToImage}
+              onManualMatch={onManualMatch}
             />
           )}
 
@@ -635,166 +637,325 @@ function OverlayEditorPanel({ scene, onChange }) {
   )
 }
 
+// ─── Overlay sub-section constants ───────────────────────────────────────────
+
+const FONT_FAMILIES = ['Inter','Helvetica Neue','Georgia','Courier New','Bebas Neue','Playfair Display','Montserrat','DM Sans']
+const FONT_WEIGHTS  = [
+  { v: '300', l: '300 Light' }, { v: '400', l: '400 Regular' }, { v: '500', l: '500 Medium' },
+  { v: '600', l: '600 SemiBold' }, { v: '700', l: '700 Bold' }, { v: '800', l: '800 ExtraBold' },
+]
+const TEXT_TRANSFORMS   = ['none','uppercase','lowercase','capitalize']
+const ENTER_ANIMS_LT    = ['slide_left','slide_right','slide_up','slide_down','fade','scale_up']
+const ENTER_ANIMS_KT    = ['fade','word_by_word','slide_up','scale_in','typewriter']
+const EXIT_ANIMS_KT     = ['fade','slide_down','scale_out','instant']
+const GRAIN_PATTERNS    = ['random','horizontal_bias','diagonal']
+const GRADE_TRANSITIONS = ['instant','fade_in']
+const EASINGS           = ['spring','linear','ease_out','ease_in_out']
+
+// ─── SubSection ──────────────────────────────────────────────────────────────
+
+function SubSection({ title, open, onToggle, children }) {
+  return (
+    <div style={{ marginTop: '10px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '8px' }}>
+      <button onClick={onToggle} style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0',
+      }}>
+        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.40)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{title}</span>
+        {open ? <ChevronUp size={10} color="rgba(255,255,255,0.28)" /> : <ChevronDown size={10} color="rgba(255,255,255,0.28)" />}
+      </button>
+      {open && <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>{children}</div>}
+    </div>
+  )
+}
+
+// ─── ColorInput ──────────────────────────────────────────────────────────────
+
+function ColorInput({ label, hex, onHex, opacity, onOpacity, inputStyle }) {
+  return (
+    <div>
+      {label && <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.30)', marginBottom: '4px' }}>{label}</div>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <input type="color" value={hex || '#000000'} onChange={e => onHex(e.target.value)}
+          style={{ width: 28, height: 28, padding: 2, border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, background: 'transparent', cursor: 'pointer', flexShrink: 0 }} />
+        <input type="text" value={hex || '#000000'}
+          onChange={e => { if (/^#[0-9A-Fa-f]{0,6}$/.test(e.target.value)) onHex(e.target.value) }}
+          style={{ ...inputStyle, width: '84px', flexShrink: 0 }} />
+        {onOpacity !== undefined && <>
+          <input type="range" min={0} max={1} step={0.05} value={opacity ?? 1}
+            onChange={e => onOpacity(parseFloat(e.target.value))}
+            style={{ flex: 1, accentColor: '#3b82f6', cursor: 'pointer' }} />
+          <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.40)', width: 28, textAlign: 'right' }}>{(opacity ?? 1).toFixed(2)}</span>
+        </>}
+      </div>
+    </div>
+  )
+}
+
+// ─── SliderRow ───────────────────────────────────────────────────────────────
+
+function SliderRow({ label, min, max, step, value, onChange, unit = '' }) {
+  return (
+    <div>
+      <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.30)', marginBottom: '4px' }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <input type="range" min={min} max={max} step={step} value={value}
+          onChange={e => onChange(parseFloat(e.target.value))}
+          style={{ flex: 1, accentColor: '#3b82f6', cursor: 'pointer' }} />
+        <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.50)', width: 40, textAlign: 'right' }}>
+          {typeof value === 'number' ? value.toFixed(step < 0.1 ? 2 : step < 1 ? 1 : 0) : value}{unit}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 // ─── OverlayRow ───────────────────────────────────────────────────────────────
 
 function OverlayRow({ overlay, scene, onUpdate, onRemove, inputStyle, selectStyle }) {
+  const [colorOpen, setColorOpen] = useState(false)
+  const [fontOpen,  setFontOpen]  = useState(false)
+  const [animOpen,  setAnimOpen]  = useState(false)
+
   const meta = OVERLAY_TYPES.find(o => o.type === overlay.type)
   const Icon = meta?.icon || Layers
 
-  const rowStyle = {
-    background: 'rgba(255,255,255,0.02)',
-    border: '1px solid rgba(255,255,255,0.07)',
-    borderRadius: '8px',
-    padding: '10px 12px',
-  }
-  const labelStyle = {
-    fontSize: '11px',
-    color: 'rgba(255,255,255,0.30)',
-    display: 'block',
-    marginBottom: '4px',
-  }
-  const fieldRowStyle = {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: '8px',
-    alignItems: 'flex-end',
-  }
+  const c = overlay.color    || {}
+  const f = overlay.font     || {}
+  const a = overlay.animation || {}
+
+  const updColor = patch => onUpdate({ color:     { ...c, ...patch } })
+  const updFont  = patch => onUpdate({ font:      { ...f, ...patch } })
+  const updAnim  = patch => onUpdate({ animation: { ...a, ...patch } })
+
+  const isTextType = ['lower_third','date_stamp','kinetic_text'].includes(overlay.type)
+  const labelStyle = { fontSize: '11px', color: 'rgba(255,255,255,0.30)', display: 'block', marginBottom: '4px' }
+  const fieldRow   = { display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'flex-end' }
 
   return (
-    <div style={rowStyle}>
+    <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '8px', padding: '10px 12px' }}>
+
+      {/* ── Row header ── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'rgba(255,255,255,0.55)' }}>
-          <Icon size={12} />
-          {meta?.label || overlay.type}
+          <Icon size={12} /> {meta?.label || overlay.type}
         </div>
-        <button
-          onClick={onRemove}
-          style={{
-            background: 'none', border: 'none', cursor: 'pointer',
-            color: 'rgba(255,255,255,0.20)', padding: '2px',
-            display: 'flex', alignItems: 'center',
-          }}
+        <button onClick={onRemove} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.20)', padding: '2px', display: 'flex' }}
           onMouseEnter={e => e.currentTarget.style.color = 'rgba(239,68,68,0.7)'}
           onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.20)'}
-          title="Remove overlay"
-        >
+          title="Remove overlay">
           <X size={12} />
         </button>
       </div>
 
-      {/* lower_third fields */}
+      {/* ── Core fields ── */}
       {overlay.type === 'lower_third' && (
-        <div style={fieldRowStyle}>
-          <div style={{ flex: '1 1 160px' }}>
+        <div style={fieldRow}>
+          <div style={{ flex: '1 1 150px' }}>
             <label style={labelStyle}>Line 1</label>
-            <input type="text" value={overlay.line1 || ''} placeholder="Steve Jobs"
-              onChange={e => onUpdate({ line1: e.target.value })} style={inputStyle} />
+            <input type="text" value={overlay.line1 || ''} placeholder="Steve Jobs" onChange={e => onUpdate({ line1: e.target.value })} style={inputStyle} />
           </div>
-          <div style={{ flex: '1 1 160px' }}>
+          <div style={{ flex: '1 1 150px' }}>
             <label style={labelStyle}>Line 2</label>
-            <input type="text" value={overlay.line2 || ''} placeholder="Apple CEO · 1997"
-              onChange={e => onUpdate({ line2: e.target.value })} style={inputStyle} />
+            <input type="text" value={overlay.line2 || ''} placeholder="Apple CEO · 1997" onChange={e => onUpdate({ line2: e.target.value })} style={inputStyle} />
           </div>
-          <div style={{ flex: '0 0 90px' }}>
-            <label style={labelStyle}>Appear at (s)</label>
-            <input type="number" min={0} max={scene.duration_seconds || 10} step={0.1}
-              value={overlay.appearAt ?? 0.7}
-              onChange={e => onUpdate({ appearAt: parseFloat(e.target.value) })}
-              style={{ ...inputStyle, textAlign: 'center' }} />
+          <div style={{ flex: '0 0 80px' }}>
+            <label style={labelStyle}>Appear (s)</label>
+            <input type="number" min={0} max={scene.duration_seconds || 10} step={0.1} value={overlay.appearAt ?? 0.7} onChange={e => onUpdate({ appearAt: parseFloat(e.target.value) })} style={{ ...inputStyle, textAlign: 'center' }} />
           </div>
         </div>
       )}
 
-      {/* date_stamp fields */}
       {overlay.type === 'date_stamp' && (
-        <div style={fieldRowStyle}>
+        <div style={fieldRow}>
           <div style={{ flex: '1 1 200px' }}>
             <label style={labelStyle}>Text</label>
-            <input type="text" value={overlay.text || ''} placeholder="San Francisco · 2007"
-              onChange={e => onUpdate({ text: e.target.value })} style={inputStyle} />
+            <input type="text" value={overlay.text || ''} placeholder="San Francisco · 2007" onChange={e => onUpdate({ text: e.target.value })} style={inputStyle} />
           </div>
-          <div style={{ flex: '0 0 90px' }}>
-            <label style={labelStyle}>Appear at (s)</label>
-            <input type="number" min={0} max={scene.duration_seconds || 10} step={0.1}
-              value={overlay.appearAt ?? 0.7}
-              onChange={e => onUpdate({ appearAt: parseFloat(e.target.value) })}
-              style={{ ...inputStyle, textAlign: 'center' }} />
+          <div style={{ flex: '0 0 80px' }}>
+            <label style={labelStyle}>Appear (s)</label>
+            <input type="number" min={0} max={scene.duration_seconds || 10} step={0.1} value={overlay.appearAt ?? 0.7} onChange={e => onUpdate({ appearAt: parseFloat(e.target.value) })} style={{ ...inputStyle, textAlign: 'center' }} />
           </div>
         </div>
       )}
 
-      {/* kinetic_text fields */}
       {overlay.type === 'kinetic_text' && (
-        <div style={fieldRowStyle}>
-          <div style={{ flex: '1 1 200px' }}>
+        <div style={fieldRow}>
+          <div style={{ flex: '1 1 180px' }}>
             <label style={labelStyle}>Text (max 8 words)</label>
-            <input type="text" value={overlay.text || ''} placeholder="$0 to $3 trillion"
-              onChange={e => onUpdate({ text: e.target.value })} style={inputStyle} />
+            <input type="text" value={overlay.text || ''} placeholder="$0 to $3 trillion" onChange={e => onUpdate({ text: e.target.value })} style={inputStyle} />
           </div>
-          <div style={{ flex: '0 0 110px' }}>
-            <label style={labelStyle}>Style</label>
+          <div style={{ flex: '0 0 100px' }}>
+            <label style={labelStyle}>Position</label>
             <select value={overlay.style || 'center'} onChange={e => onUpdate({ style: e.target.value })} style={selectStyle}>
               <option value="center">center</option>
               <option value="bottom">bottom</option>
             </select>
           </div>
-          <div style={{ flex: '0 0 90px' }}>
-            <label style={labelStyle}>Appear at (s)</label>
-            <input type="number" min={0} max={scene.duration_seconds || 10} step={0.1}
-              value={overlay.appearAt ?? 1.0}
-              onChange={e => onUpdate({ appearAt: parseFloat(e.target.value) })}
-              style={{ ...inputStyle, textAlign: 'center' }} />
+          <div style={{ flex: '0 0 80px' }}>
+            <label style={labelStyle}>Appear (s)</label>
+            <input type="number" min={0} max={scene.duration_seconds || 10} step={0.1} value={overlay.appearAt ?? 1.0} onChange={e => onUpdate({ appearAt: parseFloat(e.target.value) })} style={{ ...inputStyle, textAlign: 'center' }} />
           </div>
         </div>
       )}
 
-      {/* vignette fields */}
       {overlay.type === 'vignette' && (
-        <div style={fieldRowStyle}>
-          <div style={{ flex: 1 }}>
-            <label style={labelStyle}>Intensity — {(overlay.intensity ?? 0.45).toFixed(2)}</label>
-            <input
-              type="range" min={0.1} max={0.8} step={0.05}
-              value={overlay.intensity ?? 0.45}
-              onChange={e => onUpdate({ intensity: parseFloat(e.target.value) })}
-              style={{ width: '100%', accentColor: '#3b82f6', cursor: 'pointer' }}
-            />
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'rgba(255,255,255,0.20)', marginTop: '2px' }}>
-              <span>0.10</span><span>0.80</span>
-            </div>
-          </div>
-        </div>
+        <SliderRow label={`Intensity — ${(overlay.intensity ?? 0.45).toFixed(2)}`} min={0.1} max={0.8} step={0.05} value={overlay.intensity ?? 0.45} onChange={v => onUpdate({ intensity: v })} />
       )}
 
-      {/* grain fields */}
       {overlay.type === 'grain' && (
-        <div style={fieldRowStyle}>
-          <div style={{ flex: 1 }}>
-            <label style={labelStyle}>Intensity — {(overlay.intensity ?? 0.12).toFixed(2)}</label>
-            <input
-              type="range" min={0.05} max={0.30} step={0.01}
-              value={overlay.intensity ?? 0.12}
-              onChange={e => onUpdate({ intensity: parseFloat(e.target.value) })}
-              style={{ width: '100%', accentColor: '#3b82f6', cursor: 'pointer' }}
-            />
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'rgba(255,255,255,0.20)', marginTop: '2px' }}>
-              <span>0.05</span><span>0.30</span>
-            </div>
-          </div>
+        <SliderRow label={`Intensity — ${(overlay.intensity ?? 0.06).toFixed(2)}`} min={0.01} max={0.3} step={0.01} value={overlay.intensity ?? 0.06} onChange={v => onUpdate({ intensity: v })} />
+      )}
+
+      {overlay.type === 'color_grade' && (
+        <div style={{ flex: '0 0 180px' }}>
+          <label style={labelStyle}>Grade preset</label>
+          <select value={overlay.grade || 'cool_blue'} onChange={e => onUpdate({ grade: e.target.value })} style={selectStyle}>
+            {GRADE_TYPES.map(g => <option key={g} value={g}>{g.replace(/_/g, ' ')}</option>)}
+          </select>
         </div>
       )}
 
-      {/* color_grade fields */}
-      {overlay.type === 'color_grade' && (
-        <div style={fieldRowStyle}>
-          <div style={{ flex: '0 0 180px' }}>
-            <label style={labelStyle}>Grade</label>
-            <select value={overlay.grade || 'cool_blue'} onChange={e => onUpdate({ grade: e.target.value })} style={selectStyle}>
-              {GRADE_TYPES.map(g => <option key={g} value={g}>{g.replace(/_/g, ' ')}</option>)}
+      {/* ── Color sub-section ── */}
+      <SubSection title="Color" open={colorOpen} onToggle={() => setColorOpen(o => !o)}>
+        {overlay.type === 'lower_third' && <>
+          <ColorInput label="Background" hex={c.background || '#000000'} onHex={v => updColor({ background: v })} opacity={c.backgroundOpacity ?? 0.65} onOpacity={v => updColor({ backgroundOpacity: v })} inputStyle={inputStyle} />
+          <ColorInput label="Accent (left border)" hex={c.accent || '#3b82f6'} onHex={v => updColor({ accent: v })} inputStyle={inputStyle} />
+          <ColorInput label="Primary text" hex={c.textPrimary || '#f0f0f0'} onHex={v => updColor({ textPrimary: v })} inputStyle={inputStyle} />
+          <ColorInput label="Secondary text" hex={c.textSecondary || '#a0aec0'} onHex={v => updColor({ textSecondary: v })} inputStyle={inputStyle} />
+        </>}
+        {overlay.type === 'date_stamp' && <>
+          <ColorInput label="Background" hex={c.background || '#000000'} onHex={v => updColor({ background: v })} opacity={c.backgroundOpacity ?? 0.55} onOpacity={v => updColor({ backgroundOpacity: v })} inputStyle={inputStyle} />
+          <ColorInput label="Text" hex={c.textColor || '#ffffff'} onHex={v => updColor({ textColor: v })} inputStyle={inputStyle} />
+        </>}
+        {overlay.type === 'kinetic_text' && <>
+          <ColorInput label="Text color" hex={c.textColor || '#ffffff'} onHex={v => updColor({ textColor: v })} inputStyle={inputStyle} />
+        </>}
+        {overlay.type === 'vignette' && (
+          <ColorInput label="Vignette color" hex={c.color || '#000000'} onHex={v => updColor({ color: v })} inputStyle={inputStyle} />
+        )}
+        {overlay.type === 'grain' && (
+          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)', fontStyle: 'italic' }}>Grain uses adaptive neutral color — no tint control.</div>
+        )}
+        {overlay.type === 'color_grade' && <>
+          <ColorInput label="Custom tint" hex={c.tintColor || '#143c8c'} onHex={v => updColor({ tintColor: v })} inputStyle={inputStyle} />
+          <SliderRow label="Tint strength" min={0.05} max={0.30} step={0.01} value={c.tintOpacity ?? 0.12} onChange={v => updColor({ tintOpacity: v })} />
+        </>}
+      </SubSection>
+
+      {/* ── Font sub-section (text overlays only) ── */}
+      {isTextType && (
+        <SubSection title="Font" open={fontOpen} onToggle={() => setFontOpen(o => !o)}>
+          <div>
+            <label style={labelStyle}>Family</label>
+            <select value={f.family || 'Inter'} onChange={e => updFont({ family: e.target.value })} style={selectStyle}>
+              {FONT_FAMILIES.map(ff => <option key={ff} value={ff}>{ff}</option>)}
             </select>
           </div>
-        </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {overlay.type === 'lower_third' ? <>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Size primary</label>
+                <input type="number" min={8} max={120} value={f.sizePrimary || 15} onChange={e => updFont({ sizePrimary: Number(e.target.value) })} style={{ ...inputStyle, textAlign: 'center' }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Size secondary</label>
+                <input type="number" min={8} max={120} value={f.sizeSecondary || 12} onChange={e => updFont({ sizeSecondary: Number(e.target.value) })} style={{ ...inputStyle, textAlign: 'center' }} />
+              </div>
+            </> : (
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Size</label>
+                <input type="number" min={8} max={120} value={f.size || (overlay.type === 'kinetic_text' ? 52 : 11)} onChange={e => updFont({ size: Number(e.target.value) })} style={{ ...inputStyle, textAlign: 'center' }} />
+              </div>
+            )}
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Weight</label>
+              <select value={f.weight || '500'} onChange={e => updFont({ weight: e.target.value })} style={selectStyle}>
+                {FONT_WEIGHTS.map(w => <option key={w.v} value={w.v}>{w.l}</option>)}
+              </select>
+            </div>
+          </div>
+          <SliderRow label="Letter spacing" min={-0.05} max={0.30} step={0.01} value={f.letterSpacing || 0} onChange={v => updFont({ letterSpacing: v })} unit="em" />
+          <div>
+            <label style={labelStyle}>Text transform</label>
+            <select value={f.transform || 'none'} onChange={e => updFont({ transform: e.target.value })} style={selectStyle}>
+              {TEXT_TRANSFORMS.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          {overlay.type === 'lower_third' && (
+            <SliderRow label="Line height" min={0.8} max={2.0} step={0.05} value={f.lineHeight || 1.2} onChange={v => updFont({ lineHeight: v })} />
+          )}
+        </SubSection>
       )}
+
+      {/* ── Animation sub-section ── */}
+      <SubSection title="Animation" open={animOpen} onToggle={() => setAnimOpen(o => !o)}>
+        {(overlay.type === 'lower_third' || overlay.type === 'date_stamp') && <>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Enter</label>
+              <select value={a.enter || 'slide_left'} onChange={e => updAnim({ enter: e.target.value })} style={selectStyle}>
+                {ENTER_ANIMS_LT.map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Exit</label>
+              <select value={a.exit || 'slide_left'} onChange={e => updAnim({ exit: e.target.value })} style={selectStyle}>
+                {ENTER_ANIMS_LT.map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
+              </select>
+            </div>
+          </div>
+          <SliderRow label="Duration (frames)" min={6} max={40} step={1} value={a.duration || 18} onChange={v => updAnim({ duration: v })} />
+          <div>
+            <label style={labelStyle}>Easing</label>
+            <select value={a.easing || 'spring'} onChange={e => updAnim({ easing: e.target.value })} style={selectStyle}>
+              {EASINGS.map(e => <option key={e} value={e}>{e.replace(/_/g,' ')}</option>)}
+            </select>
+          </div>
+        </>}
+        {overlay.type === 'kinetic_text' && <>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Enter</label>
+              <select value={a.enter || 'fade'} onChange={e => updAnim({ enter: e.target.value })} style={selectStyle}>
+                {ENTER_ANIMS_KT.map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Exit</label>
+              <select value={a.exit || 'fade'} onChange={e => updAnim({ exit: e.target.value })} style={selectStyle}>
+                {EXIT_ANIMS_KT.map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
+              </select>
+            </div>
+          </div>
+          <SliderRow label="Duration (frames)" min={10} max={60} step={1} value={a.duration || 20} onChange={v => updAnim({ duration: v })} />
+          <div>
+            <label style={labelStyle}>Easing</label>
+            <select value={a.easing || 'linear'} onChange={e => updAnim({ easing: e.target.value })} style={selectStyle}>
+              {EASINGS.map(e => <option key={e} value={e}>{e.replace(/_/g,' ')}</option>)}
+            </select>
+          </div>
+        </>}
+        {overlay.type === 'grain' && <>
+          <div>
+            <label style={labelStyle}>Pattern</label>
+            <select value={a.pattern || 'random'} onChange={e => updAnim({ pattern: e.target.value })} style={selectStyle}>
+              {GRAIN_PATTERNS.map(p => <option key={p} value={p}>{p.replace(/_/g,' ')}</option>)}
+            </select>
+          </div>
+        </>}
+        {overlay.type === 'color_grade' && (
+          <div>
+            <label style={labelStyle}>Transition</label>
+            <select value={a.transition || 'instant'} onChange={e => updAnim({ transition: e.target.value })} style={selectStyle}>
+              {GRADE_TRANSITIONS.map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
+            </select>
+          </div>
+        )}
+        {overlay.type === 'vignette' && (
+          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)', fontStyle: 'italic' }}>Vignette is always present — no enter/exit animation.</div>
+        )}
+      </SubSection>
 
     </div>
   )
@@ -802,11 +963,11 @@ function OverlayRow({ overlay, scene, onUpdate, onRemove, inputStyle, selectStyl
 
 // ─── ClipMatchSection ─────────────────────────────────────────────────────────
 
-function ClipMatchSection({ scene, clipMatch, onSelectClip, onConvertToImage }) {
-  const loading   = clipMatch?.loading ?? false
-  const matches   = clipMatch?.matches ?? []
-  const noMatches = clipMatch && !loading && matches.length === 0
-  const isSelected = !!scene.selected_clip
+function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConvertToImage, onManualMatch }) {
+  const loading    = clipMatch?.loading ?? false
+  const matches    = clipMatch?.matches ?? []
+  const noMatches  = clipMatch && !loading && matches.length === 0
+  const isSelected = !!selectedClip
 
   return (
     <div className="space-y-2">
@@ -831,8 +992,8 @@ function ClipMatchSection({ scene, clipMatch, onSelectClip, onConvertToImage }) 
         <div className="flex items-center justify-between rounded-lg bg-amber-500/[0.06] border border-amber-500/[0.15] px-3 py-2">
           <div className="flex items-center gap-2">
             <Film size={11} className="text-amber-400/60" />
-            <span className="text-[11px] text-amber-300/70 font-mono">{scene.selected_clip.clip_id}</span>
-            <span className="text-[11px] text-white/30">{scene.selected_clip.description}</span>
+            <span className="text-[11px] text-amber-300/70 font-mono">{selectedClip.clip_id}</span>
+            <span className="text-[11px] text-white/30">{selectedClip.description}</span>
           </div>
           <button onClick={() => onSelectClip(null)} className="text-[10px] text-white/20 hover:text-white/45 transition-colors">
             Change
@@ -871,15 +1032,31 @@ function ClipMatchSection({ scene, clipMatch, onSelectClip, onConvertToImage }) 
       {noMatches && !isSelected && (
         <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-3 space-y-2">
           <p className="text-[11px] text-white/30">No matching clips in library for these tags.</p>
-          <button onClick={onConvertToImage} className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded-lg text-blue-300 transition-colors">
-            <ImageIcon size={11} />
-            Convert to image
-          </button>
+          <div className="flex gap-2">
+            {onManualMatch && (
+              <button onClick={onManualMatch} className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded-lg text-amber-300 transition-colors">
+                <RefreshCw size={11} />
+                Rematch
+              </button>
+            )}
+            <button onClick={onConvertToImage} className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded-lg text-blue-300 transition-colors">
+              <ImageIcon size={11} />
+              Convert to image
+            </button>
+          </div>
         </div>
       )}
 
       {!clipMatch && !loading && (
-        <div className="text-[11px] text-white/20 italic">Clip matching will run automatically on analysis</div>
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] text-white/20 italic">No clip matches yet</span>
+          {onManualMatch && (
+            <button onClick={onManualMatch} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded text-amber-300 transition-colors">
+              <RefreshCw size={10} />
+              Find clips
+            </button>
+          )}
+        </div>
       )}
     </div>
   )
