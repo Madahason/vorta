@@ -29,6 +29,17 @@ function lsClearAll() {
   Object.values(LS).forEach(k => localStorage.removeItem(k))
 }
 
+// Strip import lines and convert `export default` → `return` so code is
+// compatible with the Function constructor evaluator in MotionGraphicScene.jsx.
+// Old JSX components will still fail at eval (expected) — rebuild resolves it.
+function cleanMotionComponent(code) {
+  if (!code) return null
+  return code
+    .replace(/^import\s+[^\n]+from\s+['"][^'"]+['"];?\s*/gm, '')
+    .replace(/^export default\s+/m, 'return ')
+    .trim()
+}
+
 function formatError(msg) {
   if (!msg) return 'Something went wrong. Try again.'
   const m = msg.toLowerCase()
@@ -90,7 +101,13 @@ function SkeletonCard() {
 
 export default function VideoCreator() {
   // ─── State — lazy-initialised from localStorage ─────────────────────────
-  const [scenes, setScenes] = useState(() => lsRead(LS.scenes) || [])
+  const [scenes, setScenes] = useState(() => {
+    const saved = lsRead(LS.scenes) || []
+    return saved.map(s => s.motion_component
+      ? { ...s, motion_component: cleanMotionComponent(s.motion_component) }
+      : s
+    )
+  })
   const [projectId, setProjectId] = useState(() => lsRead(LS.projectId) || null)
   const [sceneStatuses, setSceneStatuses] = useState(() => lsRead(LS.statuses) || {})
   const [sessionKey, setSessionKey] = useState(() => lsRead(LS.sessionKey) || null)
@@ -110,7 +127,8 @@ export default function VideoCreator() {
   })
 
   // Per-scene motion component build status — not persisted (transient)
-  const [motionStatuses, setMotionStatuses] = useState({})
+  const [motionStatuses, setMotionStatuses]   = useState({})
+  const [isRebuildingAll, setIsRebuildingAll] = useState(false)
 
   // Clip matches — { [scene_id]: { matches: [], loading: bool } }
   const [clipMatches, setClipMatches] = useState(() => {
@@ -314,6 +332,9 @@ export default function VideoCreator() {
       if (!res.ok) throw new Error(data.error || 'Analysis failed')
       setScenes(data.scenes)
       setHasAnalyzed(true)
+      console.log('[DEBUG] scenes set, count:', data.scenes.length)
+      const realFootageScenes = data.scenes.filter(s => s.shot_type === 'real_footage')
+      console.log('[DEBUG] real_footage scenes:', realFootageScenes.length, realFootageScenes.map(s => s.scene_id))
       matchClipsForScenes(data.scenes)
 
       // Register in project list for project management
@@ -382,12 +403,14 @@ export default function VideoCreator() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Component generation failed')
 
+      const cleaned = cleanMotionComponent(data.component_code)
+
       setScenes(prev => prev.map(s =>
-        s.scene_id === scene.scene_id ? { ...s, motion_component: data.component_code } : s
+        s.scene_id === scene.scene_id ? { ...s, motion_component: cleaned } : s
       ))
 
       const existing = lsRead(LS.motionComps) || {}
-      lsWrite(LS.motionComps, { ...existing, [scene.scene_id]: data.component_code })
+      lsWrite(LS.motionComps, { ...existing, [scene.scene_id]: cleaned })
 
       setMotionStatuses(prev => ({ ...prev, [scene.scene_id]: { status: 'done', error: null } }))
     } catch (err) {
@@ -395,10 +418,31 @@ export default function VideoCreator() {
     }
   }
 
+  // ─── Rebuild all motion components (sequential, new format) ─────────────
+  const handleRebuildAllComponents = async () => {
+    const motionScenes = scenes.filter(s => s.shot_type === 'motion_graphic')
+    if (!motionScenes.length) return
+
+    setIsRebuildingAll(true)
+    // Clear all stored components so the player shows "building…" placeholders
+    setScenes(prev => prev.map(s =>
+      s.shot_type === 'motion_graphic' ? { ...s, motion_component: null } : s
+    ))
+
+    for (const scene of motionScenes) {
+      await handleBuildComponent(scene)
+    }
+
+    setIsRebuildingAll(false)
+  }
+
   // ─── Clip matching ────────────────────────────────────────────────────────
   const matchClipsForScenes = async (allScenes) => {
     const realScenes = allScenes.filter(s => s.shot_type === 'real_footage')
     if (!realScenes.length) return
+
+    console.log('[DEBUG] matchClipsForScenes: firing for', realScenes.length, 'scenes:',
+      realScenes.map(s => `${s.scene_id}:${JSON.stringify(s.clip_search_tags)}`))
 
     setClipMatches(prev => {
       const next = { ...prev }
@@ -414,6 +458,10 @@ export default function VideoCreator() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Match failed')
+
+      console.log('[DEBUG] match results:', Object.entries(data.results).map(
+        ([sid, m]) => `${sid}: ${m.length} matches`
+      ))
 
       setClipMatches(prev => {
         const next = { ...prev }
@@ -519,6 +567,17 @@ export default function VideoCreator() {
               >
                 <Library size={11} />
                 Clip Library
+              </button>
+            )}
+            {hasAnalyzed && scenes.some(s => s.shot_type === 'motion_graphic') && (
+              <button
+                onClick={handleRebuildAllComponents}
+                disabled={isRebuildingAll}
+                className="flex items-center gap-1.5 text-xs text-white/30 hover:text-white/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                title="Regenerate all motion graphic components in the new React.createElement format"
+              >
+                {isRebuildingAll ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
+                {isRebuildingAll ? 'Rebuilding…' : 'Rebuild Components'}
               </button>
             )}
             {showPlayer && (

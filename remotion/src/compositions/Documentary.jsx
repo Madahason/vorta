@@ -1,12 +1,8 @@
 import { AbsoluteFill, Series, Audio, interpolate, useVideoConfig, useCurrentFrame } from 'remotion'
-import ImageScene      from '../components/ImageScene'
-import FootageScene    from '../components/FootageScene'
-import PlaceholderScene from '../components/PlaceholderScene'
-import AnimatedCounter from '../components/AnimatedCounter'
-import TimelineBar     from '../components/TimelineBar'
-import ComparisonChart from '../components/ComparisonChart'
-import QuoteCard       from '../components/QuoteCard'
-import MapHighlight    from '../components/MapHighlight'
+import ImageScene          from '../components/ImageScene'
+import FootageScene        from '../components/FootageScene'
+import PlaceholderScene    from '../components/PlaceholderScene'
+import { MotionGraphicScene } from '../components/MotionGraphicScene'
 
 const FPS = 30
 
@@ -30,26 +26,6 @@ export function computeLayout(scenes) {
     cursor += (scene.duration_seconds || 5) * FPS
   })
   return { startFrames, totalFrames: cursor }
-}
-
-// ── MotionGraphicScene ────────────────────────────────────────────────────────
-function MotionGraphicScene({ scene }) {
-  const type  = scene.motion_graphic_type
-  const props = scene.motion_graphic_props || {}
-
-  if (type === 'AnimatedCounter') return <AnimatedCounter {...props} />
-  if (type === 'TimelineBar')     return <TimelineBar     {...props} />
-  if (type === 'ComparisonChart') return <ComparisonChart {...props} />
-  if (type === 'QuoteCard')       return <QuoteCard       {...props} />
-  if (type === 'MapHighlight')    return <MapHighlight    {...props} />
-
-  return (
-    <AbsoluteFill style={{ background: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 18, fontFamily: 'sans-serif' }}>
-        Motion graphic: {type || 'unknown type'}
-      </div>
-    </AbsoluteFill>
-  )
 }
 
 // ── SceneRenderer — per-scene dispatch ───────────────────────────────────────

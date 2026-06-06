@@ -1,14 +1,41 @@
 const router = require('express').Router();
 const Anthropic = require('@anthropic-ai/sdk');
 
-const SYSTEM_PROMPT = `You are a Remotion component generator. Generate a single self-contained React/Remotion JSX component for a documentary video scene. The component must:
-- Use useCurrentFrame, useVideoConfig, interpolate, spring from 'remotion'
-- Match the scene mood and content from the script excerpt
-- Be one of these types based on the content: AnimatedCounter (for numbers/stats), TimelineBar (for events/history), ComparisonChart (for comparisons), QuoteCard (for key statements), MapHighlight (for geography), or TitleCard (for transitions)
-- Use the dark cinematic colour palette: background #0a0a0a, text #f0f0f0, accent #3b82f6
-- Be 150-300 frames at 30fps
-- Export as default function SceneComponent()
-Return ONLY the JSX code, no explanation, no markdown fences.`;
+// CRITICAL: This prompt must produce React.createElement code — NO JSX, NO imports.
+// The generated code is evaluated at runtime inside a Function constructor which
+// cannot parse JSX syntax. All Remotion/React primitives are injected as variables.
+const SYSTEM_PROMPT = `You are a Remotion component generator for a documentary video app.
+
+Generate a single self-contained React component for a video scene.
+
+CRITICAL FORMAT RULES — READ CAREFULLY:
+1. Do NOT include any import statements. All dependencies are pre-injected as variables.
+2. Do NOT use JSX angle-bracket syntax. Use React.createElement() for ALL rendering.
+   BAD:  <AbsoluteFill style={{background:'#0a0a0a'}}><div>Hello</div></AbsoluteFill>
+   GOOD: React.createElement(AbsoluteFill, {style:{background:'#0a0a0a'}}, React.createElement('div', null, 'Hello'))
+3. Available variables (already in scope — do NOT import them):
+   - React, useState, useEffect, useRef, useMemo
+   - useCurrentFrame, useVideoConfig, interpolate, spring, AbsoluteFill
+4. Define your component as: const SceneComponent = () => { ... }
+5. The LAST line of your code MUST be: return SceneComponent;
+   Do NOT use: export default SceneComponent
+
+COMPONENT REQUIREMENTS:
+- Use useCurrentFrame() and interpolate() for animation
+- Use the dark cinematic palette: background #0a0a0a, text #f0f0f0, accent #3b82f6
+- Match the mood and content of the script excerpt
+- Animate smoothly over 150–300 frames at 30fps
+- Create visually compelling motion graphics (counters, quotes, timelines, charts, etc.)
+
+Return ONLY the JavaScript code. No markdown fences, no explanation.`;
+
+// Strip any import lines or export default that Claude adds despite instructions
+function postProcess(code) {
+  return code
+    .replace(/^import\s+[^\n]+from\s+['"][^'"]+['"];?\s*/gm, '')
+    .replace(/^export default\s+/m, 'return ')
+    .trim()
+}
 
 router.post('/', async (req, res) => {
   const { scene_id, script_excerpt, mood, shot_type } = req.body;
@@ -26,7 +53,12 @@ router.post('/', async (req, res) => {
       system: SYSTEM_PROMPT,
       messages: [{
         role: 'user',
-        content: `Scene ID: ${scene_id}\nScript excerpt: ${script_excerpt}\nMood: ${mood || 'neutral'}\nShot type: ${shot_type || 'motion_graphic'}\n\nGenerate the Remotion component for this scene.`,
+        content: `Scene ID: ${scene_id}
+Script excerpt: ${script_excerpt}
+Mood: ${mood || 'neutral'}
+Shot type: ${shot_type || 'motion_graphic'}
+
+Generate the Remotion component for this scene. Remember: React.createElement only, no JSX, no imports, end with "return SceneComponent;"`,
       }],
     });
 
@@ -37,6 +69,9 @@ router.post('/', async (req, res) => {
       .replace(/^```(?:jsx?|javascript|tsx?)?\n?/im, '')
       .replace(/\n?```\s*$/im, '')
       .trim();
+
+    // Strip any imports or export default Claude accidentally included
+    component_code = postProcess(component_code);
 
     console.log(`[motion] scene ${scene_id} component generated (${component_code.length} chars)`);
     res.json({ scene_id, component_code });

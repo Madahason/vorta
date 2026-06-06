@@ -48,6 +48,44 @@
         "tim cook courthouse"
       ],
       "timestamp": "2026-06-05T19:11:30.004Z"
+    },
+    {
+      "scene_id": "009",
+      "tags": [
+        "epic games apple lawsuit",
+        "app store antitrust hearing",
+        "tim sweeney 2021",
+        "fortnite apple trial"
+      ],
+      "timestamp": "2026-06-05T21:14:30.292Z"
+    },
+    {
+      "scene_id": "010",
+      "tags": [
+        "european commission apple ruling",
+        "EU digital markets act",
+        "apple antitrust europe",
+        "brussels competition law"
+      ],
+      "timestamp": "2026-06-05T21:14:30.295Z"
+    },
+    {
+      "scene_id": "001",
+      "tags": [
+        "steve jobs app store launch 2008",
+        "wwdc 2008 keynote",
+        "moscone center apple keynote"
+      ],
+      "timestamp": "2026-06-06T04:52:56.979Z"
+    },
+    {
+      "scene_id": "003",
+      "tags": [
+        "steve jobs wwdc 2008 developers",
+        "app store announcement keynote",
+        "steve jobs seventy percent"
+      ],
+      "timestamp": "2026-06-06T04:52:56.988Z"
     }
   ]
 }

@@ -8,19 +8,31 @@ const LICENSE_BONUS = {
   unknown:          0,
 }
 
-// Returns up to `limit` clips sorted by tag overlap + mood + license score
+// Returns up to `limit` clips sorted by tag overlap + mood + license score.
+// Uses partial/substring matching so:
+//   clip tag "product launch" matches search tag "launch" or "product"
+//   search tag "apple inc"    matches clip tag "apple"
 function matchClips(searchTags, mood = null, limit = 3) {
   if (!searchTags?.length) return []
 
-  const clips  = clipStore.loadClips()
-  const tagSet = new Set(searchTags.map(t => t.toLowerCase().trim()))
+  const clips     = clipStore.loadClips()
+  const searchSet = searchTags
+    .map(t => t.toLowerCase().trim())
+    .filter(t => t.length >= 2) // ignore single-char tags
 
   const scored = clips
     .map(clip => {
-      const clipTags    = (clip.tags || []).map(t => t.toLowerCase())
-      const overlap     = clipTags.filter(t => tagSet.has(t)).length
-      const moodBonus   = (mood && clip.mood === mood) ? 0.5 : 0
-      const licBonus    = LICENSE_BONUS[clip.license] ?? 0
+      const clipTags = (clip.tags || []).map(t => t.toLowerCase().trim())
+
+      // Count clip tags that partially match any search tag (or vice versa)
+      const overlap = clipTags.filter(clipTag =>
+        searchSet.some(searchTag =>
+          clipTag.includes(searchTag) || searchTag.includes(clipTag)
+        )
+      ).length
+
+      const moodBonus = (mood && clip.mood === mood) ? 0.5 : 0
+      const licBonus  = LICENSE_BONUS[clip.license] ?? 0
       return { clip, score: overlap + moodBonus + licBonus }
     })
     .filter(c => c.score > 0)
