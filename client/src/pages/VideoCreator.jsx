@@ -4,6 +4,7 @@ import ScriptInput from '../components/video-creator/ScriptInput'
 import SceneGrid from '../components/video-creator/SceneGrid'
 import { VideoPlayer } from '../components/video-creator/VideoPlayer'
 import ClipLibrary from '../components/video-creator/ClipLibrary'
+import VoiceoverPanel from '../components/video-creator/VoiceoverPanel'
 import ExportPanel from '../components/video-creator/ExportPanel'
 
 const SERVER_URL = 'http://localhost:3001'
@@ -139,6 +140,10 @@ export default function VideoCreator() {
     })
     return clean
   })
+
+  // Voiceover — selected voice (persisted to localStorage separately, not in LS map)
+  const [selectedVoiceId,   setSelectedVoiceId]   = useState(() => localStorage.getItem('vorta_selected_voice') || null)
+  const [voiceoverStatuses, setVoiceoverStatuses] = useState({})
 
   // Selected clips — { [scene_id]: clip_object }
   const [selectedClips, setSelectedClips] = useState(() => {
@@ -521,6 +526,48 @@ export default function VideoCreator() {
     setSelectedClips(prev => { const n = { ...prev }; delete n[scene_id]; return n })
   }
 
+  // ─── Voiceover — regenerate single scene ─────────────────────────────────
+  const handleRegenerateVoiceover = async (scene) => {
+    if (!selectedVoiceId || !projectId) return
+    setVoiceoverStatuses(prev => ({ ...prev, [scene.scene_id]: { status: 'generating', duration: null } }))
+    try {
+      const res = await fetch(`${SERVER_URL}/api/voiceover/generate`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          projectId, scenes: [scene], voiceId: selectedVoiceId, mode: 'scene', sceneId: scene.scene_id,
+        }),
+      })
+      if (!res.body) throw new Error('No response stream')
+      const reader = res.body.getReader(), decoder = new TextDecoder()
+      let buf = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop()
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const ev = JSON.parse(line.slice(6))
+            if (ev.type === 'scene_done') {
+              setVoiceoverStatuses(prev => ({ ...prev, [ev.scene_id]: { status: 'done', duration: ev.duration } }))
+              setScenes(prev => prev.map(s => s.scene_id !== ev.scene_id ? s : {
+                ...s, audio_path: ev.audio_path, audio_duration: ev.duration,
+                duration_seconds: ev.duration ? Math.ceil(ev.duration + 0.5) : s.duration_seconds,
+              }))
+            } else if (ev.type === 'scene_error') {
+              setVoiceoverStatuses(prev => ({ ...prev, [ev.scene_id]: { status: 'error', duration: null } }))
+            }
+          } catch { /* skip malformed */ }
+        }
+      }
+    } catch {
+      setVoiceoverStatuses(prev => ({ ...prev, [scene.scene_id]: { status: 'error', duration: null } }))
+    }
+  }
+
   // ─── Manual match for a single scene ─────────────────────────────────────
   const handleManualMatch = async (scene) => {
     setClipMatches(prev => ({ ...prev, [scene.scene_id]: { matches: [], loading: true } }))
@@ -715,6 +762,17 @@ export default function VideoCreator() {
               onManualMatch={handleManualMatch}
               onOpenLibrary={() => setShowClipLibrary(true)}
               onPreviewScene={setPreviewScene}
+              voiceoverStatuses={voiceoverStatuses}
+              onRegenerateVoiceover={handleRegenerateVoiceover}
+            />
+
+            <VoiceoverPanel
+              scenes={scenes}
+              projectId={projectId}
+              selectedVoiceId={selectedVoiceId}
+              onSelectedVoiceChange={setSelectedVoiceId}
+              onScenesChange={setScenes}
+              onVoiceoverStatusChange={setVoiceoverStatuses}
             />
 
             <div id="vorta-export-panel">
@@ -722,6 +780,7 @@ export default function VideoCreator() {
                 scenes={scenes}
                 sceneStatuses={sceneStatuses}
                 selectedClips={selectedClips}
+                voiceoverStatuses={voiceoverStatuses}
                 projectId={projectId}
               />
             </div>

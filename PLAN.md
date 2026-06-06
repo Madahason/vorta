@@ -983,6 +983,235 @@ Before marking any phase complete, run through its testing checklist (defined pe
 
 ---
 
+---
+
+### Fix 7 — Automated clip download with ffmpeg trim ✅ Complete
+
+**Policy:** All downloaded clips are capped at 8 seconds on both the server and UI. The 8-second limit applies to every source — CC, Fair Use, Archive, C-SPAN.
+
+**Dependency checks (`server/index.js`):**
+- `checkDeps()` runs at server startup via `execSync('yt-dlp --version')` and `execSync('ffmpeg -version')`
+- Result stored as `DEPS = { ytdlp: bool, ffmpeg: bool }`
+- Exposed via `GET /api/health` (includes `deps`) and `GET /api/deps` (direct)
+- If ffmpeg not found, a red warning banner appears in all source tabs in the UI
+
+**Central downloader (`server/services/clipDownloader.js` — NEW):**
+- `downloadClip({ url, startSec, endSec, source, tags, mood, category, license, title, warning })` — handles all sources
+- For YouTube / C-SPAN: yt-dlp `--download-sections "*start-end" --force-keyframes-at-cuts` to `_temp.mp4`, then ffmpeg trim to exact duration
+- For Internet Archive: resolves direct download URL from `archive.org/metadata/{id}`, yt-dlp full download to `_temp.mp4`, then ffmpeg trim
+- ffmpeg command: `-t {duration} -c:v libx264 -c:a aac -movflags +faststart` — re-encodes for playback compatibility
+- Temp file always cleaned up (success or failure)
+- `MAX_SECONDS = 8` exported constant used across routes
+
+**Unified SSE download endpoint (`POST /api/library/download`):**
+- Replaces per-source download POSTs for the UI download flow (per-source endpoints remain for backward compat with seeder)
+- Streams SSE events: `start` → `generating_description` → `saving` → `done | error`
+- Server auto-caps `endSec` to `startSec + MAX_SECONDS` regardless of what client sends
+- License derived from source: `youtube_cc` → `creative_commons`, `internet_archive/cspan` → `public_domain`, others → `fair_use`
+
+**SearchResult UI (ClipLibrary.jsx):**
+- All source tabs now use `POST /api/library/download` (unified endpoint)
+- `maxSec` prop removed — replaced by `MAX_CLIP_SEC = 8` constant inside `SearchResult`
+- Start/end time inputs auto-clamp: `handleStartChange` sets start + resets end to start+8, `handleEndChange` clamps to start+8 max
+- SSE streaming via `fetch` + `res.body.getReader()` + `TextDecoder`
+- Live status messages: "Downloading…" → "Generating description…" → "Saving to library…"
+- Duration counter shown in real time (e.g. "5.0s" in green, over-limit in amber)
+- Archive tab shows "First 8s will be downloaded and trimmed automatically" (no time selector needed)
+- Button label: "Download 8s clip"
+
+**Auto-seed on analysis (`server/routes/analyze.js`):**
+- After `res.json({ scenes })`, fires `startSeed({ title, niche, projectId, maxClips: 10 })` in background
+- Only runs when `metadata.title` and `metadata.projectId` are both present
+- Fire-and-forget: analysis response is not delayed
+
+**Dependencies:**
+- ffmpeg: `winget install ffmpeg` (Windows) — required for exact trim
+- yt-dlp: `pip install yt-dlp` — required for all downloads
+
+---
+
+### Fix 8 — Search + download improvements ✅ Complete
+
+Six improvements to the Clip Library search and download pipeline.
+
+**Change 1 — Smarter search queries (`server/services/sources/searchUtils.js` — NEW):**
+- `buildFootageQuery(subject, context)` enhances raw queries before sending to yt-dlp or archive APIs
+- Context map: `person` → `"${subject}" interview OR speech OR conference OR keynote OR testimony OR documentary OR announcement OR hearing`; `company` → adds "CEO OR earnings OR announcement"; `event` → "footage OR documentary OR news"
+- Applied at the route level in `library.js` — source modules stay clean
+- All 4 search endpoints accept `context` param (`'person'`, `'company'`, `'event'`, or `null` for default)
+- Frontend SourceTab shows a context dropdown (Any / Person / Company / Event) next to the search bar
+
+**Change 2 — Claude scoring of search results (`server/services/resultScorer.js` — NEW):**
+- `scoreResults(results, subject, sceneContext)` — sends all results to Claude Haiku for relevance scoring
+- Scores 1-10 per result; 9-10 = real speech/interview/testimony, 1-2 = compilation/clickbait
+- Results sorted by score descending; top 5 returned to client
+- Fails silently (all scores default to 5) if Anthropic API call fails
+- Applied to all 5 search endpoints (youtube-cc, youtube-fair-use, archive, cspan, ted)
+
+**Change 3 — Default start time of 25 seconds:**
+- `clipDownloader.js` now defaults `startSec = 25` when `startSec` is 0 or not provided (`DEFAULT_START_OFFSET = 25`)
+- Rationale: skip title cards and intros that dominate the first 20-30s of most YouTube/archive videos
+- UI: `SearchResult` defaults to `startSec=25`, `endSec=33`
+
+**Change 4 — Video scrubber UI (`ClipScrubber.jsx` — NEW):**
+- `<ClipScrubber videoUrl onSegmentSelected maxDuration>` — visual video player with "Set start here" button
+- Segment highlight bar shown below the video player once a segment is selected
+- "Set start here" button captures current playback position as start time; end auto-set to start+8s
+- Manual MM:SS time inputs shown alongside as fallback (and only option if video can't load)
+- Video fails to load (CORS/format issues) → graceful error overlay, user falls back to manual inputs
+- Integrated in `SearchResult` for Archive and C-SPAN sources (which serve URLs playable by the video tag)
+- YouTube/TED sources: thumbnail with play overlay + "Open in YouTube" link + manual time inputs instead (YouTube blocks embedding)
+- Default start position: video jumps to 25s on load
+
+**Change 5 — TED Talks source:**
+- `server/services/sources/ted.js` (NEW) — `searchTED(query, maxResults)` using yt-dlp flat-playlist on `@TED/search`
+- Results tagged as `source: 'ted'`, `license: 'creative_commons'` (BY-NC-ND)
+- `POST /api/library/search/ted` endpoint added to `library.js`
+- TED tab added to Clip Library panel (6th tab) with red TED badge styling
+- Note shown: "TED talks — high quality real speeches, CC licensed."
+- Download flows through unified `POST /api/library/download` endpoint with `source: 'ted'` → `license: 'creative_commons'`
+
+**Change 6 — Source quality prioritisation:**
+- `SOURCE_PRIORITY = ['internet_archive', 'cspan', 'ted', 'youtube_cc', 'youtube_fair_use']` — defined in both `clipSeeder.js` and `ClipLibrary.jsx`
+- `clipSeeder.js`: searches all 5 sources in parallel; applies `scoreResults()` to combined pool; sorts by priority bucket then relevance score within bucket
+- `clipSeeder.js`: download calls now use `startSec: 25, endSec: 33` explicitly
+- TED downloads in seeder use `youtubeCC.download()` with `clip.source` overridden to `'ted'` after save
+- UI `SourcePriorityBadge` component on each result card:
+  - 🟢 Archive / C-SPAN → "Public domain"
+  - 🟢 TED → "TED CC"
+  - 🟡 YouTube CC → "Creative Commons"
+  - 🟠 YouTube Fair Use → "Fair use risk"
+- Relevance score shown on cards scoring ≥7 (e.g. "★ 9/10")
+- Source normalization in download body: route slugs (`youtube-cc`, `archive`) mapped to internal IDs (`youtube_cc`, `internet_archive`) before being passed to `downloadClip` — fixes pre-existing license/prefix mismatch
+
+### Fix 6 — Clip preview + upload flow ✅ Complete
+
+**Problem:** Clips in My Library had no way to preview before use, and adding clips required manually copying files to `library/clips/` and typing a file path.
+
+**Static file serving:**
+- `server/index.js` already serves `app.use('/library', express.static(...))` at `/library`
+- Vite proxy extended: `'/library': 'http://localhost:3001'` in `client/vite.config.js`
+- Clips are accessible at `http://localhost:5173/library/clips/filename.mp4` through the proxy
+
+**ClipPreviewModal (`client/src/components/video-creator/ClipPreviewModal.jsx`):**
+- Full-screen dark overlay (rgba(0,0,0,0.92)), click outside closes
+- Centred video player, max-width 800px, with native controls + autoPlay
+- Metadata below: title, duration, category, license pill, tags, description, warning
+- Escape key closes the modal
+- Video src: `/library/clips/{filename}` — served through Vite proxy
+
+**Hover preview on ClipCard:**
+- 800ms hover delay before a 240px floating video tooltip appears above the card
+- Video autoplays muted, looped — pauses/hides on mouse leave
+- Only fires when `fileExists === true`
+
+**Play button on ClipCard:**
+- Purple circular play button on every card
+- Enabled only when `fileExists === true` (greyed + disabled when no file)
+- Opens `ClipPreviewModal` with the clip data
+
+**Upload form (LibraryTab):**
+- "Upload" button (green) alongside existing "Add" button
+- File picker: accepts mp4, mov, webm — max 500 MB enforced by multer server-side
+- Fields: title (auto-populated from filename), tags, mood, category, license selector, source URL
+- `XMLHttpRequest` with `upload.onprogress` for real progress bar (0→100%)
+- On complete: clip appears immediately in library
+
+**Upload endpoint (`POST /api/library/upload`):**
+- `multer` with `diskStorage` to `library/clips/` — filename: `manual_{uuid}.{ext}`
+- `fileFilter` rejects non-video MIME types
+- `getVideoDuration()` — runs `ffprobe -v quiet -show_entries format=duration` after upload; falls back to `0` if ffprobe not installed
+- Calls `clipStore.addClip()` with the real duration
+- Sets `warning` automatically for `fair_use` license
+
+**multer:** installed in `server/` (`npm install multer`)
+
+**Testing checklist:**
+- [x] `/library/clips/filename.mp4` accessible through Vite proxy
+- [x] Play button visible on each clip card (disabled when no file)
+- [x] Click play → modal opens with full controls
+- [x] Escape closes modal; clicking outside closes modal
+- [x] 800ms hover → floating video preview appears, disappears on mouse leave
+- [x] Upload form opens with Upload button
+- [x] File picker auto-populates title from filename
+- [x] Upload progress bar tracks real upload progress
+- [x] Clip appears in library immediately after upload
+- [x] Duration auto-detected via ffprobe when available
+
+---
+
+---
+
+### Fix 9 — ElevenLabs AI voiceover ✅ Complete
+
+**Problem:** Videos require manual narration recording. ElevenLabs integration auto-generates per-scene voiceover synced to Remotion timing.
+
+**Architecture:**
+```
+VoiceoverPanel → POST /api/voiceover/generate (SSE)
+→ server/services/elevenlabs.js → ElevenLabsClient.textToSpeech.convert()
+→ projects/{projectId}/audio/scene_{id}.mp3
+→ scene.audio_path + scene.audio_duration updated
+→ duration_seconds auto-synced (audio_duration + 0.5)
+→ Documentary.jsx <Audio src={scene.audio_path} /> per Series.Sequence
+```
+
+**Files added/changed:**
+- `server/services/elevenlabs.js` — `getVoices()`, `generateAudio()`, `getAudioDuration()` (ffprobe)
+- `server/routes/voiceover.js` — `/status`, `/voices`, `/generate` (SSE), `/preview`
+- `server/index.js` — `app.use('/api/voiceover', require('./routes/voiceover'))`
+- `client/src/components/video-creator/VoiceoverPanel.jsx` — collapsible panel: voice selector (searchable, grouped by category, preview button), model selector (3 models), voice settings sliders (stability, similarityBoost, style), Generate all SSE progress, per-scene status, Sync timings button
+- `client/src/pages/VideoCreator.jsx` — `selectedVoiceId` state, `voiceoverStatuses` state, `handleRegenerateVoiceover()` (SSE), `<VoiceoverPanel>` rendered between SceneGrid and ExportPanel
+- `client/src/components/video-creator/SceneGrid.jsx` — speaker icon (Mic) on each scene card; green/blue/red color based on voiceover status; duration badge
+- `client/src/components/video-creator/ExportPanel.jsx` — `voiceoverStatuses` prop, voiceover checklist row ("X / Y scenes"), checklist grid responsive auto-fill
+- `remotion/src/compositions/Documentary.jsx` — `<Audio src={scene.audio_path} volume={1.0} />` inside each `Series.Sequence` (before SceneRenderer)
+- `client/src/pages/Settings.jsx` — ElevenLabs API key status section with test button calling `GET /api/voiceover/status`, shows plan + character credits
+
+**Environment:**
+- `ELEVENLABS_API_KEY` in `.env` — restart server after adding
+- SDK: `@elevenlabs/elevenlabs-js` installed in `server/`
+
+**Voice persistence:**
+- Selected voice ID stored in `localStorage` key `vorta_selected_voice`
+- Persists across browser sessions
+
+**Audio routing:**
+- Audio saved to `projects/{projectId}/audio/scene_{id}.mp3`
+- Served via existing `/projects` static route in Express
+- Vite proxy `/projects → http://localhost:3001` already covers this path — `audio_path` URLs like `/projects/{id}/audio/scene_{id}.mp3` work in the in-browser Remotion Player without any additional config
+- At render time, Remotion headless Chrome fetches audio from the Express static route (same pattern as images)
+
+**Models available:**
+- `eleven_multilingual_v2` — default, highest quality
+- `eleven_flash_v2_5` — fast/cheap, good for drafts
+- `eleven_v3` — experimental, most expressive
+
+**Sync timings:**
+- "Sync timings" button in VoiceoverPanel sets `duration_seconds = Math.ceil(audio_duration + 0.5)` for all scenes that have audio
+- Remotion player immediately reflects new timing
+- Scene cards with audio show duration badge (e.g. "12.3s")
+
+**Per-scene regeneration:**
+- Speaker icon on each scene card; click triggers `POST /api/voiceover/generate` with `mode: 'scene'`
+- Icon color: white (no audio) → blue spinning (generating) → green (done) → red (error)
+- Duration badge shown in green next to speaker icon after successful generation
+
+**Testing checklist:**
+- [ ] `ELEVENLABS_API_KEY` in `.env` — Settings page test button returns connected + credits
+- [ ] VoiceoverPanel opens and loads voice list from `GET /api/voiceover/voices`
+- [ ] Voice preview plays a short sample
+- [ ] "Generate all" SSE streams per-scene progress
+- [ ] Audio files appear at `projects/{id}/audio/scene_{id}.mp3`
+- [ ] `scene.audio_path` and `scene.audio_duration` update in state
+- [ ] Sync timings updates `duration_seconds` across all scenes
+- [ ] Remotion player plays per-scene audio when scrubbing
+- [ ] Speaker icon on scene cards shows correct status color
+- [ ] Per-scene regeneration replaces old audio file
+- [ ] ExportPanel checklist shows voiceover ready count
+- [ ] Rendered MP4 contains per-scene narration audio
+
+---
+
 ### Build order recommendation
 1. **Fix 1 first** — it's a bug fix, takes 1–2 hours maximum.
 2. **Fix 2 second** — audio is the single biggest missing feature for client work.

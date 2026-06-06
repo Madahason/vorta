@@ -16,7 +16,7 @@ function formatFileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export default function ExportPanel({ scenes, sceneStatuses, selectedClips, projectId }) {
+export default function ExportPanel({ scenes, sceneStatuses, selectedClips, projectId, voiceoverStatuses = {} }) {
   const [renderState, setRenderState] = useState('idle') // idle | rendering | done | error
   const [progress, setProgress]       = useState({ percent: 0, frame: 0, totalFrames: 0 })
   const [elapsed, setElapsed]         = useState(0)
@@ -53,6 +53,8 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
   const totalDurationSec  = scenes.reduce((sum, s) => sum + (s.duration_seconds || 5), 0)
   const totalFrames       = totalDurationSec * 30
   const estRenderMinutes  = Math.max(1, Math.ceil(totalFrames / 30 / 10))
+
+  const voiceoverReady = scenes.filter(s => voiceoverStatuses[s.scene_id]?.status === 'done').length
 
   const readyCount   = imageReady + motionScenes.length + footageMatched
   const readyPercent = scenes.length > 0 ? (readyCount / scenes.length) * 100 : 0
@@ -266,6 +268,11 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
       status: footageScenes.length === 0 ? 'neutral' : footageUnmatched > 0 ? 'warn' : 'ok',
     },
     {
+      label:  'Voiceover',
+      value:  voiceoverReady === 0 ? 'none' : `${voiceoverReady} / ${scenes.length} scenes`,
+      status: voiceoverReady === 0 ? 'neutral' : voiceoverReady === scenes.length ? 'ok' : 'warn',
+    },
+    {
       label:  'Estimated duration',
       value:  `${Math.floor(totalDurationSec / 60)}m ${totalDurationSec % 60}s`,
       status: 'neutral',
@@ -302,7 +309,7 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
         <>
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
             gap: '8px 24px',
             marginBottom: 24,
           }}>

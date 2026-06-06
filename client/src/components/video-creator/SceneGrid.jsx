@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import {
   Loader2, RefreshCw, CheckCircle, XCircle,
   ChevronDown, ChevronUp, Copy, Code2, Eye, ImageIcon, Film,
-  Layers, X, AlignLeft, Calendar, Zap, Circle, Sparkles, Palette, Plus,
+  Layers, X, AlignLeft, Calendar, Zap, Circle, Sparkles, Palette, Plus, Mic,
 } from 'lucide-react'
 import { buildPreviewHTML } from '../../utils/buildPreviewHTML'
 
@@ -65,6 +65,8 @@ export default function SceneGrid({
   onManualMatch,
   onOpenLibrary,
   onPreviewScene,
+  voiceoverStatuses = {},
+  onRegenerateVoiceover,
 }) {
 
   const updateScene = (index, patch) =>
@@ -111,6 +113,8 @@ export default function SceneGrid({
               onManualMatch={() => onManualMatch?.(scene)}
               onOpenLibrary={onOpenLibrary}
               onPreview={() => onPreviewScene?.(scene)}
+              voiceoverStatus={voiceoverStatuses[scene.scene_id] || null}
+              onRegenerateVoiceover={onRegenerateVoiceover ? () => onRegenerateVoiceover(scene) : null}
             />
           )
         })}
@@ -126,6 +130,7 @@ function SceneCard({
   scene, index, onChange, genStatus, onRetry,
   motionStatus, onBuildComponent,
   clipMatch, selectedClip, onSelectClip, onConvertToImage, onManualMatch, onOpenLibrary, onPreview,
+  voiceoverStatus, onRegenerateVoiceover,
 }) {
   const [editingPrompt,    setEditingPrompt]    = useState(false)
   const [promptDraft,      setPromptDraft]      = useState(scene.higgsfield_prompt)
@@ -175,6 +180,38 @@ function SceneCard({
             {isGenerating && <Loader2 size={12} className="animate-spin text-blue-400" />}
             {isDone       && <CheckCircle size={13} className="text-green-400" />}
             {isFailed     && <XCircle size={13} className="text-red-400" />}
+
+            {/* Voiceover status + regenerate button */}
+            {onRegenerateVoiceover && (
+              <button
+                onClick={onRegenerateVoiceover}
+                disabled={voiceoverStatus?.status === 'generating'}
+                className="p-1 transition-colors"
+                style={{
+                  color: voiceoverStatus?.status === 'done'      ? 'rgba(74,222,128,0.65)'
+                       : voiceoverStatus?.status === 'generating' ? 'rgba(59,130,246,0.65)'
+                       : voiceoverStatus?.status === 'error'      ? 'rgba(239,68,68,0.65)'
+                       : 'rgba(255,255,255,0.20)',
+                }}
+                title={
+                  voiceoverStatus?.status === 'done'       ? `Voiceover ready (${voiceoverStatus.duration?.toFixed(1)}s) — click to regenerate`
+                  : voiceoverStatus?.status === 'generating' ? 'Generating voiceover…'
+                  : voiceoverStatus?.status === 'error'      ? 'Voiceover failed — click to retry'
+                  : 'Generate voiceover for this scene'
+                }
+              >
+                {voiceoverStatus?.status === 'generating'
+                  ? <Loader2 size={12} className="animate-spin" />
+                  : <Mic size={12} />
+                }
+              </button>
+            )}
+            {scene.audio_duration > 0 && (
+              <span className="text-[9px] font-mono" style={{ color: 'rgba(74,222,128,0.50)' }}>
+                {scene.audio_duration.toFixed(1)}s
+              </span>
+            )}
+
             <button
               onClick={onPreview}
               className="p-1 text-white/20 hover:text-white/55 transition-colors"

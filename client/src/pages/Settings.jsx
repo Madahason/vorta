@@ -26,6 +26,7 @@ export default function Settings() {
   const [apiStatus, setApiStatus] = useState(null)  // null | 'testing' | 'ok' | 'fail'
   const [apiError,  setApiError]  = useState('')
   const [hfStatus,  setHfStatus]  = useState(null)  // null | 'loading' | { authenticated, message }
+  const [elStatus,  setElStatus]  = useState(null)  // null | 'testing' | { connected, plan, charactersRemaining, error }
   const [gapInsights, setGapInsights] = useState([])
   const [clipCount,   setClipCount]   = useState(null)
 
@@ -74,6 +75,18 @@ export default function Settings() {
     } catch (err) {
       setApiStatus('fail')
       setApiError(err.message)
+    }
+  }
+
+  // ─── Test ElevenLabs key ─────────────────────────────────────────────────────
+  const testElevenLabs = async () => {
+    setElStatus('testing')
+    try {
+      const res  = await fetch(`${SERVER_URL}/api/voiceover/status`)
+      const data = await res.json()
+      setElStatus(data)
+    } catch (err) {
+      setElStatus({ connected: false, error: err.message })
     }
   }
 
@@ -174,6 +187,42 @@ export default function Settings() {
             </div>
             <p className="text-[11px] text-white/25 mt-1.5">Run <code className="bg-white/[0.05] px-1 rounded">higgsfield auth login</code> in terminal if not authenticated</p>
           </div>
+
+          <div>
+            <label className={labelCls}>ElevenLabs API Key</label>
+            <div className="flex gap-3">
+              <input
+                type="password"
+                value="••••••••••••••••••••••"
+                readOnly
+                className={inputCls}
+                placeholder="Set ELEVENLABS_API_KEY in .env"
+              />
+              <button
+                onClick={testElevenLabs}
+                disabled={elStatus === 'testing'}
+                className="flex items-center gap-2 px-4 py-2 bg-white/[0.06] hover:bg-white/[0.10] border border-white/[0.10] rounded-lg text-sm text-white/60 transition-colors shrink-0 disabled:opacity-40"
+              >
+                {elStatus === 'testing'
+                  ? <Loader2 size={13} className="animate-spin" />
+                  : elStatus?.connected   ? <CheckCircle size={13} className="text-green-400" />
+                  : elStatus && !elStatus.connected ? <XCircle size={13} className="text-red-400" />
+                  : null
+                }
+                Test key
+              </button>
+            </div>
+            {elStatus?.connected && (
+              <p className="text-[11px] text-green-400/70 mt-1.5">
+                Connected · {elStatus.plan} · {elStatus.charactersRemaining?.toLocaleString()} chars remaining
+              </p>
+            )}
+            {elStatus && !elStatus.connected && (
+              <p className="text-[11px] text-red-400/70 mt-1.5">{elStatus.error || 'Connection failed'}</p>
+            )}
+            <p className="text-[11px] text-white/25 mt-1.5">Set <code className="bg-white/[0.05] px-1 rounded">ELEVENLABS_API_KEY</code> in .env — restart server after changing</p>
+          </div>
+
         </div>
       </Section>
 

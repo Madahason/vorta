@@ -98,6 +98,9 @@ export function Documentary({ scenes = [], imagePaths = {}, selectedClips = {}, 
             durationInFrames={(scene.duration_seconds || 5) * FPS}
           >
             <AbsoluteFill>
+              {scene.audio_path && (
+                <Audio src={scene.audio_path} volume={1.0} />
+              )}
               {(() => {
                 try {
                   return (
