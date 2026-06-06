@@ -332,9 +332,6 @@ export default function VideoCreator() {
       if (!res.ok) throw new Error(data.error || 'Analysis failed')
       setScenes(data.scenes)
       setHasAnalyzed(true)
-      console.log('[DEBUG] scenes set, count:', data.scenes.length)
-      const realFootageScenes = data.scenes.filter(s => s.shot_type === 'real_footage')
-      console.log('[DEBUG] real_footage scenes:', realFootageScenes.length, realFootageScenes.map(s => s.scene_id))
       matchClipsForScenes(data.scenes)
 
       // Register in project list for project management
@@ -439,10 +436,9 @@ export default function VideoCreator() {
   // ─── Clip matching ────────────────────────────────────────────────────────
   const matchClipsForScenes = async (allScenes) => {
     const realScenes = allScenes.filter(s => s.shot_type === 'real_footage')
+    console.log('[MATCH DEBUG 1] auto-match triggered, scenes:', allScenes.length)
+    console.log('[MATCH DEBUG 2] real_footage scenes:', realScenes.map(s => s.scene_id), 'tags sample:', realScenes[0]?.clip_search_tags)
     if (!realScenes.length) return
-
-    console.log('[DEBUG] matchClipsForScenes: firing for', realScenes.length, 'scenes:',
-      realScenes.map(s => `${s.scene_id}:${JSON.stringify(s.clip_search_tags)}`))
 
     setClipMatches(prev => {
       const next = { ...prev }
@@ -459,9 +455,8 @@ export default function VideoCreator() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Match failed')
 
-      console.log('[DEBUG] match results:', Object.entries(data.results).map(
-        ([sid, m]) => `${sid}: ${m.length} matches`
-      ))
+      console.log('[MATCH DEBUG 3] match results from API:', data.results)
+      console.log('[MATCH DEBUG 4] match counts:', Object.entries(data.results).map(([sid, m]) => `${sid}:${m.length}`))
 
       setClipMatches(prev => {
         const next = { ...prev }

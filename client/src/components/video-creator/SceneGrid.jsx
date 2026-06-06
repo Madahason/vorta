@@ -280,16 +280,19 @@ function SceneCard({
           )}
 
           {/* ════ REAL FOOTAGE ══════════════════════════════════════════════════ */}
-          {scene.shot_type === 'real_footage' && (
-            <ClipMatchSection
-              scene={scene}
-              clipMatch={clipMatch}
-              selectedClip={selectedClip}
-              onSelectClip={onSelectClip}
-              onConvertToImage={onConvertToImage}
-              onManualMatch={onManualMatch}
-            />
-          )}
+          {scene.shot_type === 'real_footage' && (() => {
+            console.log('[MATCH DEBUG 5] card rendering scene', scene.scene_id, 'clipMatch prop:', clipMatch)
+            return (
+              <ClipMatchSection
+                scene={scene}
+                clipMatch={clipMatch}
+                selectedClip={selectedClip}
+                onSelectClip={onSelectClip}
+                onConvertToImage={onConvertToImage}
+                onManualMatch={onManualMatch}
+              />
+            )
+          })()}
 
           {/* ════ PROMPT ════════════════════════════════════════════════════════ */}
           {(scene.shot_type === 'image' || scene.shot_type === 'real_footage') && (

@@ -168,40 +168,67 @@ export default function ClipLibrary({ onClose, projectId }) {
       }}>
 
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Film size={15} style={{ color: 'rgba(251,191,36,0.6)' }} />
-            <span style={{ fontSize: 14, fontWeight: 500, color: 'rgba(255,255,255,0.70)' }}>Clip Library</span>
-            <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.25)' }}>· {loading ? '…' : `${totalCount} clips`}</span>
-            {ytdlpStatus?.ytdlp?.installed
-              ? <span style={{ fontSize: 10, color: 'rgba(74,222,128,0.60)', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.12)', borderRadius: 3, padding: '1px 5px' }}>yt-dlp {ytdlpStatus.ytdlp.version}</span>
-              : <span style={{ fontSize: 10, color: 'rgba(251,191,36,0.60)', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.15)', borderRadius: 3, padding: '1px 5px' }}>yt-dlp not found</span>
-            }
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Film size={15} style={{ color: 'rgba(251,191,36,0.6)' }} />
+              <span style={{ fontSize: 14, fontWeight: 500, color: 'rgba(255,255,255,0.70)' }}>Clip Library</span>
+              <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.25)' }}>· {loading ? '…' : `${totalCount} clips`}</span>
+              {ytdlpStatus?.ytdlp?.installed
+                ? <span style={{ fontSize: 10, color: 'rgba(74,222,128,0.60)', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.12)', borderRadius: 3, padding: '1px 5px' }}>yt-dlp {ytdlpStatus.ytdlp.version}</span>
+                : <span style={{ fontSize: 10, color: 'rgba(251,191,36,0.60)', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.15)', borderRadius: 3, padding: '1px 5px' }}>yt-dlp not found</span>
+              }
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                onClick={handleSeed}
+                disabled={seeding || !ytdlpStatus?.ytdlp?.installed}
+                title={!ytdlpStatus?.ytdlp?.installed ? 'yt-dlp must be installed to auto-seed' : 'Auto-seed library from project entities'}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  fontSize: 11, padding: '4px 10px',
+                  background: seeding ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.12)',
+                  border: '1px solid rgba(99,102,241,0.25)', borderRadius: 5,
+                  color: seeding || !ytdlpStatus?.ytdlp?.installed ? 'rgba(165,180,252,0.35)' : 'rgba(165,180,252,0.80)',
+                  cursor: seeding || !ytdlpStatus?.ytdlp?.installed ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {seeding ? <Loader2 size={10} className="animate-spin" /> : <Zap size={10} />}
+                {seeding ? 'Seeding…' : 'Seed Library'}
+              </button>
+              <button onClick={handleClose} style={{ color: 'rgba(255,255,255,0.30)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex' }}
+                onMouseEnter={e => e.currentTarget.style.color = 'rgba(255,255,255,0.70)'}
+                onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.30)'}
+              >
+                <X size={17} />
+              </button>
+            </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button
-              onClick={handleSeed}
-              disabled={seeding || !ytdlpStatus?.ytdlp?.installed}
-              title={!ytdlpStatus?.ytdlp?.installed ? 'yt-dlp must be installed to auto-seed' : 'Auto-seed library from project entities'}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 5,
-                fontSize: 11, padding: '4px 10px',
-                background: seeding ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.12)',
-                border: '1px solid rgba(99,102,241,0.25)', borderRadius: 5,
-                color: seeding || !ytdlpStatus?.ytdlp?.installed ? 'rgba(165,180,252,0.35)' : 'rgba(165,180,252,0.80)',
-                cursor: seeding || !ytdlpStatus?.ytdlp?.installed ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {seeding ? <Loader2 size={10} className="animate-spin" /> : <Zap size={10} />}
-              {seeding ? 'Seeding…' : 'Seed Library'}
-            </button>
-            <button onClick={handleClose} style={{ color: 'rgba(255,255,255,0.30)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex' }}
-              onMouseEnter={e => e.currentTarget.style.color = 'rgba(255,255,255,0.70)'}
-              onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.30)'}
-            >
-              <X size={17} />
-            </button>
-          </div>
+
+          {/* Source breakdown — only shown once status is loaded and there are clips */}
+          {ytdlpStatus && totalCount > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8, fontSize: 11, color: 'rgba(255,255,255,0.28)' }}>
+              {(ytdlpStatus.sources?.manual || 0) > 0 && (
+                <span>Manual: {ytdlpStatus.sources.manual}</span>
+              )}
+              {(ytdlpStatus.sources?.youtube_cc || 0) > 0 && (
+                <span style={{ color: 'rgba(74,222,128,0.50)' }}>CC: {ytdlpStatus.sources.youtube_cc}</span>
+              )}
+              {(ytdlpStatus.sources?.internet_archive || 0) > 0 && (
+                <span style={{ color: 'rgba(74,222,128,0.50)' }}>Archive: {ytdlpStatus.sources.internet_archive}</span>
+              )}
+              {(ytdlpStatus.sources?.cspan || 0) > 0 && (
+                <span style={{ color: 'rgba(74,222,128,0.50)' }}>C-SPAN: {ytdlpStatus.sources.cspan}</span>
+              )}
+              {(ytdlpStatus.sources?.youtube_fair_use || 0) > 0 && (
+                <span style={{ color: 'rgba(251,191,36,0.55)' }}>⚠ Fair Use: {ytdlpStatus.sources.youtube_fair_use}</span>
+              )}
+              {/* Show zero-count categories too so user knows sourcing is possible */}
+              {(ytdlpStatus.sources?.youtube_cc || 0) === 0 && ytdlpStatus.ytdlp?.installed && (
+                <span style={{ color: 'rgba(255,255,255,0.16)' }}>0 CC · 0 Archive · 0 C-SPAN</span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Tabs */}
@@ -218,6 +245,20 @@ export default function ClipLibrary({ onClose, projectId }) {
 
         {/* Tab content */}
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+          {/* yt-dlp warning — source tabs only, shown when not installed */}
+          {tab !== 'library' && ytdlpStatus && !ytdlpStatus.ytdlp?.installed && (
+            <div style={{
+              margin: '12px 20px 0', padding: '8px 12px', flexShrink: 0,
+              background: 'rgba(234,179,8,0.07)',
+              border: '1px solid rgba(234,179,8,0.25)',
+              borderRadius: 6, fontSize: 12,
+              color: 'rgba(234,179,8,0.80)', lineHeight: 1.5,
+            }}>
+              yt-dlp not installed — clip downloading is disabled.{' '}
+              Install with:{' '}
+              <code style={{ fontFamily: 'monospace', fontSize: 11, background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: 3 }}>pip install yt-dlp</code>
+            </div>
+          )}
           {tab === 'library'  && <LibraryTab clips={clips} allClips={allClips} categories={categories} loading={loading} error={libError} query={query} setQuery={setQuery} catFilter={catFilter} setCatFilter={setCatFilter} showAddForm={showAddForm} setShowAddForm={setShowAddForm} deleting={deleting} onDelete={handleDelete} onRefresh={fetchLibrary} onRefreshGaps={fetchGaps} />}
           {tab === 'youtube_cc'  && <SourceTab source="youtube-cc"  label="YouTube CC"    hasSegment={true}  maxSec={null}  warningText={null} projectId={projectId} onDownloaded={() => { fetchLibrary(); fetchGaps(); fetchStatus() }} />}
           {tab === 'fair_use' && <SourceTab source="youtube-fair-use" label="YouTube Fair Use" hasSegment={true} maxSec={8} warningText="Fair use clips are limited to 8 seconds. Copyrighted content — confirm you have a commentary/documentary purpose before distributing." projectId={projectId} onDownloaded={() => { fetchLibrary(); fetchGaps(); fetchStatus() }} />}
@@ -255,9 +296,17 @@ export default function ClipLibrary({ onClose, projectId }) {
 // ─── LibraryTab ───────────────────────────────────────────────────────────────
 
 function LibraryTab({ clips, allClips, categories, loading, error, query, setQuery, catFilter, setCatFilter, showAddForm, setShowAddForm, deleting, onDelete, onRefresh, onRefreshGaps }) {
-  const [addForm,  setAddForm]  = useState({ file: '', tagsRaw: '', mood: 'neutral', category: '', duration: '', description: '', source_url: '' })
-  const [adding,   setAdding]   = useState(false)
-  const [addError, setAddError] = useState(null)
+  const [addForm,    setAddForm]    = useState({ file: '', tagsRaw: '', mood: 'neutral', category: '', duration: '', description: '', source_url: '' })
+  const [adding,     setAdding]     = useState(false)
+  const [addError,   setAddError]   = useState(null)
+  const [fileStatus, setFileStatus] = useState({})
+
+  useEffect(() => {
+    fetch('/api/library/verify')
+      .then(r => r.json())
+      .then(data => setFileStatus(data || {}))
+      .catch(() => {})
+  }, [clips]) // re-check whenever clips list changes
 
   const handleAdd = async () => {
     const tags = addForm.tagsRaw.split(',').map(t => t.trim()).filter(Boolean)
@@ -333,7 +382,7 @@ function LibraryTab({ clips, allClips, categories, loading, error, query, setQue
         {!loading && clips.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {clips.map(clip => (
-              <ClipCard key={clip.clip_id} clip={clip} onDelete={() => onDelete(clip.clip_id)} isDeleting={deleting === clip.clip_id} />
+              <ClipCard key={clip.clip_id} clip={clip} onDelete={() => onDelete(clip.clip_id)} isDeleting={deleting === clip.clip_id} fileExists={fileStatus[clip.clip_id] ?? null} />
             ))}
           </div>
         )}
@@ -344,7 +393,7 @@ function LibraryTab({ clips, allClips, categories, loading, error, query, setQue
 
 // ─── ClipCard ─────────────────────────────────────────────────────────────────
 
-function ClipCard({ clip, onDelete, isDeleting }) {
+function ClipCard({ clip, onDelete, isDeleting, fileExists }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   return (
@@ -355,6 +404,17 @@ function ClipCard({ clip, onDelete, isDeleting }) {
             <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'rgba(251,191,36,0.50)' }}>{clip.clip_id}</span>
             <LicenseBadge license={clip.license} />
             <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>{clip.category}</span>
+            {/* File existence badge — null means still checking */}
+            {fileExists === true && (
+              <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: 'rgba(34,197,94,0.08)', color: 'rgba(74,222,128,0.65)', border: '1px solid rgba(34,197,94,0.16)' }}>
+                Ready
+              </span>
+            )}
+            {fileExists === false && (
+              <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                No file
+              </span>
+            )}
             <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'rgba(255,255,255,0.20)', marginLeft: 'auto' }}>{clip.duration > 0 ? `${clip.duration}s` : ''}</span>
           </div>
           <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.60)', marginBottom: 5 }}>{clip.title || clip.description || clip.file?.split('/').pop()}</p>

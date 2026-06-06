@@ -36,7 +36,7 @@ router.get('/status', async (req, res) => {
     for (const c of clips) {
       bySource[c.source] = (bySource[c.source] || 0) + 1
     }
-    res.json({ ytdlp, totalClips: clips.length, bySource })
+    res.json({ ytdlp, totalClips: clips.length, sources: bySource })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -326,6 +326,24 @@ router.post('/fair-use-ack', (req, res) => {
     res.json({ ok: true })
   } catch (err) {
     console.error('[library] fair-use-ack error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── GET /api/library/verify — check which clip files actually exist on disk ───
+router.get('/verify', (req, res) => {
+  try {
+    const clips = clipStore.loadClips()
+    const verification = {}
+    for (const clip of clips) {
+      // clip.file is "/library/clips/filename.mp4" — resolve from project root
+      const relPath  = clip.file.startsWith('/') ? clip.file.slice(1) : clip.file
+      const filePath = path.join(__dirname, '../..', relPath)
+      verification[clip.clip_id] = fs.existsSync(filePath)
+    }
+    res.json(verification)
+  } catch (err) {
+    console.error('[library] verify error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })
