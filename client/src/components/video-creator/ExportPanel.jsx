@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Download, Loader2, X, ChevronDown, ChevronUp, RefreshCw, AlertCircle, Music, Upload } from 'lucide-react'
+import { Download, Loader2, X, ChevronDown, ChevronUp, RefreshCw, AlertCircle, Music, Upload, ShieldAlert } from 'lucide-react'
 
 // SSE must connect directly to Express — Vite proxy buffers text/event-stream
 const SERVER_URL = 'http://localhost:3001'
@@ -33,6 +33,9 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
   const [audioError, setAudioError]         = useState('')
   const [audioSettings, setAudioSettings]   = useState({ startFrom: 0, volume: 85, fadeIn: 0.5, fadeOut: 2.0 })
   const audioInputRef = useRef(null)
+
+  const [showFairUseModal, setShowFairUseModal] = useState(false)
+  const [ackLoading,       setAckLoading]       = useState(false)
 
   const startTimeRef    = useRef(null)
   const elapsedRef      = useRef(null)
@@ -98,10 +101,35 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
     }
   }
 
+  // Fair use clips that need acknowledgement before rendering
+  const fairUseClips = Object.entries(selectedClips || {})
+    .filter(([, clip]) => clip && (clip.license === 'fair_use' || clip.license === 'unknown'))
+    .map(([scene_id, clip]) => ({ scene_id, clip }))
+
   // ─── start render ────────────────────────────────────────────────────────────
   const handleRender = async () => {
     if (!canRender) return
+    if (fairUseClips.length > 0) {
+      setShowFairUseModal(true)
+      return
+    }
+    await doRender()
+  }
 
+  const handleFairUseConfirm = async () => {
+    setAckLoading(true)
+    try {
+      await fetch('/api/library/fair-use-ack', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, clips: fairUseClips }),
+      })
+    } catch { /* log only — don't block render */ }
+    setShowFairUseModal(false)
+    setAckLoading(false)
+    await doRender()
+  }
+
+  const doRender = async () => {
     setRenderState('rendering')
     setProgress({ percent: 0, frame: 0, totalFrames: 0 })
     setElapsed(0)
@@ -188,7 +216,7 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
     clearInterval(elapsedRef.current)
     try {
       await fetch(`${SERVER_URL}/api/render/${projectId}`, { method: 'DELETE' })
-    } catch {}
+    } catch { /* cancel request may fail if render already finished */ }
     setRenderState('idle')
     setProgress({ percent: 0, frame: 0, totalFrames: 0 })
     setElapsed(0)
@@ -611,6 +639,69 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
           </div>
         </div>
       )}
+
+      {/* Fair use acknowledgement modal */}
+      {showFairUseModal && (
+        <FairUseModal
+          clips={fairUseClips}
+          onConfirm={handleFairUseConfirm}
+          onCancel={() => setShowFairUseModal(false)}
+          loading={ackLoading}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── FairUseModal ─────────────────────────────────────────────────────────────
+
+function FairUseModal({ clips, onConfirm, onCancel, loading }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.70)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div style={{ background: '#151515', border: '1px solid rgba(251,191,36,0.20)', borderRadius: 12, maxWidth: 480, width: '100%', padding: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+          <ShieldAlert size={18} style={{ color: 'rgba(251,191,36,0.70)', flexShrink: 0 }} />
+          <h3 style={{ fontSize: 15, fontWeight: 600, color: 'rgba(255,255,255,0.80)' }}>Fair Use Acknowledgement</h3>
+        </div>
+
+        <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.50)', lineHeight: 1.6, marginBottom: 14 }}>
+          Your video includes <strong style={{ color: 'rgba(251,191,36,0.80)' }}>{clips.length} clip{clips.length !== 1 ? 's' : ''}</strong> with fair use or unknown licensing. Fair use is a legal doctrine that permits short use of copyrighted material for commentary, criticism, or documentary purposes.
+        </p>
+
+        <div style={{ marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {clips.map(({ scene_id, clip }) => (
+            <div key={scene_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'rgba(251,191,36,0.04)', border: '1px solid rgba(251,191,36,0.12)', borderRadius: 6 }}>
+              <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'rgba(251,191,36,0.50)', flexShrink: 0 }}>Scene {scene_id}</span>
+              <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{clip.title || clip.description || clip.file?.split('/').pop()}</span>
+              <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: clip.license === 'fair_use' ? 'rgba(251,191,36,0.10)' : 'rgba(255,255,255,0.04)', color: clip.license === 'fair_use' ? 'rgba(251,191,36,0.75)' : 'rgba(255,255,255,0.30)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                {clip.license === 'fair_use' ? '⚠ Fair Use' : '? Unknown'}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.30)', lineHeight: 1.5, marginBottom: 20 }}>
+          By proceeding, you confirm this use is for documentary, commentary, or educational purposes, and you accept responsibility for verifying fair use compliance in your jurisdiction.
+        </p>
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            onClick={onConfirm}
+            disabled={loading}
+            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '9px 16px', background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 8, color: 'rgba(251,191,36,0.85)', fontSize: 13, fontWeight: 500, cursor: loading ? 'not-allowed' : 'pointer' }}
+          >
+            {loading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+            {loading ? 'Logging…' : 'I understand — Render'}
+          </button>
+          <button
+            onClick={onCancel}
+            disabled={loading}
+            style={{ padding: '9px 16px', background: 'none', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 8, color: 'rgba(255,255,255,0.40)', fontSize: 13, cursor: 'pointer' }}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

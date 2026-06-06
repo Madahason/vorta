@@ -1,37 +1,35 @@
-const fs   = require('fs')
-const path = require('path')
+const clipStore = require('./clipStore')
 
-const LIBRARY_PATH = path.join(__dirname, '../../library/clips.json')
-
-function loadClips() {
-  const raw = fs.readFileSync(LIBRARY_PATH, 'utf8')
-  const clips = JSON.parse(raw).clips
-  // Augment each clip with `filename` (basename of `file`) for Remotion static serving
-  return clips.map(c => ({
-    ...c,
-    filename: c.filename || (c.file ? c.file.split('/').pop() : ''),
-  }))
+// License quality bonus — prefer freely usable clips
+const LICENSE_BONUS = {
+  public_domain:    0.3,
+  creative_commons: 0.3,
+  fair_use:         0.1,
+  unknown:          0,
 }
 
-// Returns up to `limit` clips sorted by tag overlap score (highest first).
-// Ties are broken by mood match.
+// Returns up to `limit` clips sorted by tag overlap + mood + license score
 function matchClips(searchTags, mood = null, limit = 3) {
   if (!searchTags?.length) return []
 
-  const clips    = loadClips()
-  const tagSet   = new Set(searchTags.map(t => t.toLowerCase().trim()))
+  const clips  = clipStore.loadClips()
+  const tagSet = new Set(searchTags.map(t => t.toLowerCase().trim()))
 
   const scored = clips
     .map(clip => {
-      const clipTags = clip.tags.map(t => t.toLowerCase())
-      const overlap  = clipTags.filter(t => tagSet.has(t)).length
-      const moodBonus = (mood && clip.mood === mood) ? 0.5 : 0
-      return { clip, score: overlap + moodBonus }
+      const clipTags    = (clip.tags || []).map(t => t.toLowerCase())
+      const overlap     = clipTags.filter(t => tagSet.has(t)).length
+      const moodBonus   = (mood && clip.mood === mood) ? 0.5 : 0
+      const licBonus    = LICENSE_BONUS[clip.license] ?? 0
+      return { clip, score: overlap + moodBonus + licBonus }
     })
     .filter(c => c.score > 0)
 
   scored.sort((a, b) => b.score - a.score)
   return scored.slice(0, limit).map(c => c.clip)
 }
+
+// Re-export loadClips for routes that still call matchClips module
+function loadClips() { return clipStore.loadClips() }
 
 module.exports = { matchClips, loadClips }

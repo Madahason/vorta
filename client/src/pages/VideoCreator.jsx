@@ -756,7 +756,7 @@ export default function VideoCreator() {
     )}
 
     {showClipLibrary && (
-      <ClipLibrary onClose={() => setShowClipLibrary(false)} />
+      <ClipLibrary onClose={() => setShowClipLibrary(false)} projectId={projectId} />
     )}
     </>
   )

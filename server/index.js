@@ -12,6 +12,9 @@ app.use('/api/audio/upload', express.raw({ type: '*/*', limit: '200mb' }));
 // Serve generated project assets (images, etc.)
 app.use('/projects', express.static(path.join(__dirname, '../projects')));
 
+// Serve library assets (clips, thumbnails)
+app.use('/library', express.static(path.join(__dirname, '../library')));
+
 // /output also serves the projects folder — clean URL for MP4 downloads
 app.use('/output', express.static(path.join(__dirname, '../projects')));
 

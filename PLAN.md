@@ -130,20 +130,80 @@ Claude is instructed to generate prompts that are anchored to the specific subje
 **`subject_anchors` field** — Claude extracts 3–6 specific real-world entities per scene (company names, person names, product names, locations, years, events). At least 2 must appear directly in the `higgsfield_prompt`. A post-processing validator in `claude.js` checks this on every image scene and appends the top anchor if the check fails.
 
 ### Clip Library Structure
-Each clip entry in the library:
+Each clip entry in the library carries full source, license, and provenance metadata:
 ```json
 {
-  "clip_id": "001",
-  "file": "/library/clips/wall_street_crowd.mp4",
-  "tags": ["finance", "wall street", "crowd", "crisis", "2008"],
+  "clip_id": "uuid-or-padded-id",
+  "file": "/library/clips/yt_cc_abc12345.mp4",
+  "title": "Traders on the NYSE floor during the 2008 crisis",
+  "source": "youtube_cc",
+  "license": "creative_commons",
+  "source_url": "https://youtube.com/watch?v=...",
+  "tags": ["finance", "wall street", "2008"],
   "mood": "tense",
   "category": "finance",
   "duration": 6,
-  "source_url": "https://youtube.com/..."
+  "description": "Wide shot of NYSE traders reacting to market crash",
+  "warning": null,
+  "added_at": "2026-06-06T00:00:00.000Z",
+  "project_id": null
 }
 ```
 
+**Source values:** `manual` | `youtube_cc` | `youtube_fair_use` | `internet_archive` | `cspan`
+
+**License values:** `creative_commons` | `public_domain` | `fair_use` | `unknown`
+
 Library is stored as a flat JSON file (`/library/clips.json`) alongside the clip files.
+
+### Multi-Source Clip Sourcing System
+
+#### Architecture Overview
+```
+ClipLibrary UI (5 tabs)
+  → My Library — browse, filter, add manually
+  → YouTube CC — search + segment download, CC license enforced by yt-dlp filter
+  → Fair Use — search + segment download, hard 8s max server-side
+  → Internet Archive — search Archive.org API + yt-dlp download, public_domain
+  → C-SPAN — search + segment/full download, public_domain (US government content)
+
+Auto-Seed Flow:
+  "Seed Library" button → POST /api/library/seed
+  → clipSeeder.js extracts 6 named entities from project title+niche via Claude haiku
+  → searches all 4 sources in parallel, sorted by priority: archive > cspan > cc > fair_use
+  → downloads one clip per entity (up to 15 total)
+  → streams progress to UI via SSE /api/library/seed/progress/:seedId
+```
+
+#### Service Files
+| File | Purpose |
+|------|---------|
+| `server/services/clipStore.js` | CRUD foundation — single source of truth for clips.json |
+| `server/services/ytdlp.js` | yt-dlp wrapper utilities (checkYtDlp, parseDumpJson, downloadSegment, downloadFull) |
+| `server/services/sources/youtubeCC.js` | YouTube CC search + download |
+| `server/services/sources/youtubeFairUse.js` | YouTube Fair Use, 8s max enforced |
+| `server/services/sources/internetArchive.js` | Archive.org search API + yt-dlp download |
+| `server/services/sources/cspan.js` | C-SPAN yt-dlp search + segment/full download |
+| `server/services/clipSeeder.js` | Claude entity extraction + multi-source seed + SSE progress |
+| `server/services/clipMatcher.js` | Tag scoring + license bonus (CC/PD +0.3, FU +0.1) |
+
+#### License Scoring in Matching
+`clipMatcher.js` adds a license bonus on top of tag/mood overlap so freely usable clips are preferred:
+- `public_domain` / `creative_commons` → +0.3
+- `fair_use` → +0.1
+- `unknown` → +0.0
+
+#### Fair Use Acknowledgement
+When the user clicks Render and any selected clip has `license: "fair_use"` or `license: "unknown"`, `ExportPanel.jsx` intercepts and shows `FairUseModal` listing the clips. On confirm, the UI calls `POST /api/library/fair-use-ack` which logs to `library/projects/{projectId}/fair-use-acknowledgement.json` before proceeding to render.
+
+#### yt-dlp Dependency
+The clip sourcing system requires `yt-dlp` to be installed and accessible in PATH. The UI shows a status badge (version / not found) in the ClipLibrary header. The seed button is disabled when yt-dlp is not installed. Install with:
+```bash
+pip install yt-dlp
+# or on macOS: brew install yt-dlp
+```
+
+Fair Use 8-second limit is enforced **server-side** in `youtubeFairUse.js` — the download handler throws if `endSec - startSec > 8`.
 
 ### Clip Workflow for Remotion
 
@@ -180,7 +240,7 @@ Pre-built components to build and maintain:
 | Image Generation | Higgsfield CLI (`@higgsfield/cli`) |
 | Video Assembly | Remotion |
 | Clip Library | JSON flat file + local filesystem |
-| Clip Sourcing | yt-dlp (run separately, not in-app) |
+| Clip Sourcing | yt-dlp (in-app via clipStore + source services) |
 | Rendering | Remotion CLI |
 
 ---
