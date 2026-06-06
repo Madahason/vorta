@@ -220,6 +220,29 @@ Remotion only serves static files from its own `remotion/public/` folder. The ba
 3. The backend `clipMatcher.js` automatically derives a `filename` field (basename of `file`) on every returned clip — `FootageScene.jsx` uses `clip.filename` to call `staticFile("clips/[filename]")`
 4. If a clip file is missing from `remotion/public/clips/`, `FootageScene` catches the `onError` event and renders `PlaceholderScene` instead of crashing
 
+### Motion Graphic Dynamic Rendering
+
+Motion graphic scenes support two rendering modes, checked in order:
+
+**Mode 1 — Dynamic component (preferred):** If `scene.motion_component` is set, `MotionGraphicScene.jsx` evaluates the stored code at runtime using the Function constructor. The code must use `React.createElement()` — NOT JSX syntax (which the Function constructor cannot parse). All Remotion and React primitives are injected as closure variables: `React, useState, useEffect, useRef, useMemo, useCurrentFrame, useVideoConfig, interpolate, spring, AbsoluteFill`. The component code must end with `return SceneComponent;` (not `export default`).
+
+**Mode 2 — Template fallback:** If no `motion_component` is set, falls back to dispatching `scene.motion_graphic_type` to one of the pre-built templates.
+
+**Component generation flow:**
+1. User clicks "Build Component" on a scene card → `POST /api/motion`
+2. `motion.js` sends the scene to Claude with a strict system prompt requiring `React.createElement`, no imports, `return SceneComponent` at the end
+3. Post-processing strips any import lines or `export default` Claude accidentally includes
+4. `cleanMotionComponent()` in `VideoCreator.jsx` applies the same strip on store/load so localStorage-migrated components are always clean
+5. Component stored in `scene.motion_component` and `vorta_motion_components` localStorage key
+
+**Migration from old JSX format:** Old components stored before this change used JSX syntax and will fail with `SyntaxError: Unexpected token '<'` — the player shows a red error card. Click "Rebuild Components" in the header to regenerate all motion graphic scenes in the new format sequentially.
+
+**`MotionGraphicScene.jsx` (`remotion/src/components/`):**
+- `prepareForEval(code)` strips import lines and converts `export default` → `return`
+- `new Function(params..., evalCode)` creates the factory; factory is called with actual Remotion/React references
+- If `typeof Component !== 'function'`, throws explaining the code didn't return a component
+- On any error: renders a dark red error card with the error message and rebuild hint
+
 ### Remotion Motion Graphic Templates
 Pre-built components to build and maintain:
 - `AnimatedCounter` — counts up to a number (revenue, users, dates)
@@ -384,12 +407,15 @@ vorta/
 │   │   ├── compositions/
 │   │   │   └── Documentary.jsx   # Main composition
 │   │   ├── components/
-│   │   │   ├── ImageScene.jsx    # Ken Burns animated still
-│   │   │   ├── AnimatedCounter.jsx
-│   │   │   ├── TimelineBar.jsx
-│   │   │   ├── ComparisonChart.jsx
-│   │   │   ├── QuoteCard.jsx
-│   │   │   └── MapHighlight.jsx
+│   │   │   ├── ImageScene.jsx         # Ken Burns animated still
+│   │   │   ├── MotionGraphicScene.jsx # Dynamic component evaluator (Function constructor)
+│   │   │   ├── FootageScene.jsx       # Real footage playback
+│   │   │   ├── PlaceholderScene.jsx   # Fallback when asset not ready
+│   │   │   ├── AnimatedCounter.jsx    # Template: stat counter
+│   │   │   ├── TimelineBar.jsx        # Template: event timeline
+│   │   │   ├── ComparisonChart.jsx    # Template: bar comparison
+│   │   │   ├── QuoteCard.jsx          # Template: pull quote
+│   │   │   └── MapHighlight.jsx       # Template: geographic highlight
 │   │   └── index.js
 │   └── package.json
 ├── library/                 # Clip library
@@ -476,11 +502,8 @@ All Video Creator state survives a page refresh via `localStorage`. No backend c
 - "Convert to image" fallback on scene cards
 - 16 seed clips in library (IDs 001–016) including Apple keynote, Wall Street, Silicon Valley, US Capitol, etc.
 
-**Known issue — to fix after Phase 5:**
-- Clip candidate cards do not render on `real_footage` scene cards despite the backend returning correct match results. Root cause: frontend state/props wiring between `VideoCreator.jsx` (`clipMatches`, `selectedClips` state) and `ClipMatchSection` in `SceneGrid.jsx`. The backend match logic is correct; this is a React state threading bug to be diagnosed and fixed as a follow-up.
-
 **Implementation details:**
-- `server/services/clipMatcher.js` — tag overlap scoring (+ 0.5 bonus for mood match), returns top 3
+- `server/services/clipMatcher.js` — partial/substring tag matching in both directions (clip tag "product launch" matches search tag "launch"; search tag "apple inc" matches clip tag "apple") + license bonus (CC/PD +0.3, FU +0.1) + mood bonus +0.5. Returns top 3.
 - `server/routes/library.js` — all CRUD + match endpoints; `GET /gaps` sorted most-recent-first; declared before `DELETE /:clip_id` to prevent Express param collision
 - `library/gaps.json` — auto-written on zero matches; deduplicates by sorted tag set
 - `library/clips.json` — 16 seed clips across finance, tech, politics, industry, cities, transportation categories
