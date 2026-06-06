@@ -438,6 +438,7 @@ export default function VideoCreator() {
     const realScenes = allScenes.filter(s => s.shot_type === 'real_footage')
     console.log('[MATCH DEBUG 1] auto-match triggered, scenes:', allScenes.length)
     console.log('[MATCH DEBUG 2] real_footage scenes:', realScenes.map(s => s.scene_id), 'tags sample:', realScenes[0]?.clip_search_tags)
+    console.log('[CLIP DEBUG 1] matchClipsForScenes called, real scenes:', realScenes.length, 'tags sample:', realScenes[0]?.clip_search_tags)
     if (!realScenes.length) return
 
     setClipMatches(prev => {
@@ -457,6 +458,7 @@ export default function VideoCreator() {
 
       console.log('[MATCH DEBUG 3] match results from API:', data.results)
       console.log('[MATCH DEBUG 4] match counts:', Object.entries(data.results).map(([sid, m]) => `${sid}:${m.length}`))
+      console.log('[CLIP DEBUG 2] match-all API response:', JSON.stringify(data.results).slice(0, 300))
 
       setClipMatches(prev => {
         const next = { ...prev }
@@ -465,7 +467,10 @@ export default function VideoCreator() {
         })
         return next
       })
-    } catch {
+
+      console.log('[CLIP DEBUG 3] clipMatches updated for', Object.keys(data.results).length, 'scenes, first result:', JSON.stringify(Object.entries(data.results).slice(0, 1)))
+    } catch (err) {
+      console.log('[CLIP DEBUG 2] match-all FAILED:', err?.message)
       setClipMatches(prev => {
         const next = { ...prev }
         realScenes.forEach(s => { next[s.scene_id] = { matches: [], loading: false } })
@@ -695,6 +700,7 @@ export default function VideoCreator() {
               <div style={{ height: '36vw', maxHeight: 504 }} />
             )}
 
+            {(() => { console.log('[CLIP DEBUG 4] SceneGrid render, clipMatches keys:', Object.keys(clipMatches), 'count:', Object.keys(clipMatches).length); return null })()}
             <SceneGrid
               scenes={scenes}
               onScenesChange={setScenes}

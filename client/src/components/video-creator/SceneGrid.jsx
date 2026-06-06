@@ -90,25 +90,30 @@ export default function SceneGrid({
       </div>
 
       <div className="space-y-3">
-        {scenes.map((scene, i) => (
-          <SceneCard
-            key={scene.scene_id}
-            scene={scene}
-            index={i}
-            onChange={patch => updateScene(i, patch)}
-            genStatus={sceneStatuses[scene.scene_id] || null}
-            onRetry={onRetry}
-            motionStatus={motionStatuses[scene.scene_id] || null}
-            onBuildComponent={onBuildComponent}
-            clipMatch={clipMatches[scene.scene_id]}
-            selectedClip={selectedClips[scene.scene_id] || null}
-            onSelectClip={clip => onSelectClip?.(scene.scene_id, clip)}
-            onConvertToImage={() => onConvertToImage?.(scene.scene_id)}
-            onManualMatch={() => onManualMatch?.(scene)}
-            onOpenLibrary={onOpenLibrary}
-            onPreview={() => onPreviewScene?.(scene)}
-          />
-        ))}
+        {scenes.map((scene, i) => {
+          if (scene.shot_type === 'real_footage') {
+            console.log('[CLIP DEBUG 5] real_footage scene', scene.scene_id, 'clipMatch from dict:', clipMatches[scene.scene_id])
+          }
+          return (
+            <SceneCard
+              key={scene.scene_id}
+              scene={scene}
+              index={i}
+              onChange={patch => updateScene(i, patch)}
+              genStatus={sceneStatuses[scene.scene_id] || null}
+              onRetry={onRetry}
+              motionStatus={motionStatuses[scene.scene_id] || null}
+              onBuildComponent={onBuildComponent}
+              clipMatch={clipMatches[scene.scene_id]}
+              selectedClip={selectedClips[scene.scene_id] || null}
+              onSelectClip={clip => onSelectClip?.(scene.scene_id, clip)}
+              onConvertToImage={() => onConvertToImage?.(scene.scene_id)}
+              onManualMatch={() => onManualMatch?.(scene)}
+              onOpenLibrary={onOpenLibrary}
+              onPreview={() => onPreviewScene?.(scene)}
+            />
+          )
+        })}
       </div>
 
     </div>
@@ -967,13 +972,15 @@ function OverlayRow({ overlay, scene, onUpdate, onRemove, inputStyle, selectStyl
 // ─── ClipMatchSection ─────────────────────────────────────────────────────────
 
 function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConvertToImage, onManualMatch }) {
-  const loading    = clipMatch?.loading ?? false
-  const matches    = clipMatch?.matches ?? []
-  const noMatches  = clipMatch && !loading && matches.length === 0
-  const isSelected = !!selectedClip
+  const loading = clipMatch?.loading ?? false
+  const matches = Array.isArray(clipMatch?.matches) ? clipMatch.matches : []
+
+  console.log('[CLIP DEBUG 6] ClipMatchSection', scene.scene_id, 'clipMatch:', clipMatch, 'loading:', loading, 'matches:', matches.length)
 
   return (
     <div className="space-y-2">
+
+      {/* Search tags */}
       {scene.clip_search_tags?.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {scene.clip_search_tags.map(tag => (
@@ -984,6 +991,7 @@ function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConv
         </div>
       )}
 
+      {/* Loading */}
       {loading && (
         <div className="flex items-center gap-2 text-[11px] text-amber-400/40">
           <Loader2 size={11} className="animate-spin" />
@@ -991,12 +999,13 @@ function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConv
         </div>
       )}
 
-      {isSelected && (
+      {/* Selected clip */}
+      {!loading && selectedClip && (
         <div className="flex items-center justify-between rounded-lg bg-amber-500/[0.06] border border-amber-500/[0.15] px-3 py-2">
           <div className="flex items-center gap-2">
             <Film size={11} className="text-amber-400/60" />
             <span className="text-[11px] text-amber-300/70 font-mono">{selectedClip.clip_id}</span>
-            <span className="text-[11px] text-white/30">{selectedClip.description}</span>
+            <span className="text-[11px] text-white/30">{selectedClip.title || selectedClip.description}</span>
           </div>
           <button onClick={() => onSelectClip(null)} className="text-[10px] text-white/20 hover:text-white/45 transition-colors">
             Change
@@ -1004,7 +1013,8 @@ function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConv
         </div>
       )}
 
-      {!loading && !isSelected && matches.length > 0 && (
+      {/* Clip candidates */}
+      {!loading && !selectedClip && matches.length > 0 && (
         <div className="space-y-1.5">
           <p className="text-[10px] text-white/25 uppercase tracking-wider">
             {matches.length} match{matches.length !== 1 ? 'es' : ''} found
@@ -1017,12 +1027,14 @@ function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConv
                   <span className={`text-[9px] px-1.5 py-0.5 rounded border ${MOOD_STYLES[clip.mood] || MOOD_STYLES.neutral}`}>{clip.mood}</span>
                   <span className="text-[10px] text-white/25">{clip.duration}s</span>
                 </div>
-                <p className="text-[11px] text-white/40 truncate">{clip.description}</p>
-                <div className="flex flex-wrap gap-1">
-                  {clip.tags.slice(0, 4).map(t => (
-                    <span key={t} className="text-[9px] px-1 py-0 rounded bg-white/[0.04] text-white/25">{t}</span>
-                  ))}
-                </div>
+                <p className="text-[11px] text-white/40 truncate">{clip.title || clip.description || '—'}</p>
+                {(clip.tags || []).length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {clip.tags.slice(0, 4).map(t => (
+                      <span key={t} className="text-[9px] px-1 py-0 rounded bg-white/[0.04] text-white/25">{t}</span>
+                    ))}
+                  </div>
+                )}
               </div>
               <button onClick={() => onSelectClip(clip)} className="ml-3 shrink-0 text-[11px] px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded-lg text-amber-300 transition-colors">
                 Select
@@ -1032,7 +1044,8 @@ function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConv
         </div>
       )}
 
-      {noMatches && !isSelected && (
+      {/* Searched but no matches */}
+      {!loading && !selectedClip && clipMatch && matches.length === 0 && (
         <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-3 space-y-2">
           <p className="text-[11px] text-white/30">No matching clips in library for these tags.</p>
           <div className="flex gap-2">
@@ -1050,7 +1063,8 @@ function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConv
         </div>
       )}
 
-      {!clipMatch && !loading && (
+      {/* Not yet searched */}
+      {!loading && !clipMatch && (
         <div className="flex items-center justify-between">
           <span className="text-[11px] text-white/20 italic">No clip matches yet</span>
           {onManualMatch && (
@@ -1061,6 +1075,7 @@ function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConv
           )}
         </div>
       )}
+
     </div>
   )
 }
