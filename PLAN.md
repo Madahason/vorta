@@ -1212,6 +1212,28 @@ VoiceoverPanel → POST /api/voiceover/generate (SSE)
 
 ---
 
+### Fix 10 — Voiceover audio quality ✅ Complete
+
+**Problem:** Generated narration cuts off mid-word, words repeat, and pacing feels unnatural.
+
+**Root causes:**
+1. Script excerpts were not TTS-safe — incomplete sentences, no terminal punctuation, too short/long
+2. ElevenLabs generation had no retry logic, no output validation, and weak voice settings
+3. No text preprocessing before sending to API — markdown artifacts and odd whitespace caused artefacts
+4. Abrupt audio file boundaries with no silence padding made narration feel harsh
+
+**Files changed:**
+- `server/services/textPreprocessor.js` (NEW) — `preprocessForTTS`, `validateTTSText`, `splitIntoChunks`
+- `server/services/elevenlabs.js` — refactored into `generateSingleAudio` (3-retry + output validation), `generateAndConcatenate` (ffmpeg concat for long text), `addSilencePadding` (300ms start/end via ffmpeg), and updated `generateAudio` orchestrator. `DOCUMENTARY_VOICE_SETTINGS` constant (stability 0.71, similarityBoost 0.75, style 0.0).
+- `server/services/claude.js` — added `SCENE TEXT RULES FOR VOICEOVER` section to system prompt (complete sentences, 15-60 words, terminal punctuation, no stage directions). Updated `script_excerpt` field rule to match.
+
+**Key behaviours:**
+- Text is cleaned (markdown stripped, double punctuation fixed, duplicate words removed) before every ElevenLabs call
+- Text over 2500 chars is split at sentence boundaries; chunks are generated separately and concatenated with ffmpeg
+- Each generation attempt validates the output is >1KB and has measurable duration; retries up to 3x with exponential backoff
+- 300ms silence padding added to start and end of every audio file (non-fatal if ffmpeg unavailable)
+- Future Claude analyses will produce TTS-safe excerpts (complete thoughts, proper punctuation, 15-60 words)
+
 ### Build order recommendation
 1. **Fix 1 first** — it's a bug fix, takes 1–2 hours maximum.
 2. **Fix 2 second** — audio is the single biggest missing feature for client work.

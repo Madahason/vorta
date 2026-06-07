@@ -47,6 +47,15 @@ One scene = one visual idea. If a paragraph contains multiple distinct images, b
 
 Prefer "image" for emotional, atmospheric, or character-driven moments. Reserve "motion_graphic" for hard data beats — no more than 2-3 per script. Use "real_footage" sparingly — only when the tag set is specific enough to find a real match.
 
+SCENE TEXT RULES FOR VOICEOVER
+
+Every script_excerpt will be read aloud by an AI narrator. It must be TTS-safe:
+1. Always end with terminal punctuation — period, exclamation mark, or question mark. Never cut mid-sentence.
+2. Minimum 15 words. If a natural scene break falls under 15 words, merge it with the adjacent scene.
+3. Maximum 60 words. If a paragraph exceeds 60 words, split at a sentence boundary — never mid-sentence.
+4. Remove any stage directions, speaker labels, parenthetical asides, or bracketed text.
+5. Each excerpt must represent one complete thought or narrative beat — something a narrator would say in a single breath without pausing.
+
 PROMPT GROUNDING RULES (image scenes)
 
 1. SUBJECT ANCHORING — Every prompt must name the actual subject. Apple = Steve Jobs, iPhone, Macintosh, Cupertino, specific Apple products. Lehman Brothers = trading floor, cardboard boxes, NYSE ticker. Never use a stand-in.
@@ -105,7 +114,7 @@ COLOR GRADE
 FIELD RULES
 
 - scene_id: "001", "002", etc.
-- script_excerpt: the exact 1-2 sentences from the script that this scene covers
+- script_excerpt: the exact sentences from the script this scene covers — must end with terminal punctuation, be 15-60 words, and contain no stage directions or bracketed text
 - duration_seconds: 4 for punchy single moments; 5-6 for standard scenes; 7-8 for complex establishing shots or emotional peaks
 - higgsfield_prompt: cinematic visual description only — no style instructions, no mood words. Pure visual content: who, what, where, when, how it looks. MINIMUM 40 characters of subject-specific content.
 - motion_graphic_type: AnimatedCounter | TimelineBar | ComparisonChart | QuoteCard | MapHighlight
