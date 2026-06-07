@@ -99,7 +99,22 @@ export function Documentary({ scenes = [], imagePaths = {}, selectedClips = {}, 
           >
             <AbsoluteFill>
               {scene.audio_path && (
-                <Audio src={scene.audio_path} volume={1.0} />
+                <Audio
+                  src={scene.audio_path}
+                  volume={(frame) => {
+                    // Fade out the last 9 frames (300ms at 30fps) to prevent hard-cut
+                    // click/pop artifacts at scene boundaries.
+                    const durationFrames = (scene.duration_seconds || 5) * FPS
+                    const fadeStart = durationFrames - 9
+                    if (frame >= fadeStart) {
+                      return interpolate(frame, [fadeStart, durationFrames], [1.0, 0], {
+                        extrapolateLeft: 'clamp',
+                        extrapolateRight: 'clamp',
+                      })
+                    }
+                    return 1.0
+                  }}
+                />
               )}
               {(() => {
                 try {

@@ -25,12 +25,13 @@ export default function VoiceoverPanel({
   onVoiceoverStatusChange,
   onScenesChange,
 }) {
+  const [open,            setOpen]            = useState(false)
   const [selectedVoiceId, setSelectedVoiceId] = useState(() => localStorage.getItem('vorta_selected_voice') || null)
   const [voices,          setVoices]          = useState([])
   const [voicesLoading,   setVoicesLoading]   = useState(false)
   const [voiceSearch,     setVoiceSearch]     = useState('')
   const [model,           setModel]           = useState('eleven_multilingual_v2')
-  const [settings,        setSettings]        = useState({ stability: 0.5, similarityBoost: 0.75, style: 0.0 })
+  const [settings,        setSettings]        = useState({ stability: 0.71, similarityBoost: 0.75, style: 0.0 })
   const [generating,      setGenerating]      = useState(false)
   const [genProgress,     setGenProgress]     = useState({ current: 0, total: 0, startTime: null })
   const [sceneStatuses,   setSceneStatuses]   = useState({})
@@ -42,38 +43,43 @@ export default function VoiceoverPanel({
   const panelRef       = useRef(null)
   const sceneRefs      = useRef({})
 
+  // ── Sync when parent opens panel (mic icon click) ────────────────────────
+  useEffect(() => { if (isOpen) setOpen(true) }, [isOpen])
+
+  const handleClose = () => { setOpen(false); onClose?.() }
+
   // ── ElevenLabs connection check ───────────────────────────────────────────
   useEffect(() => {
-    if (!isOpen || elStatus !== null) return
+    if (!open || elStatus !== null) return
     fetch(`${SERVER_URL}/api/voiceover/status`)
       .then(r => r.json())
       .then(data => setElStatus(data))
       .catch(() => setElStatus({ connected: false, error: 'Cannot reach server' }))
-  }, [isOpen]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load voices on first open ─────────────────────────────────────────────
   useEffect(() => {
-    if (!isOpen || voices.length > 0) return
+    if (!open || voices.length > 0) return
     setVoicesLoading(true)
     fetch(`${SERVER_URL}/api/voiceover/voices`)
       .then(r => r.json())
       .then(data => { setVoices(Array.isArray(data) ? data : []); setVoicesLoading(false) })
       .catch(() => setVoicesLoading(false))
-  }, [isOpen]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Scroll panel into view when opened ───────────────────────────────────
   useEffect(() => {
-    if (isOpen) {
+    if (open) {
       setTimeout(() => panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60)
     }
-  }, [isOpen])
+  }, [open])
 
   // ── Scroll to focused scene ───────────────────────────────────────────────
   useEffect(() => {
-    if (!isOpen || !focusSceneId) return
+    if (!open || !focusSceneId) return
     const el = sceneRefs.current[focusSceneId]
     if (el) setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 120)
-  }, [isOpen, focusSceneId])
+  }, [open, focusSceneId])
 
   // ── Stop audio on unmount ─────────────────────────────────────────────────
   useEffect(() => () => { activeAudioRef.current?.pause() }, [])
@@ -232,6 +238,16 @@ export default function VoiceoverPanel({
       })
     } finally {
       setGenerating(false)
+      // Auto-sync scene durations to audio length after every generation run.
+      // Uses functional updater so we read the freshest scenes state.
+      if (onScenesChange) {
+        onScenesChange(prev => prev.map(s => {
+          const duration = s.audio_duration
+          if (!duration) return s
+          const newDuration = Math.ceil(duration + 1.5)
+          return newDuration !== s.duration_seconds ? { ...s, duration_seconds: newDuration } : s
+        }))
+      }
     }
   }
 
@@ -268,11 +284,11 @@ export default function VoiceoverPanel({
 
       {/* ── Panel header ── */}
       <button
-        onClick={() => isOpen ? onClose?.() : null}
+        onClick={() => open ? handleClose() : setOpen(true)}
         style={{
           display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-          background: 'none', border: 'none', cursor: isOpen ? 'default' : 'pointer',
-          padding: 0, marginBottom: isOpen ? 20 : 0,
+          background: 'none', border: 'none', cursor: 'pointer',
+          padding: 0, marginBottom: open ? 20 : 0,
         }}
       >
         <Mic size={14} style={{ color: 'rgba(255,255,255,0.40)' }} />
@@ -284,14 +300,12 @@ export default function VoiceoverPanel({
             {doneCount} / {realScenes.length} ready
           </span>
         )}
-        {!isOpen && (
-          <span style={{ marginLeft: 'auto', color: 'rgba(255,255,255,0.25)', display: 'flex' }}>
-            <ChevronDown size={13} />
-          </span>
-        )}
+        <span style={{ marginLeft: 'auto', color: 'rgba(255,255,255,0.25)', display: 'flex' }}>
+          {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        </span>
       </button>
 
-      {isOpen && (
+      {open && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
           {/* ── ElevenLabs not connected warning ── */}

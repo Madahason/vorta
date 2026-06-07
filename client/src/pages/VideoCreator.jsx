@@ -596,11 +596,16 @@ export default function VideoCreator() {
 
   // ─── Voiceover — called by VoiceoverPanel when audio is ready ────────────
   const handleAudioGenerated = (sceneId, audioPath, audioDuration) => {
-    setScenes(prev => prev.map(s =>
-      s.scene_id === sceneId
-        ? { ...s, audio_path: audioPath, audio_duration: audioDuration, duration_seconds: Math.ceil(audioDuration + 0.5) }
-        : s
-    ))
+    setScenes(prev => prev.map(s => {
+      if (s.scene_id !== sceneId) return s
+      const base = { ...s, audio_path: audioPath, audio_duration: audioDuration }
+      // Only update duration_seconds when we have a valid duration — null means ffprobe
+      // was unavailable; preserve the existing scene duration rather than setting to 1s.
+      if (audioDuration && audioDuration > 0) {
+        base.duration_seconds = Math.ceil(audioDuration + 1.5)
+      }
+      return base
+    }))
   }
 
   // ─── Manual match for a single scene ─────────────────────────────────────
