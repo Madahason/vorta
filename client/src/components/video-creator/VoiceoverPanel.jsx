@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Mic, ChevronDown, ChevronUp, Play, Loader2, RefreshCw, CheckCircle } from 'lucide-react'
+import { Mic, ChevronDown, ChevronUp, Play, Pause, Loader2, RefreshCw, CheckCircle, AlertTriangle } from 'lucide-react'
 
 const SERVER_URL = 'http://localhost:3001'
 
@@ -9,51 +9,80 @@ const MODELS = [
   { id: 'eleven_v3',              name: 'v3 (Alpha)',         desc: 'Most expressive, best for documentary' },
 ]
 
-function StatusDot({ status }) {
-  if (status === 'generating') return <Loader2 size={10} className="animate-spin" style={{ color: '#3b82f6', flexShrink: 0 }} />
-  if (status === 'done')       return <span style={{ color: '#4ade80', fontSize: 10, flexShrink: 0 }}>●</span>
-  if (status === 'error')      return <span style={{ color: '#f87171', fontSize: 10, flexShrink: 0 }}>●</span>
-  return                              <span style={{ color: 'rgba(255,255,255,0.15)', fontSize: 10, flexShrink: 0 }}>●</span>
+const sectionLabel = {
+  fontSize: 11, color: 'rgba(255,255,255,0.35)',
+  textTransform: 'uppercase', letterSpacing: '0.08em',
+  marginBottom: 8,
 }
 
 export default function VoiceoverPanel({
   scenes,
   projectId,
-  selectedVoiceId,
-  onSelectedVoiceChange,
-  onScenesChange,
+  isOpen,
+  onClose,
+  focusSceneId,
+  onAudioGenerated,
   onVoiceoverStatusChange,
+  onScenesChange,
 }) {
-  const [open,          setOpen]          = useState(false)
-  const [voices,        setVoices]        = useState([])
-  const [voicesLoading, setVoicesLoading] = useState(false)
-  const [voiceSearch,   setVoiceSearch]   = useState('')
-  const [model,         setModel]         = useState('eleven_multilingual_v2')
-  const [settings,      setSettings]      = useState({ stability: 0.5, similarityBoost: 0.75, style: 0.0 })
-  const [generating,    setGenerating]    = useState(false)
-  const [sceneStatuses, setSceneStatuses] = useState({}) // { [scene_id]: { status, duration, error } }
-  const [previewLoading, setPreviewLoading] = useState({})
+  const [selectedVoiceId, setSelectedVoiceId] = useState(() => localStorage.getItem('vorta_selected_voice') || null)
+  const [voices,          setVoices]          = useState([])
+  const [voicesLoading,   setVoicesLoading]   = useState(false)
+  const [voiceSearch,     setVoiceSearch]     = useState('')
+  const [model,           setModel]           = useState('eleven_multilingual_v2')
+  const [settings,        setSettings]        = useState({ stability: 0.5, similarityBoost: 0.75, style: 0.0 })
+  const [generating,      setGenerating]      = useState(false)
+  const [genProgress,     setGenProgress]     = useState({ current: 0, total: 0, startTime: null })
+  const [sceneStatuses,   setSceneStatuses]   = useState({})
+  const [previewLoading,  setPreviewLoading]  = useState({})
+  const [playingSceneId,  setPlayingSceneId]  = useState(null)
+  const [elStatus,        setElStatus]        = useState(null) // null = not checked, object = result
 
   const activeAudioRef = useRef(null)
+  const panelRef       = useRef(null)
+  const sceneRefs      = useRef({})
 
-  // Load voices when panel first opens
+  // ── ElevenLabs connection check ───────────────────────────────────────────
   useEffect(() => {
-    if (!open || voices.length > 0) return
+    if (!isOpen || elStatus !== null) return
+    fetch(`${SERVER_URL}/api/voiceover/status`)
+      .then(r => r.json())
+      .then(data => setElStatus(data))
+      .catch(() => setElStatus({ connected: false, error: 'Cannot reach server' }))
+  }, [isOpen]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Load voices on first open ─────────────────────────────────────────────
+  useEffect(() => {
+    if (!isOpen || voices.length > 0) return
     setVoicesLoading(true)
     fetch(`${SERVER_URL}/api/voiceover/voices`)
       .then(r => r.json())
       .then(data => { setVoices(Array.isArray(data) ? data : []); setVoicesLoading(false) })
       .catch(() => setVoicesLoading(false))
-  }, [open])
+  }, [isOpen]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Scroll panel into view when opened ───────────────────────────────────
+  useEffect(() => {
+    if (isOpen) {
+      setTimeout(() => panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60)
+    }
+  }, [isOpen])
+
+  // ── Scroll to focused scene ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!isOpen || !focusSceneId) return
+    const el = sceneRefs.current[focusSceneId]
+    if (el) setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 120)
+  }, [isOpen, focusSceneId])
+
+  // ── Stop audio on unmount ─────────────────────────────────────────────────
   useEffect(() => () => { activeAudioRef.current?.pause() }, [])
 
-  // Scenes that can have voiceover (have script text)
   const realScenes = scenes.filter(s => s.script_excerpt?.trim())
 
   const doneCount = realScenes.filter(s => {
     const st = sceneStatuses[s.scene_id]
-    return st?.status === 'done' || s.audio_path
+    return st?.status === 'done' || !!s.audio_path
   }).length
 
   const totalNarrationSec = realScenes.reduce((sum, s) => {
@@ -61,14 +90,29 @@ export default function VoiceoverPanel({
     return sum + (st?.duration || s.audio_duration || 0)
   }, 0)
 
+  const estimatedRemaining = (() => {
+    if (!generating || !genProgress.startTime || genProgress.current === 0) return null
+    const elapsed = (Date.now() - genProgress.startTime) / 1000
+    const rate    = genProgress.current / elapsed
+    if (rate <= 0) return null
+    return Math.max(0, (genProgress.total - genProgress.current) / rate)
+  })()
+
+  const newToGenerate = realScenes.filter(s => {
+    const st = sceneStatuses[s.scene_id]
+    return !s.audio_path && st?.status !== 'done'
+  })
+
+  const canGenerate = !!selectedVoiceId && !!projectId && !generating && elStatus?.connected !== false
+
+  // ── Voice preview ─────────────────────────────────────────────────────────
   const handlePreview = async (voice) => {
     activeAudioRef.current?.pause()
     setPreviewLoading(p => ({ ...p, [voice.voice_id]: true }))
     try {
       const res  = await fetch(`${SERVER_URL}/api/voiceover/preview`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ voiceId: voice.voice_id }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ voiceId: voice.voice_id }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
@@ -83,19 +127,46 @@ export default function VoiceoverPanel({
   }
 
   const handleSelectVoice = (voiceId) => {
-    onSelectedVoiceChange(voiceId)
+    setSelectedVoiceId(voiceId)
     localStorage.setItem('vorta_selected_voice', voiceId)
   }
 
-  const handleGenerate = async (mode = 'full', targetSceneId = null) => {
+  // ── Play scene audio ──────────────────────────────────────────────────────
+  const handlePlayScene = (scene) => {
+    if (playingSceneId === scene.scene_id) {
+      activeAudioRef.current?.pause()
+      setPlayingSceneId(null)
+      return
+    }
+    activeAudioRef.current?.pause()
+    const src = scene.audio_path
+    if (!src) return
+    const fullSrc = src.startsWith('/') ? `${SERVER_URL}${src}` : src
+    const audio = new Audio(fullSrc)
+    audio.onended = () => setPlayingSceneId(null)
+    audio.play().catch(() => {})
+    activeAudioRef.current = audio
+    setPlayingSceneId(scene.scene_id)
+  }
+
+  // ── Generate voiceover ────────────────────────────────────────────────────
+  const handleGenerate = async (mode = 'new', scenesToProcess = null) => {
     if (!selectedVoiceId || !projectId) return
+
+    let toGenerate
+    if (scenesToProcess) {
+      toGenerate = scenesToProcess
+    } else if (mode === 'full') {
+      toGenerate = realScenes
+    } else {
+      toGenerate = newToGenerate
+    }
+    if (!toGenerate.length) return
+
     setGenerating(true)
+    const startTime = Date.now()
+    setGenProgress({ current: 0, total: toGenerate.length, startTime })
 
-    const toGenerate = mode === 'scene'
-      ? realScenes.filter(s => s.scene_id === targetSceneId)
-      : realScenes
-
-    // Mark all as generating
     const initStatuses = { ...sceneStatuses }
     toGenerate.forEach(s => { initStatuses[s.scene_id] = { status: 'generating', duration: null, error: null } })
     setSceneStatuses(initStatuses)
@@ -103,19 +174,16 @@ export default function VoiceoverPanel({
 
     try {
       const response = await fetch(`${SERVER_URL}/api/voiceover/generate`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           projectId,
           scenes:        toGenerate,
           voiceId:       selectedVoiceId,
           modelId:       model,
-          mode,
-          sceneId:       targetSceneId,
+          mode:          scenesToProcess ? 'scene' : 'full',
           voiceSettings: settings,
         }),
       })
-
       if (!response.body) throw new Error('No response stream')
 
       const reader  = response.body.getReader()
@@ -132,7 +200,6 @@ export default function VoiceoverPanel({
           if (!line.startsWith('data: ')) continue
           try {
             const event = JSON.parse(line.slice(6))
-
             if (event.type === 'scene_done') {
               const { scene_id, audio_path, duration } = event
               setSceneStatuses(prev => {
@@ -140,14 +207,8 @@ export default function VoiceoverPanel({
                 onVoiceoverStatusChange?.(next)
                 return next
               })
-              onScenesChange(prev => prev.map(s =>
-                s.scene_id !== scene_id ? s : {
-                  ...s,
-                  audio_path,
-                  audio_duration:   duration,
-                  duration_seconds: duration ? Math.ceil(duration + 0.5) : s.duration_seconds,
-                }
-              ))
+              setGenProgress(p => ({ ...p, current: p.current + 1 }))
+              onAudioGenerated?.(scene_id, audio_path, duration)
             } else if (event.type === 'scene_error') {
               const { scene_id, error } = event
               setSceneStatuses(prev => {
@@ -155,8 +216,9 @@ export default function VoiceoverPanel({
                 onVoiceoverStatusChange?.(next)
                 return next
               })
+              setGenProgress(p => ({ ...p, current: p.current + 1 }))
             }
-          } catch { /* skip malformed events */ }
+          } catch { /* skip malformed */ }
         }
       }
     } catch (err) {
@@ -173,26 +235,26 @@ export default function VoiceoverPanel({
     }
   }
 
-  // Sync all scene durations to audio_duration + 0.5s buffer
+  // ── Sync all scene durations to audio length ──────────────────────────────
   const handleSyncTimings = () => {
+    if (!onScenesChange) return
     let count = 0
     const updated = scenes.map(s => {
-      if (!s.audio_duration) return s
+      const duration = sceneStatuses[s.scene_id]?.duration ?? s.audio_duration
+      if (!duration) return s
       count++
-      return { ...s, duration_seconds: Math.ceil(s.audio_duration + 0.5) }
+      return { ...s, duration_seconds: Math.ceil(duration + 0.5) }
     })
     onScenesChange(() => updated)
-    const totalSec = updated.reduce((sum, s) => sum + (s.duration_seconds || 5), 0)
-    console.log(`[voiceover] synced ${count} scene durations — total: ${totalSec}s`)
+    console.log(`[voiceover] synced ${count} scene durations`)
   }
 
-  // Voice filter + group by category
+  // ── Voice filter + group by category ─────────────────────────────────────
   const filteredVoices = voices.filter(v => {
     const q = voiceSearch.toLowerCase()
     return !q || v.name.toLowerCase().includes(q) ||
       (v.labels && Object.values(v.labels).some(l => l?.toLowerCase().includes(q)))
   })
-
   const grouped = filteredVoices.reduce((acc, v) => {
     const cat = v.category || 'other'
     if (!acc[cat]) acc[cat] = []
@@ -200,18 +262,17 @@ export default function VoiceoverPanel({
     return acc
   }, {})
 
-  const canGenerate = !!selectedVoiceId && !!projectId && !generating
-
+  // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 20, marginTop: 8 }}>
+    <div ref={panelRef} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 20, marginTop: 8 }}>
 
       {/* ── Panel header ── */}
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={() => isOpen ? onClose?.() : null}
         style={{
           display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-          background: 'none', border: 'none', cursor: 'pointer',
-          padding: 0, marginBottom: open ? 20 : 0,
+          background: 'none', border: 'none', cursor: isOpen ? 'default' : 'pointer',
+          padding: 0, marginBottom: isOpen ? 20 : 0,
         }}
       >
         <Mic size={14} style={{ color: 'rgba(255,255,255,0.40)' }} />
@@ -223,17 +284,229 @@ export default function VoiceoverPanel({
             {doneCount} / {realScenes.length} ready
           </span>
         )}
-        <span style={{ marginLeft: 'auto', color: 'rgba(255,255,255,0.25)', display: 'flex' }}>
-          {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-        </span>
+        {!isOpen && (
+          <span style={{ marginLeft: 'auto', color: 'rgba(255,255,255,0.25)', display: 'flex' }}>
+            <ChevronDown size={13} />
+          </span>
+        )}
       </button>
 
-      {open && (
+      {isOpen && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+          {/* ── ElevenLabs not connected warning ── */}
+          {elStatus !== null && !elStatus.connected && (
+            <div style={{
+              padding: '10px 14px',
+              background: 'rgba(234,179,8,0.07)', border: '1px solid rgba(234,179,8,0.20)',
+              borderRadius: 8, fontSize: 12, color: 'rgba(234,179,8,0.80)',
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}>
+              <AlertTriangle size={13} style={{ flexShrink: 0 }} />
+              <span>
+                ElevenLabs not connected. Add your API key in Settings.
+                <a href="/settings" style={{ marginLeft: 8, color: '#3b82f6', textDecoration: 'none', fontSize: 11 }}>
+                  Go to Settings →
+                </a>
+              </span>
+            </div>
+          )}
+
+          {/* ── Scene rows ── */}
+          {realScenes.length > 0 && (
+            <div>
+              <div style={{ ...sectionLabel, marginBottom: 12 }}>Scenes</div>
+
+              {/* Generate All / Regenerate All */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => handleGenerate('new')}
+                  disabled={!canGenerate || newToGenerate.length === 0}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '7px 14px',
+                    background: (canGenerate && newToGenerate.length > 0) ? '#7c3aed' : 'rgba(255,255,255,0.05)',
+                    color: (canGenerate && newToGenerate.length > 0) ? '#fff' : 'rgba(255,255,255,0.25)',
+                    border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 500,
+                    cursor: (canGenerate && newToGenerate.length > 0) ? 'pointer' : 'not-allowed',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={e => { if (canGenerate && newToGenerate.length > 0) e.currentTarget.style.background = '#6d28d9' }}
+                  onMouseLeave={e => { if (canGenerate && newToGenerate.length > 0) e.currentTarget.style.background = '#7c3aed' }}
+                >
+                  {generating ? <Loader2 size={11} className="animate-spin" /> : <Mic size={11} />}
+                  {generating ? 'Generating…' : `Generate All (${newToGenerate.length})`}
+                </button>
+
+                {doneCount > 0 && (
+                  <button
+                    onClick={() => handleGenerate('full')}
+                    disabled={!canGenerate}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 5,
+                      padding: '7px 12px',
+                      background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.10)',
+                      borderRadius: 6, color: canGenerate ? 'rgba(255,255,255,0.50)' : 'rgba(255,255,255,0.20)',
+                      fontSize: 12, cursor: canGenerate ? 'pointer' : 'not-allowed',
+                    }}
+                    title="Regenerate audio for all scenes"
+                  >
+                    <RefreshCw size={11} /> Regenerate All
+                  </button>
+                )}
+
+                {doneCount > 0 && (
+                  <button
+                    onClick={handleSyncTimings}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 5,
+                      padding: '7px 12px',
+                      background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)',
+                      borderRadius: 6, color: 'rgba(255,255,255,0.40)', fontSize: 12, cursor: 'pointer',
+                    }}
+                    title="Set each scene's duration to its narration length + 0.5s buffer"
+                  >
+                    <RefreshCw size={11} /> Sync timings
+                  </button>
+                )}
+              </div>
+
+              {/* Progress bar */}
+              {generating && genProgress.total > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2, overflow: 'hidden', marginBottom: 5 }}>
+                    <div style={{
+                      height: '100%',
+                      width: `${Math.min(100, (genProgress.current / genProgress.total) * 100)}%`,
+                      background: '#7c3aed', borderRadius: 2, transition: 'width 0.3s ease',
+                    }} />
+                  </div>
+                  <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.30)', fontVariantNumeric: 'tabular-nums' }}>
+                    Generating scene {Math.min(genProgress.current + 1, genProgress.total)} of {genProgress.total}
+                    {estimatedRemaining !== null && ` — ${Math.ceil(estimatedRemaining)}s remaining (est.)`}
+                  </span>
+                </div>
+              )}
+
+              {/* Per-scene rows */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {realScenes.map(scene => {
+                  const st           = sceneStatuses[scene.scene_id]
+                  const status       = st?.status || (scene.audio_path ? 'done' : 'idle')
+                  const duration     = st?.duration ?? scene.audio_duration
+                  const isPlaying    = playingSceneId === scene.scene_id
+                  const isGenerating = status === 'generating'
+                  const hasAudio     = status === 'done' || !!scene.audio_path
+                  const isFocused    = focusSceneId === scene.scene_id
+
+                  return (
+                    <div
+                      key={scene.scene_id}
+                      ref={el => { sceneRefs.current[scene.scene_id] = el }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        padding: '6px 10px', borderRadius: 6,
+                        background: isFocused ? 'rgba(124,58,237,0.08)' : 'rgba(255,255,255,0.02)',
+                        border: `1px solid ${isFocused ? 'rgba(124,58,237,0.20)' : 'rgba(255,255,255,0.04)'}`,
+                        transition: 'background 0.2s, border-color 0.2s',
+                      }}
+                    >
+                      {/* Scene badge */}
+                      <span style={{
+                        fontSize: 9, fontFamily: 'monospace', fontWeight: 600,
+                        color: 'rgba(255,255,255,0.35)', flexShrink: 0,
+                        padding: '1px 5px', borderRadius: 3, background: 'rgba(255,255,255,0.05)',
+                      }}>
+                        {scene.scene_id}
+                      </span>
+
+                      {/* Excerpt */}
+                      <span style={{
+                        flex: 1, fontSize: 11, color: 'rgba(255,255,255,0.40)',
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>
+                        {scene.script_excerpt?.slice(0, 65)}
+                      </span>
+
+                      {/* Status actions */}
+                      {isGenerating && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                          <Loader2 size={11} className="animate-spin" style={{ color: '#3b82f6' }} />
+                          <span style={{ fontSize: 10, color: 'rgba(59,130,246,0.70)' }}>Generating…</span>
+                        </div>
+                      )}
+
+                      {!isGenerating && hasAudio && (
+                        <>
+                          <button
+                            onClick={() => handlePlayScene(scene)}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0,
+                              padding: '3px 8px', borderRadius: 4,
+                              background: isPlaying ? 'rgba(74,222,128,0.10)' : 'rgba(255,255,255,0.05)',
+                              border: `1px solid ${isPlaying ? 'rgba(74,222,128,0.20)' : 'rgba(255,255,255,0.10)'}`,
+                              color: isPlaying ? 'rgba(74,222,128,0.80)' : 'rgba(255,255,255,0.45)',
+                              fontSize: 10, cursor: 'pointer',
+                            }}
+                          >
+                            {isPlaying ? <Pause size={9} /> : <Play size={9} />}
+                            {duration ? `${duration.toFixed(1)}s` : '●'}
+                          </button>
+                          <button
+                            onClick={() => handleGenerate('scene', [scene])}
+                            disabled={generating}
+                            style={{
+                              padding: '3px 6px', borderRadius: 4, flexShrink: 0,
+                              background: 'none', border: '1px solid rgba(255,255,255,0.08)',
+                              color: generating ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.30)',
+                              cursor: generating ? 'not-allowed' : 'pointer',
+                              display: 'flex', alignItems: 'center',
+                            }}
+                            title="Regenerate audio for this scene"
+                          >
+                            <RefreshCw size={9} />
+                          </button>
+                        </>
+                      )}
+
+                      {!isGenerating && !hasAudio && (
+                        <button
+                          onClick={() => handleGenerate('scene', [scene])}
+                          disabled={!canGenerate}
+                          style={{
+                            padding: '3px 10px', borderRadius: 4, flexShrink: 0, fontSize: 10,
+                            background: canGenerate ? 'rgba(124,58,237,0.15)' : 'rgba(255,255,255,0.03)',
+                            border: `1px solid ${canGenerate ? 'rgba(124,58,237,0.25)' : 'rgba(255,255,255,0.06)'}`,
+                            color: canGenerate ? 'rgba(124,58,237,0.90)' : 'rgba(255,255,255,0.20)',
+                            cursor: canGenerate ? 'pointer' : 'not-allowed',
+                          }}
+                        >
+                          Generate
+                        </button>
+                      )}
+
+                      {status === 'error' && !isGenerating && (
+                        <span style={{ fontSize: 9, color: 'rgba(248,113,113,0.60)', flexShrink: 0 }} title={st?.error}>
+                          error
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+
+              {doneCount > 0 && totalNarrationSec > 0 && (
+                <p style={{ fontSize: 11, color: 'rgba(74,222,128,0.55)', margin: '10px 0 0' }}>
+                  {doneCount === realScenes.length ? '✓ All' : `${doneCount} / ${realScenes.length}`} voiceovers ready
+                  {totalNarrationSec > 0 && ` — ${Math.floor(totalNarrationSec / 60)}m ${Math.round(totalNarrationSec % 60)}s total`}
+                </p>
+              )}
+            </div>
+          )}
 
           {/* ── Voice selector ── */}
           <div>
-            <div style={sectionLabelStyle}>Voice</div>
+            <div style={sectionLabel}>Voice</div>
             <input
               type="text"
               placeholder="Search voices…"
@@ -256,7 +529,7 @@ export default function VoiceoverPanel({
                 No voices found — check your ElevenLabs API key in Settings.
               </p>
             )}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 300, overflowY: 'auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 260, overflowY: 'auto' }}>
               {Object.entries(grouped).map(([category, catVoices]) => (
                 <div key={category}>
                   <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', textTransform: 'uppercase', letterSpacing: '0.10em', padding: '5px 0 3px' }}>
@@ -311,7 +584,7 @@ export default function VoiceoverPanel({
 
           {/* ── Model selector ── */}
           <div>
-            <div style={sectionLabelStyle}>Model</div>
+            <div style={sectionLabel}>Model</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {MODELS.map(m => (
                 <label
@@ -325,8 +598,7 @@ export default function VoiceoverPanel({
                 >
                   <input
                     type="radio" name="voiceover-model" value={m.id}
-                    checked={model === m.id}
-                    onChange={() => setModel(m.id)}
+                    checked={model === m.id} onChange={() => setModel(m.id)}
                     style={{ accentColor: '#3b82f6' }}
                   />
                   <div>
@@ -340,12 +612,12 @@ export default function VoiceoverPanel({
 
           {/* ── Voice settings ── */}
           <div>
-            <div style={sectionLabelStyle}>Voice Settings</div>
+            <div style={sectionLabel}>Voice Settings</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {[
-                { key: 'stability',       label: 'Stability',           tip: 'Lower = more expressive · Higher = more consistent' },
-                { key: 'similarityBoost', label: 'Similarity Boost',    tip: 'How closely to match the original voice sample' },
-                { key: 'style',           label: 'Style Exaggeration',  tip: 'Amplify the voice style — increase cautiously' },
+                { key: 'stability',       label: 'Stability',          tip: 'Lower = more expressive · Higher = more consistent' },
+                { key: 'similarityBoost', label: 'Similarity Boost',   tip: 'How closely to match the original voice sample' },
+                { key: 'style',           label: 'Style Exaggeration', tip: 'Amplify the voice style — increase cautiously' },
               ].map(({ key, label, tip }) => (
                 <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -367,100 +639,15 @@ export default function VoiceoverPanel({
             </div>
           </div>
 
-          {/* ── Scene status list ── */}
-          {realScenes.length > 0 && (
-            <div>
-              <div style={sectionLabelStyle}>Scene Status</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {realScenes.map(scene => {
-                  const st       = sceneStatuses[scene.scene_id]
-                  const status   = st?.status || (scene.audio_path ? 'done' : 'idle')
-                  const duration = st?.duration ?? scene.audio_duration
-                  return (
-                    <div key={scene.scene_id} style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '5px 8px', borderRadius: 5,
-                      background: 'rgba(255,255,255,0.02)',
-                    }}>
-                      <StatusDot status={status} />
-                      <span style={{ flex: 1, fontSize: 11, color: 'rgba(255,255,255,0.35)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {scene.script_excerpt?.slice(0, 55)}…
-                      </span>
-                      {duration > 0 && (
-                        <span style={{ fontSize: 10, color: 'rgba(74,222,128,0.60)', flexShrink: 0 }}>
-                          {duration.toFixed(1)}s
-                        </span>
-                      )}
-                      {status === 'error' && (
-                        <button
-                          onClick={() => handleGenerate('scene', scene.scene_id)}
-                          disabled={generating}
-                          style={{ fontSize: 10, color: 'rgba(239,68,68,0.60)', background: 'none', border: 'none', cursor: 'pointer', flexShrink: 0 }}
-                        >
-                          Retry
-                        </button>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* ── Generation controls ── */}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => handleGenerate('full')}
-              disabled={!canGenerate}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 7,
-                padding: '8px 16px',
-                background: canGenerate ? '#7c3aed' : 'rgba(255,255,255,0.06)',
-                color: canGenerate ? '#fff' : 'rgba(255,255,255,0.25)',
-                border: 'none', borderRadius: 7,
-                fontSize: 12, fontWeight: 500,
-                cursor: canGenerate ? 'pointer' : 'not-allowed',
-                transition: 'background 0.15s',
-              }}
-              onMouseEnter={e => { if (canGenerate) e.currentTarget.style.background = '#6d28d9' }}
-              onMouseLeave={e => { if (canGenerate) e.currentTarget.style.background = '#7c3aed' }}
-            >
-              {generating ? <Loader2 size={12} className="animate-spin" /> : <Mic size={12} />}
-              {generating ? 'Generating…' : 'Generate all voiceovers'}
-            </button>
-
-            {doneCount > 0 && (
-              <button
-                onClick={handleSyncTimings}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  padding: '8px 12px',
-                  background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.10)',
-                  borderRadius: 7, color: 'rgba(255,255,255,0.50)',
-                  fontSize: 12, cursor: 'pointer',
-                }}
-                title="Set each scene's duration to its narration length + 0.5s buffer"
-              >
-                <RefreshCw size={11} /> Sync timings
-              </button>
-            )}
-          </div>
-
+          {/* ── Hints ── */}
           {!selectedVoiceId && (
-            <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', marginTop: -12, margin: 0 }}>
+            <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', margin: 0 }}>
               Select a voice above to enable generation
             </p>
           )}
           {!projectId && (
-            <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', marginTop: -12, margin: 0 }}>
+            <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', margin: 0 }}>
               Run analysis first to create a project
-            </p>
-          )}
-
-          {doneCount > 0 && (
-            <p style={{ fontSize: 11, color: 'rgba(74,222,128,0.55)', margin: 0 }}>
-              {doneCount === realScenes.length ? '✓ All' : `${doneCount} /  ${realScenes.length}`} voiceovers ready
-              {totalNarrationSec > 0 && ` — ${Math.floor(totalNarrationSec / 60)}m ${Math.round(totalNarrationSec % 60)}s total`}
             </p>
           )}
 
@@ -468,10 +655,4 @@ export default function VoiceoverPanel({
       )}
     </div>
   )
-}
-
-const sectionLabelStyle = {
-  fontSize: 11, color: 'rgba(255,255,255,0.35)',
-  textTransform: 'uppercase', letterSpacing: '0.08em',
-  marginBottom: 8,
 }

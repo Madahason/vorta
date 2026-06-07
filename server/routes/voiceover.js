@@ -14,15 +14,24 @@ router.get('/status', async (req, res) => {
     if (!process.env.ELEVENLABS_API_KEY) {
       return res.json({ connected: false, error: 'ELEVENLABS_API_KEY not set in .env' })
     }
-    const client       = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY })
-    const subscription = await client.user.getSubscription()
-    res.json({
-      connected:           true,
-      plan:                subscription.tier,
-      charactersUsed:      subscription.characterCount,
-      charactersLimit:     subscription.characterLimit,
-      charactersRemaining: subscription.characterLimit - subscription.characterCount,
-    })
+    const client = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY })
+
+    // Try subscription info first; fall back to a voices ping if permission denied
+    let connected = false, plan = null, charactersUsed = null, charactersLimit = null, charactersRemaining = null
+    try {
+      const subscription = await client.user.subscription.get()
+      plan                = subscription.tier
+      charactersUsed      = subscription.characterCount
+      charactersLimit     = subscription.characterLimit
+      charactersRemaining = subscription.characterLimit - subscription.characterCount
+      connected           = true
+    } catch {
+      // user_read permission may be missing — verify connectivity via voices endpoint instead
+      await client.voices.getAll()
+      connected = true
+    }
+
+    res.json({ connected, plan, charactersUsed, charactersLimit, charactersRemaining })
   } catch (err) {
     res.json({ connected: false, error: err.message })
   }

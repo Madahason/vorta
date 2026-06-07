@@ -141,9 +141,13 @@ export default function VideoCreator() {
     return clean
   })
 
-  // Voiceover — selected voice (persisted to localStorage separately, not in LS map)
-  const [selectedVoiceId,   setSelectedVoiceId]   = useState(() => localStorage.getItem('vorta_selected_voice') || null)
-  const [voiceoverStatuses, setVoiceoverStatuses] = useState({})
+  // Voiceover
+  const [voiceoverStatuses,   setVoiceoverStatuses]   = useState({})
+  const [voiceoverPanelOpen,  setVoiceoverPanelOpen]  = useState(false)
+  const [voiceoverFocusScene, setVoiceoverFocusScene] = useState(null)
+
+  // Generate progress — { done, total }
+  const [generateProgress, setGenerateProgress] = useState({ done: 0, total: 0 })
 
   // Selected clips — { [scene_id]: clip_object }
   const [selectedClips, setSelectedClips] = useState(() => {
@@ -353,21 +357,17 @@ export default function VideoCreator() {
     }
   }
 
-  // ─── Generate ─────────────────────────────────────────────────────────────
-  const handleGenerate = async () => {
-    setIsGenerating(true)
-    setGenerateError(null)
-    setGenerateDone(false)
+  // ─── Generate — image scenes (promise-based for parallel coordination) ───
+  const generateImageScenes = async (imageScenes, tick) => {
+    if (!imageScenes.length) return
 
-    const initialStatuses = {}
-    scenes.forEach(s => {
-      initialStatuses[s.scene_id] = {
-        status:     s.shot_type === 'image' ? 'pending' : 'skipped',
-        image_path: null,
-        error:      null,
-      }
+    setSceneStatuses(prev => {
+      const next = { ...prev }
+      imageScenes.forEach(s => {
+        next[s.scene_id] = { status: 'pending', image_path: null, error: null }
+      })
+      return next
     })
-    setSceneStatuses(initialStatuses)
 
     try {
       const res  = await fetch('/api/generate', {
@@ -380,11 +380,73 @@ export default function VideoCreator() {
 
       const pid = data.projectId
       setProjectId(pid)
-      subscribeToProgress(pid)
+
+      await new Promise(resolve => {
+        eventSourceRef.current?.close()
+        const es = new EventSource(`${SERVER_URL}/api/generate/progress/${pid}`)
+        eventSourceRef.current = es
+        es.onmessage = (e) => {
+          const event = JSON.parse(e.data)
+          if (event.type === 'update') {
+            setSceneStatuses(prev => ({
+              ...prev,
+              [event.scene_id]: {
+                status:     event.status,
+                image_path: event.image_path || prev[event.scene_id]?.image_path || null,
+                error:      event.error || null,
+              },
+            }))
+            if (event.status === 'done' || event.status === 'failed') tick()
+          } else if (event.type === 'done') {
+            es.close()
+            resolve()
+          }
+        }
+        es.onerror = () => { es.close(); resolve() }
+      })
     } catch (err) {
       setGenerateError(err.message)
-      setIsGenerating(false)
+      imageScenes.forEach(() => tick())
     }
+  }
+
+  // ─── Generate — motion graphic components (sequential to avoid rate limits)
+  const generateMotionGraphicsScenes = async (motionScenes, tick) => {
+    for (const scene of motionScenes) {
+      await handleBuildComponent(scene)
+      tick()
+    }
+  }
+
+  // ─── Generate — real footage clip matching ────────────────────────────────
+  const generateRealFootageMatches = async (realScenes, tick) => {
+    if (!realScenes.length) return
+    await matchClipsForScenes(realScenes)
+    realScenes.forEach(() => tick())
+  }
+
+  // ─── Unified Generate Assets ──────────────────────────────────────────────
+  const handleGenerateAll = async () => {
+    const imageScenes   = scenes.filter(s => s.shot_type === 'image')
+    const motionScenes  = scenes.filter(s => s.shot_type === 'motion_graphic' && !s.motion_component)
+    const realScenes    = scenes.filter(s => s.shot_type === 'real_footage'   && !clipMatches[s.scene_id]?.matches?.length)
+    const total = imageScenes.length + motionScenes.length + realScenes.length
+
+    setIsGenerating(true)
+    setGenerateError(null)
+    setGenerateDone(false)
+    setGenerateProgress({ done: 0, total })
+
+    const tick = () => setGenerateProgress(p => ({ ...p, done: p.done + 1 }))
+
+    await Promise.allSettled([
+      generateImageScenes(imageScenes, tick),
+      generateMotionGraphicsScenes(motionScenes, tick),
+      generateRealFootageMatches(realScenes, tick),
+    ])
+
+    setIsGenerating(false)
+    setGenerateDone(true)
   }
 
   // ─── Build motion component ───────────────────────────────────────────────
@@ -526,46 +588,19 @@ export default function VideoCreator() {
     setSelectedClips(prev => { const n = { ...prev }; delete n[scene_id]; return n })
   }
 
-  // ─── Voiceover — regenerate single scene ─────────────────────────────────
-  const handleRegenerateVoiceover = async (scene) => {
-    if (!selectedVoiceId || !projectId) return
-    setVoiceoverStatuses(prev => ({ ...prev, [scene.scene_id]: { status: 'generating', duration: null } }))
-    try {
-      const res = await fetch(`${SERVER_URL}/api/voiceover/generate`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          projectId, scenes: [scene], voiceId: selectedVoiceId, mode: 'scene', sceneId: scene.scene_id,
-        }),
-      })
-      if (!res.body) throw new Error('No response stream')
-      const reader = res.body.getReader(), decoder = new TextDecoder()
-      let buf = ''
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += decoder.decode(value, { stream: true })
-        const lines = buf.split('\n')
-        buf = lines.pop()
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          try {
-            const ev = JSON.parse(line.slice(6))
-            if (ev.type === 'scene_done') {
-              setVoiceoverStatuses(prev => ({ ...prev, [ev.scene_id]: { status: 'done', duration: ev.duration } }))
-              setScenes(prev => prev.map(s => s.scene_id !== ev.scene_id ? s : {
-                ...s, audio_path: ev.audio_path, audio_duration: ev.duration,
-                duration_seconds: ev.duration ? Math.ceil(ev.duration + 0.5) : s.duration_seconds,
-              }))
-            } else if (ev.type === 'scene_error') {
-              setVoiceoverStatuses(prev => ({ ...prev, [ev.scene_id]: { status: 'error', duration: null } }))
-            }
-          } catch { /* skip malformed */ }
-        }
-      }
-    } catch {
-      setVoiceoverStatuses(prev => ({ ...prev, [scene.scene_id]: { status: 'error', duration: null } }))
-    }
+  // ─── Voiceover — open panel + focus scene ────────────────────────────────
+  const handleOpenVoiceover = (scene) => {
+    setVoiceoverPanelOpen(true)
+    setVoiceoverFocusScene(scene.scene_id)
+  }
+
+  // ─── Voiceover — called by VoiceoverPanel when audio is ready ────────────
+  const handleAudioGenerated = (sceneId, audioPath, audioDuration) => {
+    setScenes(prev => prev.map(s =>
+      s.scene_id === sceneId
+        ? { ...s, audio_path: audioPath, audio_duration: audioDuration, duration_seconds: Math.ceil(audioDuration + 0.5) }
+        : s
+    ))
   }
 
   // ─── Manual match for a single scene ─────────────────────────────────────
@@ -589,7 +624,15 @@ export default function VideoCreator() {
     }
   }
 
-  const imageSceneCount = scenes.filter(s => s.shot_type === 'image').length
+  const imageSceneCount   = scenes.filter(s => s.shot_type === 'image').length
+  const motionSceneCount  = scenes.filter(s => s.shot_type === 'motion_graphic').length
+  const footageSceneCount = scenes.filter(s => s.shot_type === 'real_footage').length
+
+  const breakdownParts = [
+    imageSceneCount   > 0 && `${imageSceneCount} image${imageSceneCount   !== 1 ? 's' : ''}`,
+    motionSceneCount  > 0 && `${motionSceneCount} motion graphic${motionSceneCount  !== 1 ? 's' : ''}`,
+    footageSceneCount > 0 && `${footageSceneCount} footage match${footageSceneCount !== 1 ? 'es' : ''}`,
+  ].filter(Boolean)
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
@@ -696,27 +739,34 @@ export default function VideoCreator() {
 
         {hasAnalyzed && scenes.length > 0 && (
           <>
-            {/* Generate button */}
-            <div className="flex items-center gap-4">
-              <button
-                onClick={handleGenerate}
-                disabled={isGenerating || imageSceneCount === 0}
-                className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
-              >
-                {isGenerating
-                  ? <Loader2 size={14} className="animate-spin" />
-                  : <Zap size={14} />
-                }
-                {isGenerating
-                  ? 'Generating…'
-                  : generateDone
-                    ? `Regenerate All (${imageSceneCount})`
-                    : `Generate Images (${imageSceneCount})`
-                }
-              </button>
-              {generateDone && (
-                <span className="text-xs text-white/30">
-                  Generation complete — images saved to project assets
+            {/* Generate Assets button */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={handleGenerateAll}
+                  disabled={isGenerating || scenes.length === 0}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
+                >
+                  {isGenerating
+                    ? <Loader2 size={14} className="animate-spin" />
+                    : <Zap size={14} />
+                  }
+                  {isGenerating
+                    ? `Generating… (${generateProgress.done} / ${generateProgress.total})`
+                    : generateDone
+                      ? 'Regenerate All'
+                      : `Generate Assets (${scenes.length})`
+                  }
+                </button>
+                {generateDone && !isGenerating && (
+                  <span className="text-xs text-white/30">
+                    Generation complete
+                  </span>
+                )}
+              </div>
+              {!isGenerating && breakdownParts.length > 0 && (
+                <span className="text-xs text-white/25 ml-1">
+                  {breakdownParts.join(' · ')}
                 </span>
               )}
             </div>
@@ -763,16 +813,18 @@ export default function VideoCreator() {
               onOpenLibrary={() => setShowClipLibrary(true)}
               onPreviewScene={setPreviewScene}
               voiceoverStatuses={voiceoverStatuses}
-              onRegenerateVoiceover={handleRegenerateVoiceover}
+              onOpenVoiceover={handleOpenVoiceover}
             />
 
             <VoiceoverPanel
               scenes={scenes}
               projectId={projectId}
-              selectedVoiceId={selectedVoiceId}
-              onSelectedVoiceChange={setSelectedVoiceId}
-              onScenesChange={setScenes}
+              isOpen={voiceoverPanelOpen}
+              onClose={() => { setVoiceoverPanelOpen(false); setVoiceoverFocusScene(null) }}
+              focusSceneId={voiceoverFocusScene}
+              onAudioGenerated={handleAudioGenerated}
               onVoiceoverStatusChange={setVoiceoverStatuses}
+              onScenesChange={setScenes}
             />
 
             <div id="vorta-export-panel">
