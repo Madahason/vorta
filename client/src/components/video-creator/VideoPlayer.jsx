@@ -3,7 +3,8 @@ import { Documentary, calculateDocumentaryDuration } from '@remotion-composition
 
 // imagePaths: { [scene_id]: url_string } — derived from sceneStatuses in VideoCreator
 // selectedClips: { [scene_id]: clip_object }
-export function VideoPlayer({ scenes, imagePaths, selectedClips, globalSettings, style }) {
+// audioSpecs: [{ scene_id, music, ambient, sting }] — from AudioPanel
+export function VideoPlayer({ scenes, imagePaths, selectedClips, globalSettings, audioSpecs, style }) {
   if (!scenes?.length) return null
 
   const fps         = 30
@@ -17,6 +18,7 @@ export function VideoPlayer({ scenes, imagePaths, selectedClips, globalSettings,
         imagePaths:    imagePaths    || {},
         selectedClips: selectedClips || {},
         globalSettings: globalSettings || {},
+        audioSpecs:    audioSpecs    || [],
       }}
       durationInFrames={totalFrames}
       fps={fps}

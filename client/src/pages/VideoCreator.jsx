@@ -5,6 +5,7 @@ import SceneGrid from '../components/video-creator/SceneGrid'
 import { VideoPlayer } from '../components/video-creator/VideoPlayer'
 import ClipLibrary from '../components/video-creator/ClipLibrary'
 import VoiceoverPanel from '../components/video-creator/VoiceoverPanel'
+import AudioPanel from '../components/video-creator/AudioPanel'
 import ExportPanel from '../components/video-creator/ExportPanel'
 
 const SERVER_URL = 'http://localhost:3001'
@@ -145,6 +146,10 @@ export default function VideoCreator() {
   const [voiceoverStatuses,   setVoiceoverStatuses]   = useState({})
   const [voiceoverPanelOpen,  setVoiceoverPanelOpen]  = useState(false)
   const [voiceoverFocusScene, setVoiceoverFocusScene] = useState(null)
+
+  // Audio specs (music + ambient + stings per scene)
+  const [audioSpecs,   setAudioSpecs]   = useState([])
+  const [audioVolumes, setAudioVolumes] = useState({ music: 0.12, ambient: 0.06, sting: 0.45 })
 
   // Generate progress — { done, total }
   const [generateProgress, setGenerateProgress] = useState({ done: 0, total: 0 })
@@ -793,6 +798,7 @@ export default function VideoCreator() {
                   imagePaths={imagePaths}
                   selectedClips={selectedClips}
                   globalSettings={globalSettings}
+                  audioSpecs={audioSpecs}
                 />
               </div>
             )}
@@ -832,12 +838,22 @@ export default function VideoCreator() {
               onScenesChange={setScenes}
             />
 
+            <AudioPanel
+              scenes={scenes}
+              projectId={projectId}
+              audioSpecs={audioSpecs}
+              onAudioSpecsChange={setAudioSpecs}
+              audioVolumes={audioVolumes}
+              onVolumesChange={setAudioVolumes}
+            />
+
             <div id="vorta-export-panel">
               <ExportPanel
                 scenes={scenes}
                 sceneStatuses={sceneStatuses}
                 selectedClips={selectedClips}
                 voiceoverStatuses={voiceoverStatuses}
+                audioSpecs={audioSpecs}
                 projectId={projectId}
               />
             </div>
@@ -925,6 +941,7 @@ export default function VideoCreator() {
             imagePaths={imagePaths}
             selectedClips={selectedClips}
             globalSettings={globalSettings}
+            audioSpecs={audioSpecs}
             style={{ width: '100%', aspectRatio: '16 / 9', display: 'block' }}
           />
         )}

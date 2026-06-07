@@ -1234,6 +1234,86 @@ VoiceoverPanel → POST /api/voiceover/generate (SSE)
 - 300ms silence padding added to start and end of every audio file (non-fatal if ffmpeg unavailable)
 - Future Claude analyses will produce TTS-safe excerpts (complete thoughts, proper punctuation, 15-60 words)
 
+### Fix 11 — Background music and sound effects system ✅ Complete
+
+**Goal:** Add three-layer documentary audio architecture (background music + ambient loops + transition stings) rendered in Remotion alongside per-scene narration.
+
+**Architecture:**
+```
+AudioPanel → POST /api/audio/build-specs[?download=1]
+→ server/services/audioMixer.js → buildProjectAudioSpecs / buildProjectAudioSpecsCached
+→ server/services/pixabayMusic.js → Pixabay Music API → library/music/
+→ server/services/ambientLibrary.js → library/ambient/ (user-supplied Freesound CC0 files)
+→ server/config/transitionStings.js → library/stings/ (user-supplied sting files)
+→ audioSpecs[] passed to VideoPlayer → Documentary.jsx → 4 audio layers per scene
+```
+
+**Volume levels:**
+| Layer | Volume | Notes |
+|-------|--------|-------|
+| Narration (`scene.audio_path`) | 100% | Per-scene ElevenLabs audio |
+| Background music | 12% | Loops for full scene duration |
+| Ambient sound | 6% | Barely audible texture, loops |
+| Transition sting | 45% | Plays once at scene boundary (skipped on scene 1) |
+
+**Files added:**
+- `server/config/musicMoods.js` — `moodMap` (9 moods: tense/triumphant/somber/neutral/dramatic/reflective/anticipatory/institutional/intimate) each with `musicQuery`, `musicTags`, `ambientCategory`, `transitionSting`. `categoryAmbientMap` mapping 11 categories to ambient keys.
+- `server/config/transitionStings.js` — 6 stings: `low_drone`, `rise_sting`, `neutral_sting`, `impact_sting`, `soft_fade`, `whoosh`. Files go in `library/stings/`.
+- `server/services/pixabayMusic.js` — `searchMusic(query, mood)`, `downloadTrack(track)`, `getMusicForMood(mood, query)` (cache-first), `getCachedTrackForMood(mood)` (sync, no API). Uses native `fetch` (Node 18+). Downloads to `library/music/`, indexes in `library/musicIndex.json`.
+- `server/services/ambientLibrary.js` — 13 ambient categories, each with `filename`, `description`, `freesoundQuery`, CC0 Freesound search URL. `getAmbientForCategory`, `getAmbientForMood`, `listAmbientFiles`.
+- `server/services/audioMixer.js` — `VOLUME_LEVELS` constant, `buildProjectAudioSpecs` (async, downloads unique moods via `Promise.allSettled`), `buildProjectAudioSpecsCached` (sync, local cache only).
+- `server/routes/audio.js` — rewritten to add: `GET /status` (Pixabay key, cached tracks, ambient/sting availability), `POST /build-specs[?download=1]`, `POST /search-music`, `POST /download-music`, `GET /ambient-list`. Keeps existing `POST /upload` and `GET /info`.
+- `client/src/components/video-creator/AudioPanel.jsx` (NEW) — collapsible panel with: Pixabay connection status, Build Music Plan button (cached or download from Pixabay), per-mood download buttons, per-scene music assignment list, global volume sliders (music/ambient/sting), ambient availability grid (13 categories), sting list with preview buttons, ambient download guide modal (Freesound links per file).
+- `remotion/src/compositions/Documentary.jsx` — added `audioSpecs` prop + `audioSpecMap` lookup. Four audio layers per scene: narration (existing with 300ms fade-out), background music (12%, cross-fade 15 frames, loop), ambient (6%, loop), sting (45%, index > 0 only).
+- `client/src/components/video-creator/VideoPlayer.jsx` — added `audioSpecs` prop, passed into `inputProps`.
+- `client/src/pages/VideoCreator.jsx` — imported `AudioPanel`, added `audioSpecs` and `audioVolumes` state, rendered `<AudioPanel>` between VoiceoverPanel and ExportPanel, passed `audioSpecs` to all VideoPlayer instances.
+- `client/src/components/video-creator/ExportPanel.jsx` — added `audioSpecs` prop, 3 new checklist rows: Background music, Ambient sound, Transition stings.
+
+**Directory structure:**
+```
+library/
+  music/           ← Pixabay tracks auto-downloaded (MP3)
+  musicIndex.json  ← mood → { filename, duration, title, source }
+  ambient/         ← User supplies Freesound CC0 files (13 expected filenames)
+  stings/          ← User supplies sting files (6 expected filenames)
+```
+
+**Ambient files (user must supply from Freesound.org CC0):**
+All 13 expected at `library/ambient/`: `trading_floor.mp3`, `office_ambient.mp3`, `city_traffic.mp3`, `data_center_hum.mp3`, `courtroom_silence.mp3`, `factory_floor.mp3`, `crowd_murmur.mp3`, `government_hall.mp3`, `tension_drone.mp3`, `soft_ambient.mp3`, `press_room.mp3`, `airport_ambient.mp3`, `industrial_hum.mp3`. The AudioPanel download guide shows per-file Freesound search URLs.
+
+**Sting files (user must supply):**
+All 6 expected at `library/stings/`: `sting_low_drone.mp3`, `sting_rise.mp3`, `sting_neutral.mp3`, `sting_impact.mp3`, `sting_soft_fade.mp3`, `sting_whoosh.mp3`.
+
+**Pixabay Music API:**
+- Endpoint: `https://pixabay.com/api/music/`
+- `PIXABAY_API_KEY` in `.env` — free key available at pixabay.com/api/docs/
+- Music is free to use commercially, no attribution required under Pixabay license
+- `previewURL` field is the full downloadable track URL
+- Native `fetch` (Node 18+) used for both API calls and binary downloads — no extra library
+
+**Key implementation details:**
+- `buildProjectAudioSpecs` deduplicates moods before downloading: N scenes with the same mood = 1 Pixabay download
+- `buildProjectAudioSpecsCached` is instant — uses only what's already in `library/musicIndex.json`
+- `GET /library` static route in Express already covers `library/music/`, `library/ambient/`, `library/stings/` — no additional static registrations needed
+- Ambient/sting files are never auto-downloaded — users source them and place them manually; `AudioPanel` shows download guide
+- Remotion `loop` prop on `<Audio>` handles music/ambient looping in the browser Player preview
+
+**Testing checklist:**
+- [ ] `PIXABAY_API_KEY` in `.env` — AudioPanel shows "Pixabay API connected" status
+- [ ] "Build Music Plan (cached)" builds specs instantly using cached tracks
+- [ ] "Download from Pixabay" fetches tracks for each unique mood in the project
+- [ ] Per-mood download button downloads and caches a single mood track
+- [ ] Volume sliders (music/ambient/sting) update in real time
+- [ ] Ambient availability grid shows correct file presence
+- [ ] Sting preview buttons play the sting file
+- [ ] Download guide modal opens with Freesound links for all 13 ambient categories
+- [ ] Placing an ambient file in `library/ambient/` causes it to show as available on next status poll
+- [ ] `audioSpecs` passed to VideoPlayer — music audible in browser Player preview when a track is cached
+- [ ] ExportPanel checklist shows correct music/ambient/sting counts
+- [ ] Rendered MP4 contains background music at correct volume relative to narration
+
+---
+
 ### Build order recommendation
 1. **Fix 1 first** — it's a bug fix, takes 1–2 hours maximum.
 2. **Fix 2 second** — audio is the single biggest missing feature for client work.
