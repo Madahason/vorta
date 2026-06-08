@@ -526,12 +526,8 @@ export default function VoiceoverPanel({
               placeholder="Search voices…"
               value={voiceSearch}
               onChange={e => setVoiceSearch(e.target.value)}
-              style={{
-                width: '100%', marginBottom: 8, boxSizing: 'border-box',
-                background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.10)',
-                borderRadius: 6, color: 'rgba(255,255,255,0.70)',
-                fontSize: 12, padding: '6px 10px', outline: 'none',
-              }}
+              className="vorta-input"
+              style={{ marginBottom: 8, fontSize: 12 }}
             />
             {voicesLoading && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'rgba(255,255,255,0.30)', fontSize: 12 }}>
@@ -644,7 +640,7 @@ export default function VoiceoverPanel({
                     type="range" min={0} max={1} step={0.01}
                     value={settings[key]}
                     onChange={e => setSettings(p => ({ ...p, [key]: parseFloat(e.target.value) }))}
-                    style={{ width: '100%', accentColor: '#8b5cf6' }}
+                    className="vorta-slider"
                     title={tip}
                   />
                   <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.20)' }}>{tip}</span>

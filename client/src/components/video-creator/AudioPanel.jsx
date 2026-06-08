@@ -1,17 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
-import { Music, ChevronDown, ChevronUp, Loader2, Play, RefreshCw, AlertTriangle, CheckCircle, ExternalLink, X } from 'lucide-react'
+import { Music, Volume2, ChevronDown, ChevronUp, Loader2, Play, RefreshCw, AlertTriangle, CheckCircle, ExternalLink, X, Zap } from 'lucide-react'
 
 const SERVER_URL = 'http://localhost:3001'
 
-const sectionLabel = {
-  fontSize: 11, color: 'rgba(255,255,255,0.35)',
-  textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10,
-}
-
 const dot = (available) => (
   <span style={{
-    display: 'inline-block', width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-    background: available ? 'rgba(74,222,128,0.70)' : 'rgba(255,255,255,0.15)',
+    display: 'inline-block', width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+    background: available ? '#4ade80' : 'rgba(255,255,255,0.15)',
   }} />
 )
 
@@ -23,7 +18,7 @@ export default function AudioPanel({
   audioVolumes,
   onVolumesChange,
 }) {
-  const [open,              setOpen]              = useState(false)
+  const [open,              setOpen]              = useState(true)
   const [audioStatus,       setAudioStatus]       = useState(null)
   const [building,          setBuilding]          = useState(false)
   const [buildError,        setBuildError]        = useState(null)
@@ -33,41 +28,41 @@ export default function AudioPanel({
 
   const activeAudioRef = useRef(null)
   const panelRef       = useRef(null)
+  const didMountRef    = useRef(false)
 
   // ── Load status on first open ────────────────────────────────────────────────
   useEffect(() => {
     if (!open || audioStatus !== null) return
+    fetchStatus()
+  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fetchStatus = () =>
     fetch(`${SERVER_URL}/api/audio/status`)
       .then(r => r.json())
       .then(setAudioStatus)
       .catch(() => setAudioStatus({ error: 'Cannot reach server' }))
-  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Scroll into view on open ─────────────────────────────────────────────────
+  // ── Scroll only on manual open ───────────────────────────────────────────────
   useEffect(() => {
+    if (!didMountRef.current) { didMountRef.current = true; return }
     if (open) setTimeout(() => panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60)
   }, [open])
 
-  // ── Build Music Plan ─────────────────────────────────────────────────────────
-  const handleBuildPlan = async (downloadFromPixabay = false) => {
+  // ── Primary generate action ──────────────────────────────────────────────────
+  const handleGenerate = async () => {
     if (!scenes?.length) return
     setBuilding(true)
     setBuildError(null)
-
+    const download = !!audioStatus?.pixabayKeySet
     try {
-      const url = `${SERVER_URL}/api/audio/build-specs${downloadFromPixabay ? '?download=1' : ''}`
-      const res  = await fetch(url, {
+      const res  = await fetch(`${SERVER_URL}/api/audio/build-specs${download ? '?download=1' : ''}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scenes, projectId }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Build failed')
-
       onAudioSpecsChange?.(data.specs)
-
-      // Refresh status after build
-      const statusRes = await fetch(`${SERVER_URL}/api/audio/status`)
-      setAudioStatus(await statusRes.json())
+      await fetchStatus()
     } catch (err) {
       setBuildError(err.message)
     } finally {
@@ -75,19 +70,17 @@ export default function AudioPanel({
     }
   }
 
-  // ── Download music for a specific mood ───────────────────────────────────────
-  const handleDownloadMood = async (mood, query) => {
+  // ── Per-mood download ────────────────────────────────────────────────────────
+  const handleDownloadMood = async (mood) => {
     setDownloadingMoods(p => ({ ...p, [mood]: true }))
     try {
       const res  = await fetch(`${SERVER_URL}/api/audio/download-music`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mood, query }),
+        body: JSON.stringify({ mood }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      // Refresh status
-      const statusRes = await fetch(`${SERVER_URL}/api/audio/status`)
-      setAudioStatus(await statusRes.json())
+      await fetchStatus()
     } catch (err) {
       console.error('[audio] download mood failed:', err.message)
     } finally {
@@ -95,7 +88,7 @@ export default function AudioPanel({
     }
   }
 
-  // ── Play a sting preview ─────────────────────────────────────────────────────
+  // ── Sting preview ────────────────────────────────────────────────────────────
   const handlePlaySting = (sting) => {
     if (playingKey === sting.key) {
       activeAudioRef.current?.pause()
@@ -115,14 +108,14 @@ export default function AudioPanel({
   // ── Derived stats ────────────────────────────────────────────────────────────
   const musicCount   = audioSpecs?.filter(s => s.music).length  || 0
   const ambientCount = audioSpecs?.filter(s => s.ambient).length || 0
-  const stingCount   = audioStatus?.stingsAvailable             || 0
-  const ambientAvail = audioStatus?.ambientAvailable             || 0
-
-  // Unique moods in the current scene set
-  const sceneMoods = [...new Set((scenes || []).map(s => s.mood || 'neutral'))]
+  const stingCount   = audioStatus?.stingsAvailable || 0
+  const ambientAvail = audioStatus?.ambientAvailable || 0
+  const sceneMoods   = [...new Set((scenes || []).map(s => s.mood || 'neutral'))]
+  const hasSpecs     = audioSpecs?.length > 0
+  const canGenerate  = !building && !!scenes?.length
 
   return (
-    <div ref={panelRef} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 20, marginTop: 8 }}>
+    <div ref={panelRef} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 24, marginTop: 8 }}>
 
       {/* ── Panel header ── */}
       <button
@@ -133,15 +126,17 @@ export default function AudioPanel({
           padding: 0, marginBottom: open ? 20 : 0,
         }}
       >
-        <Music size={14} style={{ color: 'rgba(255,255,255,0.40)' }} />
-        <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.50)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        <Volume2 size={14} style={{ color: 'rgba(255,255,255,0.40)' }} />
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.70)' }}>
           Background Music & Sound Effects
         </span>
-        {(musicCount > 0 || ambientCount > 0) && (
-          <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 10, background: 'rgba(74,222,128,0.10)', color: 'rgba(74,222,128,0.70)', border: '1px solid rgba(74,222,128,0.15)' }}>
-            {musicCount > 0 && `${musicCount} music`}
-            {musicCount > 0 && ambientCount > 0 && ' · '}
-            {ambientCount > 0 && `${ambientCount} ambient`}
+        {hasSpecs && (
+          <span style={{
+            fontSize: 10, padding: '1px 8px', borderRadius: 10,
+            background: 'rgba(74,222,128,0.10)', color: '#4ade80',
+            border: '1px solid rgba(74,222,128,0.20)',
+          }}>
+            {musicCount} music · {ambientCount} ambient
           </span>
         )}
         <span style={{ marginLeft: 'auto', color: 'rgba(255,255,255,0.25)', display: 'flex' }}>
@@ -152,287 +147,269 @@ export default function AudioPanel({
       {open && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
 
-          {/* ── Pixabay connection status ── */}
-          {audioStatus !== null && (
-            audioStatus.pixabayKeySet ? (
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 7,
-                fontSize: 11, color: 'rgba(74,222,128,0.65)',
-              }}>
-                <CheckCircle size={11} />
-                Pixabay API connected — {audioStatus.cachedMusicTracks} track{audioStatus.cachedMusicTracks !== 1 ? 's' : ''} cached
-              </div>
-            ) : (
-              <div style={{
-                padding: '10px 14px',
-                background: 'rgba(234,179,8,0.07)', border: '1px solid rgba(234,179,8,0.20)',
-                borderRadius: 8, fontSize: 12, color: 'rgba(234,179,8,0.80)',
-                display: 'flex', alignItems: 'flex-start', gap: 8,
-              }}>
-                <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
-                <span>
-                  Add your Pixabay API key to <code style={{ fontSize: 10 }}>.env</code> to enable music download.
-                  Get a free key at pixabay.com/api/docs/ — music search is free with no attribution required.
-                </span>
-              </div>
-            )
-          )}
-
-          {/* ── Music Plan section ── */}
+          {/* ── Primary generate button ── */}
           <div>
-            <div style={sectionLabel}>Background Music</div>
+            <button
+              onClick={handleGenerate}
+              disabled={!canGenerate}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                width: '100%', padding: '11px 0',
+                background: canGenerate ? '#7c3aed' : 'rgba(255,255,255,0.05)',
+                color: canGenerate ? '#fff' : 'rgba(255,255,255,0.25)',
+                border: 'none', borderRadius: 8,
+                fontSize: 14, fontWeight: 600,
+                cursor: canGenerate ? 'pointer' : 'not-allowed',
+                transition: 'background 0.15s',
+              }}
+              onMouseEnter={e => { if (canGenerate) e.currentTarget.style.background = '#6d28d9' }}
+              onMouseLeave={e => { if (canGenerate) e.currentTarget.style.background = '#7c3aed' }}
+            >
+              {building
+                ? <><Loader2 size={15} className="animate-spin" /> Generating music plan…</>
+                : <><Zap size={15} /> Generate Music & Sounds</>
+              }
+            </button>
 
-            <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
-              <button
-                onClick={() => handleBuildPlan(false)}
-                disabled={building || !scenes?.length}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px',
-                  background: (!building && scenes?.length) ? '#7c3aed' : 'rgba(255,255,255,0.05)',
-                  color: (!building && scenes?.length) ? '#fff' : 'rgba(255,255,255,0.25)',
-                  border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 500,
-                  cursor: (!building && scenes?.length) ? 'pointer' : 'not-allowed',
-                }}
-              >
-                {building ? <Loader2 size={11} className="animate-spin" /> : <Music size={11} />}
-                {building ? 'Building plan…' : 'Build Music Plan (cached)'}
-              </button>
-
-              {audioStatus?.pixabayKeySet && (
-                <button
-                  onClick={() => handleBuildPlan(true)}
-                  disabled={building || !scenes?.length}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px',
-                    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.10)',
-                    borderRadius: 6, color: (!building && scenes?.length) ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.20)',
-                    fontSize: 12, cursor: (!building && scenes?.length) ? 'pointer' : 'not-allowed',
-                  }}
-                  title="Search Pixabay and download tracks for any uncached moods"
-                >
-                  <RefreshCw size={11} /> Download from Pixabay
-                </button>
-              )}
-            </div>
+            {/* Sub-label describing what the button does */}
+            {!building && (
+              <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', marginTop: 6, textAlign: 'center' }}>
+                {audioStatus?.pixabayKeySet
+                  ? 'Downloads background music from Pixabay + assigns ambient & stings per scene'
+                  : 'Assigns ambient loops and stings from local library (add PIXABAY_API_KEY to .env for music download)'
+                }
+              </p>
+            )}
 
             {buildError && (
-              <p style={{ fontSize: 11, color: '#f87171', marginBottom: 10 }}>{buildError}</p>
+              <p style={{ fontSize: 11, color: '#f87171', marginTop: 8 }}>{buildError}</p>
             )}
 
-            {/* Volume slider */}
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.40)' }}>Music volume</span>
-                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', fontVariantNumeric: 'tabular-nums' }}>
-                  {Math.round((audioVolumes?.music ?? 0.12) * 100)}%
-                </span>
-              </div>
-              <input type="range" min={0} max={0.30} step={0.01}
-                value={audioVolumes?.music ?? 0.12}
-                onChange={e => onVolumesChange?.(p => ({ ...p, music: parseFloat(e.target.value) }))}
-                style={{ width: '100%', accentColor: '#7c3aed' }}
-              />
-              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.20)' }}>Recommended: 10–15% under narration</span>
-            </label>
-
-            {/* Per-mood download buttons */}
-            {sceneMoods.length > 0 && audioStatus?.pixabayKeySet && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', marginBottom: 4 }}>
-                  Moods in this project
-                </div>
-                {sceneMoods.map(mood => {
-                  const cached = audioStatus?.musicIndex?.[mood]
-                  return (
-                    <div key={mood} style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '5px 8px', borderRadius: 5,
-                      background: 'rgba(255,255,255,0.025)',
-                      border: '1px solid rgba(255,255,255,0.05)',
-                    }}>
-                      {dot(!!cached)}
-                      <span style={{ flex: 1, fontSize: 11, color: 'rgba(255,255,255,0.50)' }}>{mood}</span>
-                      {cached ? (
-                        <span style={{ fontSize: 10, color: 'rgba(74,222,128,0.55)' }}>
-                          {cached.duration ? `${cached.duration}s` : 'cached'}
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => handleDownloadMood(mood)}
-                          disabled={downloadingMoods[mood]}
-                          style={{
-                            display: 'flex', alignItems: 'center', gap: 4, padding: '2px 8px',
-                            background: 'rgba(124,58,237,0.12)', border: '1px solid rgba(124,58,237,0.25)',
-                            borderRadius: 4, color: 'rgba(167,139,250,0.80)', fontSize: 10, cursor: 'pointer',
-                          }}
-                        >
-                          {downloadingMoods[mood] ? <Loader2 size={9} className="animate-spin" /> : null}
-                          Download
-                        </button>
-                      )}
-                    </div>
-                  )
-                })}
+            {/* Pixabay key missing warning */}
+            {audioStatus !== null && !audioStatus.pixabayKeySet && (
+              <div style={{
+                display: 'flex', gap: 8, alignItems: 'flex-start',
+                marginTop: 10, padding: '9px 12px',
+                background: 'rgba(234,179,8,0.06)', border: '1px solid rgba(234,179,8,0.18)',
+                borderRadius: 7, fontSize: 11, color: 'rgba(234,179,8,0.75)',
+              }}>
+                <AlertTriangle size={12} style={{ flexShrink: 0, marginTop: 1 }} />
+                No Pixabay key — add <code style={{ margin: '0 3px', fontSize: 10 }}>PIXABAY_API_KEY=your_key</code> to <code style={{ fontSize: 10 }}>.env</code> for background music. Free key at pixabay.com/api
               </div>
             )}
 
-            {/* Per-scene music assignments */}
-            {audioSpecs?.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', marginBottom: 6 }}>
-                  Scene assignments
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 180, overflowY: 'auto' }}>
-                  {audioSpecs.map(spec => (
-                    <div key={spec.scene_id} style={{
-                      display: 'flex', alignItems: 'center', gap: 7,
-                      padding: '4px 8px', borderRadius: 4, background: 'rgba(255,255,255,0.02)',
-                    }}>
-                      <span style={{ fontSize: 9, fontFamily: 'monospace', color: 'rgba(255,255,255,0.30)', flexShrink: 0 }}>
-                        {spec.scene_id}
-                      </span>
-                      {dot(!!spec.music)}
-                      <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.40)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {spec.music
-                          ? spec.music.filename || 'music cached'
-                          : <span style={{ color: 'rgba(255,255,255,0.18)' }}>no music</span>
-                        }
-                      </span>
-                      {dot(!!spec.ambient)}
-                      {dot(!!spec.sting)}
-                    </div>
-                  ))}
-                </div>
+            {/* Success summary */}
+            {hasSpecs && !building && (
+              <div style={{
+                display: 'flex', gap: 16, marginTop: 12,
+                padding: '9px 12px',
+                background: 'rgba(74,222,128,0.05)', border: '1px solid rgba(74,222,128,0.12)',
+                borderRadius: 7,
+              }}>
+                {[
+                  { label: 'Music', val: `${musicCount}/${scenes?.length}`, ok: musicCount > 0 },
+                  { label: 'Ambient', val: `${ambientCount}/${scenes?.length}`, ok: ambientCount > 0 },
+                  { label: 'Stings', val: `${stingCount}/6 files`, ok: stingCount > 0 },
+                ].map(item => (
+                  <div key={item.label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.30)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                      {item.label}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 500, color: item.ok ? '#4ade80' : 'rgba(255,255,255,0.35)' }}>
+                      {item.val}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
           </div>
 
-          {/* ── Ambient Sound section ── */}
+          {/* ── Per-mood tracks ── */}
+          {audioStatus?.pixabayKeySet && sceneMoods.length > 0 && (
+            <div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+                Music tracks by mood
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {sceneMoods.map(mood => {
+                  const cached = audioStatus?.musicIndex?.[mood]
+                  return (
+                    <div key={mood} style={{
+                      display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px',
+                      background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 6,
+                    }}>
+                      {dot(!!cached)}
+                      <span style={{ flex: 1, fontSize: 12, color: 'rgba(255,255,255,0.55)', textTransform: 'capitalize' }}>{mood}</span>
+                      {cached
+                        ? <span style={{ fontSize: 10, color: 'rgba(74,222,128,0.60)' }}>{cached.duration ? `${cached.duration}s` : 'cached'}</span>
+                        : (
+                          <button
+                            onClick={() => handleDownloadMood(mood)}
+                            disabled={downloadingMoods[mood]}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 4, padding: '2px 10px',
+                              background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.30)',
+                              borderRadius: 4, color: 'rgba(167,139,250,0.85)', fontSize: 11, cursor: 'pointer',
+                            }}
+                          >
+                            {downloadingMoods[mood] ? <Loader2 size={9} className="animate-spin" /> : <Music size={9} />}
+                            Download
+                          </button>
+                        )
+                      }
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ── Scene assignments (after generate) ── */}
+          {hasSpecs && (
+            <div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+                Scene assignments
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 160, overflowY: 'auto' }}>
+                {audioSpecs.map(spec => (
+                  <div key={spec.scene_id} style={{
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px',
+                    borderRadius: 4, background: 'rgba(255,255,255,0.02)',
+                  }}>
+                    <span style={{ fontSize: 9, fontFamily: 'monospace', color: 'rgba(255,255,255,0.25)', flexShrink: 0, width: 28 }}>
+                      {spec.scene_id}
+                    </span>
+                    <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.40)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {spec.music ? spec.music.filename || 'music' : <span style={{ color: 'rgba(255,255,255,0.15)' }}>no music</span>}
+                    </span>
+                    <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                      <span title="music">{dot(!!spec.music)}</span>
+                      <span title="ambient">{dot(!!spec.ambient)}</span>
+                      <span title="sting">{dot(!!spec.sting)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── Volume controls ── */}
+          <div>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
+              Volume levels
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {[
+                { key: 'music',   label: 'Background music', max: 0.30, step: 0.01, color: '#7c3aed', hint: '10–15% recommended' },
+                { key: 'ambient', label: 'Ambient sound',     max: 0.15, step: 0.005, color: '#0ea5e9', hint: '4–8% recommended' },
+                { key: 'sting',   label: 'Transition stings', max: 0.80, step: 0.01, color: '#f59e0b', hint: '40–50% recommended' },
+              ].map(({ key, label, max, step, color, hint }) => (
+                <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                    <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>{label}</span>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                      <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.20)' }}>{hint}</span>
+                      <span style={{ fontSize: 12, fontWeight: 500, color: 'rgba(255,255,255,0.60)', fontVariantNumeric: 'tabular-nums', minWidth: 32, textAlign: 'right' }}>
+                        {Math.round((audioVolumes?.[key] ?? (key === 'music' ? 0.12 : key === 'ambient' ? 0.06 : 0.45)) * 100)}%
+                      </span>
+                    </div>
+                  </div>
+                  <input type="range" min={0} max={max} step={step}
+                    value={audioVolumes?.[key] ?? (key === 'music' ? 0.12 : key === 'ambient' ? 0.06 : 0.45)}
+                    onChange={e => onVolumesChange?.(p => ({ ...p, [key]: parseFloat(e.target.value) }))}
+                    className="vorta-slider"
+                    style={{ accentColor: color }}
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* ── Ambient sound status ── */}
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <span style={sectionLabel}>Ambient Sound</span>
-              <button
-                onClick={() => setShowDownloadGuide(true)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 4, fontSize: 10,
-                  color: 'rgba(255,255,255,0.30)', background: 'none', border: 'none', cursor: 'pointer',
-                }}
-              >
-                Download guide <ExternalLink size={9} />
-              </button>
-            </div>
-
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.40)' }}>Ambient volume</span>
-                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', fontVariantNumeric: 'tabular-nums' }}>
-                  {Math.round((audioVolumes?.ambient ?? 0.06) * 100)}%
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                Ambient loops
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>
+                  {ambientAvail} / {audioStatus?.ambientTotal || 13} files
                 </span>
+                <button
+                  onClick={() => setShowDownloadGuide(true)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 3, fontSize: 10,
+                    color: '#3b82f6', background: 'none', border: 'none', cursor: 'pointer',
+                  }}
+                >
+                  Download guide <ExternalLink size={9} />
+                </button>
               </div>
-              <input type="range" min={0} max={0.15} step={0.005}
-                value={audioVolumes?.ambient ?? 0.06}
-                onChange={e => onVolumesChange?.(p => ({ ...p, ambient: parseFloat(e.target.value) }))}
-                style={{ width: '100%', accentColor: '#0ea5e9' }}
-              />
-              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.20)' }}>Barely audible texture — recommended: 4–8%</span>
-            </label>
-
-            <div style={{
-              display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px',
-            }}>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px' }}>
               {(audioStatus?.ambientDetails || []).map(file => (
-                <div key={file.key} style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  padding: '4px 0',
-                }}>
+                <div key={file.key} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}>
                   {dot(file.available)}
-                  <span style={{ fontSize: 10, color: file.available ? 'rgba(255,255,255,0.50)' : 'rgba(255,255,255,0.22)' }}>
+                  <span style={{ fontSize: 10, color: file.available ? 'rgba(255,255,255,0.50)' : 'rgba(255,255,255,0.20)' }}>
                     {file.key.replace(/_/g, ' ')}
                   </span>
                 </div>
               ))}
             </div>
-
-            {ambientAvail < (audioStatus?.ambientTotal || 13) && (
-              <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', marginTop: 8 }}>
-                {ambientAvail} / {audioStatus?.ambientTotal} ambient files present.{' '}
-                <button onClick={() => setShowDownloadGuide(true)}
-                  style={{ color: '#3b82f6', background: 'none', border: 'none', cursor: 'pointer', fontSize: 10 }}>
-                  Download guide →
-                </button>
-              </p>
-            )}
           </div>
 
-          {/* ── Transition Stings section ── */}
+          {/* ── Transition stings ── */}
           <div>
-            <div style={{ ...sectionLabel, marginBottom: 10 }}>Transition Stings</div>
-
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.40)' }}>Sting volume</span>
-                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', fontVariantNumeric: 'tabular-nums' }}>
-                  {Math.round((audioVolumes?.sting ?? 0.45) * 100)}%
-                </span>
-              </div>
-              <input type="range" min={0} max={0.80} step={0.01}
-                value={audioVolumes?.sting ?? 0.45}
-                onChange={e => onVolumesChange?.(p => ({ ...p, sting: parseFloat(e.target.value) }))}
-                style={{ width: '100%', accentColor: '#f59e0b' }}
-              />
-            </label>
-
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                Transition stings
+              </span>
+              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>
+                {stingCount} / 6 files
+              </span>
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {(audioStatus?.stings || []).map(sting => (
                 <div key={sting.key} style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '5px 8px', borderRadius: 5,
-                  background: 'rgba(255,255,255,0.025)',
-                  border: '1px solid rgba(255,255,255,0.05)',
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px',
+                  background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 6,
                 }}>
                   {dot(sting.available)}
-                  <span style={{ flex: 1, fontSize: 11, color: sting.available ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.22)' }}>
+                  <span style={{ flex: 1, fontSize: 11, color: sting.available ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.20)' }}>
                     {sting.description}
                   </span>
-                  {sting.available && (
-                    <button
-                      onClick={() => handlePlaySting(sting)}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 3, padding: '2px 8px',
-                        background: playingKey === sting.key ? 'rgba(74,222,128,0.10)' : 'rgba(255,255,255,0.05)',
-                        border: `1px solid ${playingKey === sting.key ? 'rgba(74,222,128,0.20)' : 'rgba(255,255,255,0.08)'}`,
-                        borderRadius: 4, color: playingKey === sting.key ? 'rgba(74,222,128,0.80)' : 'rgba(255,255,255,0.40)',
-                        fontSize: 10, cursor: 'pointer',
-                      }}
-                    >
-                      <Play size={8} /> Preview
-                    </button>
-                  )}
-                  {!sting.available && (
-                    <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.20)' }}>missing</span>
-                  )}
+                  {sting.available
+                    ? (
+                      <button
+                        onClick={() => handlePlaySting(sting)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 3, padding: '2px 9px',
+                          background: playingKey === sting.key ? 'rgba(74,222,128,0.10)' : 'rgba(255,255,255,0.05)',
+                          border: `1px solid ${playingKey === sting.key ? 'rgba(74,222,128,0.25)' : 'rgba(255,255,255,0.08)'}`,
+                          borderRadius: 4,
+                          color: playingKey === sting.key ? '#4ade80' : 'rgba(255,255,255,0.40)',
+                          fontSize: 10, cursor: 'pointer',
+                        }}
+                      >
+                        <Play size={8} /> {playingKey === sting.key ? 'Playing…' : 'Preview'}
+                      </button>
+                    )
+                    : <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.18)' }}>missing</span>
+                  }
                 </div>
               ))}
             </div>
-
             {stingCount < 6 && (
-              <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', marginTop: 8 }}>
-                Place sting files in <code style={{ fontSize: 9 }}>vorta/library/stings/</code>
+              <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.22)', marginTop: 8 }}>
+                Place sting .mp3 files in <code style={{ fontSize: 9, background: 'rgba(255,255,255,0.06)', padding: '0 4px', borderRadius: 3 }}>library/stings/</code>
               </p>
             )}
-          </div>
-
-          {/* ── Status summary ── */}
-          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.22)', lineHeight: 1.7 }}>
-            {musicCount}/{scenes?.length || 0} scenes with music ·{' '}
-            {ambientCount}/{scenes?.length || 0} with ambient ·{' '}
-            {stingCount}/6 stings ready
           </div>
 
         </div>
       )}
 
-      {/* ── Download guide modal ── */}
+      {/* ── Ambient download guide modal ── */}
       {showDownloadGuide && (
         <div
           onClick={e => { if (e.target === e.currentTarget) setShowDownloadGuide(false) }}
@@ -452,7 +429,7 @@ export default function AudioPanel({
               padding: '14px 20px', borderBottom: '1px solid rgba(255,255,255,0.07)',
             }}>
               <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.80)' }}>
-                Ambient Sound Download Guide
+                Ambient Loop Download Guide
               </span>
               <button onClick={() => setShowDownloadGuide(false)}
                 style={{ color: 'rgba(255,255,255,0.40)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex' }}>
@@ -465,35 +442,27 @@ export default function AudioPanel({
                 Download CC0-licensed ambient loops from Freesound.org and save them to{' '}
                 <code style={{ fontSize: 10, background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: 3 }}>
                   vorta/library/ambient/
-                </code>.
-                Any CC0 or Attribution file works — download as MP3.
+                </code>. Rename each file exactly as shown below.
               </p>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {(audioStatus?.ambientDetails || []).map(file => (
                   <div key={file.key} style={{
                     padding: '10px 12px', borderRadius: 6,
                     background: file.available ? 'rgba(74,222,128,0.04)' : 'rgba(255,255,255,0.025)',
-                    border: `1px solid ${file.available ? 'rgba(74,222,128,0.12)' : 'rgba(255,255,255,0.06)'}`,
+                    border: `1px solid ${file.available ? 'rgba(74,222,128,0.15)' : 'rgba(255,255,255,0.06)'}`,
                   }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
                       {dot(file.available)}
-                      <span style={{ fontSize: 12, fontWeight: 500, color: 'rgba(255,255,255,0.70)' }}>
-                        {file.filename}
-                      </span>
-                      {file.available && <span style={{ fontSize: 9, color: 'rgba(74,222,128,0.60)' }}>✓ present</span>}
+                      <code style={{ fontSize: 11, color: 'rgba(255,255,255,0.70)' }}>{file.filename}</code>
+                      {file.available && <span style={{ fontSize: 9, color: '#4ade80' }}>✓ present</span>}
                     </div>
-                    <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginBottom: 6 }}>
+                    <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginBottom: file.available ? 0 : 6 }}>
                       {file.description}
                     </p>
                     {!file.available && (
-                      <a
-                        href={file.freesoundUrl}
-                        target="_blank" rel="noreferrer"
-                        style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 4,
-                          fontSize: 10, color: '#3b82f6', textDecoration: 'none',
-                        }}
+                      <a href={file.freesoundUrl} target="_blank" rel="noreferrer"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: '#3b82f6', textDecoration: 'none' }}
                       >
                         Search Freesound.org <ExternalLink size={9} />
                       </a>
@@ -502,15 +471,10 @@ export default function AudioPanel({
                 ))}
               </div>
 
-              <div style={{
-                marginTop: 16, padding: '10px 12px',
-                background: 'rgba(255,255,255,0.025)', borderRadius: 6,
-              }}>
-                <p style={{ fontSize: 11, fontWeight: 500, color: 'rgba(255,255,255,0.55)', marginBottom: 4 }}>
-                  Transition stings (6 files)
-                </p>
+              <div style={{ marginTop: 14, padding: '10px 14px', background: 'rgba(255,255,255,0.025)', borderRadius: 6 }}>
+                <p style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.55)', marginBottom: 4 }}>Transition stings (6 files)</p>
                 <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', lineHeight: 1.5 }}>
-                  Place in <code style={{ fontSize: 9 }}>vorta/library/stings/</code>. Filename must match exactly:
+                  Place in <code style={{ fontSize: 9 }}>vorta/library/stings/</code> with exact filenames:<br />
                   sting_low_drone.mp3 · sting_rise.mp3 · sting_neutral.mp3 · sting_impact.mp3 · sting_soft_fade.mp3 · sting_whoosh.mp3
                 </p>
               </div>

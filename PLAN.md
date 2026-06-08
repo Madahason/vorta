@@ -1527,3 +1527,48 @@ Script analysis → Claude generates overlays[] per scene (status: "suggested")
 - [ ] BackgroundOverlay gradients display full-frame
 - [ ] LowerThird accent position (left/right/bottom) works correctly
 - [ ] Position offsets (X/Y, offsetX/Y) correctly place overlays
+
+---
+
+### Fix 15 — Global form contrast system ✅ Complete
+
+**Goal:** Every input, select, textarea, slider, and button is clearly visible and distinguishable from its background throughout the entire app.
+
+**Root cause of low contrast:**
+- Inputs used `bg-white/[0.04]` (4% opacity) — nearly invisible on dark panel backgrounds
+- Borders used `border-white/[0.08]` (8% opacity) — extremely faint
+- Labels used `text-white/40` (40% opacity) — hard to read
+- Placeholder text at 20% opacity — almost invisible
+- Select elements on dark backgrounds used `#1a1a1a` — no visual contrast with page background
+
+**Solution — design system tokens in `forms.css`:**
+- Input bg: `rgba(255,255,255,0.08)` (2× previous)
+- Input border: `rgba(255,255,255,0.18)` (2.25× previous)
+- Input text: `rgba(255,255,255,0.88)` (high contrast)
+- Placeholder: `rgba(255,255,255,0.35)` (was 0.20)
+- Label: `rgba(255,255,255,0.58)` (was 0.40)
+- Select bg: `#1f1f1f` (explicit dark rather than transparent)
+
+**Files created:**
+- `client/src/styles/forms.css` — CSS custom properties + `.vorta-input`, `.vorta-select`, `.vorta-textarea`, `.vorta-textarea-mono`, `.vorta-slider`, `.vorta-color`, `.vorta-label`, `.vorta-field`, `.vorta-field-row`, `.vorta-btn` + variants (`-primary`, `-blue`, `-white`, `-secondary`, `-ghost`, `-danger`), `.vorta-hint`, `.vorta-panel`, `.vorta-panel-dark`
+- `client/src/components/shared/FormFields.jsx` — reusable React wrappers: `Field`, `FieldRow`, `TextInput`, `NumberInput`, `SearchInput`, `SelectInput`, `TextareaInput`, `SliderInput`, `ColorInput`, `Button`, `FormCard`
+
+**Files modified:**
+- `client/src/main.jsx` — imported `./styles/forms.css`
+- `client/src/components/video-creator/ScriptInput.jsx` — replaced all Tailwind form classes with `vorta-*` design system classes
+- `client/src/pages/Settings.jsx` — replaced `inputCls`/`selectCls`/`labelCls` string constants with `vorta-input`/`vorta-select`/`vorta-label`; updated sliders to `vorta-slider`
+- `client/src/components/video-creator/VoiceoverPanel.jsx` — updated voice search input and voice setting sliders
+- `client/src/components/video-creator/AudioPanel.jsx` — updated volume sliders
+- `client/src/components/video-creator/ExportPanel.jsx` — updated audio settings sliders
+- `client/src/components/video-creator/ClipLibrary.jsx` — updated `inp`/`lbl` style constants; updated search input wrappers in My Library and source tabs
+- `client/src/components/video-creator/OverlayStudio.jsx` — updated `label11` and `inputBase` constants
+
+**Testing checklist:**
+- [ ] ScriptInput: title/niche/style/narrator fields have clearly visible borders and readable labels
+- [ ] ScriptInput: textarea placeholder text readable against dark background
+- [ ] Settings: all dropdowns (grade, motion, transition, overlay templates) show text clearly
+- [ ] Settings: sliders thumb matches purple accent color
+- [ ] VoiceoverPanel: voice search input visible; slider thumbs purple
+- [ ] AudioPanel: volume sliders thumb visible and interactive
+- [ ] ClipLibrary: search bars have visible borders; add/upload form fields readable
+- [ ] OverlayStudio: all editor fields (text, color, select, sliders) clearly visible

@@ -1,0 +1,261 @@
+/* ── Vorta Design System — Form Controls ─────────────────────────────────────── */
+
+:root {
+  --input-bg:           rgba(255, 255, 255, 0.08);
+  --input-bg-hover:     rgba(255, 255, 255, 0.11);
+  --input-border:       rgba(255, 255, 255, 0.18);
+  --input-border-focus: rgba(255, 255, 255, 0.36);
+  --input-text:         rgba(255, 255, 255, 0.88);
+  --input-placeholder:  rgba(255, 255, 255, 0.35);
+  --label-color:        rgba(255, 255, 255, 0.58);
+  --select-bg:          #1f1f1f;
+}
+
+/* ── Labels ──────────────────────────────────────────────────────────────────── */
+.vorta-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--label-color);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-bottom: 6px;
+}
+
+/* ── Field wrapper ───────────────────────────────────────────────────────────── */
+.vorta-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ── Text inputs ─────────────────────────────────────────────────────────────── */
+.vorta-input {
+  width: 100%;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--input-text);
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.vorta-input::placeholder {
+  color: var(--input-placeholder);
+}
+
+.vorta-input:hover {
+  background: var(--input-bg-hover);
+}
+
+.vorta-input:focus {
+  border-color: var(--input-border-focus);
+  background: var(--input-bg-hover);
+}
+
+.vorta-input:disabled {
+  opacity: 0.40;
+  cursor: not-allowed;
+}
+
+/* ── Textareas ───────────────────────────────────────────────────────────────── */
+.vorta-textarea {
+  width: 100%;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--input-text);
+  outline: none;
+  resize: vertical;
+  line-height: 1.65;
+  transition: border-color 0.15s, background 0.15s;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.vorta-textarea::placeholder {
+  color: var(--input-placeholder);
+}
+
+.vorta-textarea:hover {
+  background: var(--input-bg-hover);
+}
+
+.vorta-textarea:focus {
+  border-color: var(--input-border-focus);
+  background: var(--input-bg-hover);
+}
+
+.vorta-textarea:disabled {
+  opacity: 0.40;
+  cursor: not-allowed;
+}
+
+/* ── Monospace textarea variant ──────────────────────────────────────────────── */
+.vorta-textarea-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 12.5px;
+}
+
+/* ── Select dropdowns ────────────────────────────────────────────────────────── */
+.vorta-select {
+  width: 100%;
+  background: var(--select-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 8px;
+  padding: 8px 32px 8px 12px;
+  font-size: 13px;
+  color: var(--input-text);
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.45)' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.vorta-select:focus {
+  border-color: var(--input-border-focus);
+}
+
+.vorta-select:disabled {
+  opacity: 0.40;
+  cursor: not-allowed;
+}
+
+.vorta-select option {
+  background: #1f1f1f;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+/* ── Range sliders ───────────────────────────────────────────────────────────── */
+.vorta-slider {
+  width: 100%;
+  height: 4px;
+  accent-color: #8b5cf6;
+  cursor: pointer;
+  outline: none;
+  border-radius: 2px;
+}
+
+/* ── Color inputs ────────────────────────────────────────────────────────────── */
+.vorta-color {
+  width: 40px;
+  height: 32px;
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  padding: 2px;
+  cursor: pointer;
+  background: var(--input-bg);
+  outline: none;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────────── */
+.vorta-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  white-space: nowrap;
+  border: none;
+  outline: none;
+  font-family: inherit;
+  line-height: 1;
+}
+
+.vorta-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.vorta-btn-sm {
+  padding: 5px 10px;
+  font-size: 11.5px;
+  border-radius: 6px;
+  gap: 4px;
+}
+
+.vorta-btn-primary {
+  background: #7c3aed;
+  color: #fff;
+}
+.vorta-btn-primary:hover:not(:disabled) { background: #6d28d9; }
+
+.vorta-btn-blue {
+  background: #2563eb;
+  color: #fff;
+}
+.vorta-btn-blue:hover:not(:disabled) { background: #1d4ed8; }
+
+.vorta-btn-white {
+  background: #fff;
+  color: #000;
+}
+.vorta-btn-white:hover:not(:disabled) { background: rgba(255,255,255,0.88); }
+
+.vorta-btn-secondary {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.72);
+}
+.vorta-btn-secondary:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+
+.vorta-btn-ghost {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.50);
+}
+.vorta-btn-ghost:hover:not(:disabled) { background: rgba(255, 255, 255, 0.06); }
+
+.vorta-btn-danger {
+  background: rgba(239, 68, 68, 0.14);
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  color: rgba(252, 165, 165, 0.92);
+}
+.vorta-btn-danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.24); }
+
+/* ── Hint / description text ─────────────────────────────────────────────────── */
+.vorta-hint {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.32);
+  line-height: 1.45;
+}
+
+/* ── Panel / card backgrounds ─────────────────────────────────────────────────── */
+.vorta-panel {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.vorta-panel-dark {
+  background: rgba(0, 0, 0, 0.30);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+/* ── Inline form row ─────────────────────────────────────────────────────────── */
+.vorta-field-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}

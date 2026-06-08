@@ -3,9 +3,9 @@ import { CheckCircle, XCircle, Loader2, Save, RefreshCw, Download, Upload } from
 
 const SERVER_URL = 'http://localhost:3001'
 
-const inputCls  = 'w-full bg-white/[0.04] border border-white/[0.10] rounded-lg px-3 py-2 text-sm text-white/80 focus:outline-none focus:border-white/25 disabled:opacity-40'
-const selectCls = inputCls + ' cursor-pointer'
-const labelCls  = 'block text-[11px] text-white/40 mb-1.5 uppercase tracking-wider'
+const inputCls  = 'vorta-input'
+const selectCls = 'vorta-select'
+const labelCls  = 'vorta-label'
 
 function Section({ title, children }) {
   return (
@@ -269,13 +269,13 @@ export default function Settings() {
             <label className={labelCls}>Default grain intensity — {(s.grainIntensity ?? 0.06).toFixed(2)}</label>
             <input type="range" min={0} max={0.3} step={0.01} value={s.grainIntensity ?? 0.06}
               onChange={e => patchStyle('grainIntensity', parseFloat(e.target.value))}
-              className="w-full mt-1" style={{ accentColor: '#3b82f6' }} />
+              className="vorta-slider mt-1" />
           </div>
           <div>
             <label className={labelCls}>Default vignette intensity — {(s.vignetteIntensity ?? 0.45).toFixed(2)}</label>
             <input type="range" min={0} max={1} step={0.05} value={s.vignetteIntensity ?? 0.45}
               onChange={e => patchStyle('vignetteIntensity', parseFloat(e.target.value))}
-              className="w-full mt-1" style={{ accentColor: '#3b82f6' }} />
+              className="vorta-slider mt-1" />
           </div>
         </div>
         <button

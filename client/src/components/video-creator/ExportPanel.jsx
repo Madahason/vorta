@@ -434,7 +434,7 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
                       </span>
                       <input type="range" min={min} max={max} step={step} value={audioSettings[key]}
                         onChange={e => setAudioSettings(p => ({ ...p, [key]: parseFloat(e.target.value) }))}
-                        style={{ width: '100%', accentColor: '#7c3aed' }} />
+                        className="vorta-slider" />
                     </label>
                   ))}
                 </div>

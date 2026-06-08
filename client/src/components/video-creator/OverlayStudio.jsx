@@ -59,10 +59,10 @@ function normalizeOverlay(o) {
 }
 
 // ── Shared input styles ───────────────────────────────────────────────────────
-const label11 = { fontSize: 10, fontWeight: 500, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3, display: 'block' }
+const label11 = { fontSize: 10, fontWeight: 500, color: 'rgba(255,255,255,0.55)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3, display: 'block' }
 const inputBase = {
-  width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)',
-  borderRadius: 5, color: '#fff', fontSize: 12, padding: '5px 8px', outline: 'none', boxSizing: 'border-box',
+  width: '100%', background: 'rgba(255,255,255,0.10)', border: '1px solid rgba(255,255,255,0.20)',
+  borderRadius: 5, color: 'rgba(255,255,255,0.92)', fontSize: 12, padding: '5px 8px', outline: 'none', boxSizing: 'border-box',
 }
 
 function FieldRow({ label, children, grid }) {
