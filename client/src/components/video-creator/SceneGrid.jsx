@@ -67,6 +67,7 @@ export default function SceneGrid({
   onPreviewScene,
   voiceoverStatuses = {},
   onOpenVoiceover,
+  onOpenOverlayStudio,
 }) {
 
   const updateScene = (index, patch) =>
@@ -115,6 +116,7 @@ export default function SceneGrid({
               onPreview={() => onPreviewScene?.(scene)}
               voiceoverStatus={voiceoverStatuses[scene.scene_id] || null}
               onOpenVoiceover={onOpenVoiceover ? () => onOpenVoiceover(scene) : null}
+              onOpenOverlayStudio={onOpenOverlayStudio ? () => onOpenOverlayStudio(scene) : null}
             />
           )
         })}
@@ -130,13 +132,12 @@ function SceneCard({
   scene, index, onChange, genStatus, onRetry,
   motionStatus, onBuildComponent,
   clipMatch, selectedClip, onSelectClip, onConvertToImage, onManualMatch, onOpenLibrary, onPreview,
-  voiceoverStatus, onOpenVoiceover,
+  voiceoverStatus, onOpenVoiceover, onOpenOverlayStudio,
 }) {
-  const [editingPrompt,    setEditingPrompt]    = useState(false)
-  const [promptDraft,      setPromptDraft]      = useState(scene.higgsfield_prompt)
-  const [codeExpanded,     setCodeExpanded]     = useState(false)
-  const [copied,           setCopied]           = useState(false)
-  const [overlayEditorOpen,setOverlayEditorOpen]= useState(false)
+  const [editingPrompt, setEditingPrompt] = useState(false)
+  const [promptDraft,   setPromptDraft]   = useState(scene.higgsfield_prompt)
+  const [codeExpanded,  setCodeExpanded]  = useState(false)
+  const [copied,        setCopied]        = useState(false)
 
   const savePrompt   = () => { onChange({ higgsfield_prompt: promptDraft }); setEditingPrompt(false) }
   const cancelPrompt = () => { setPromptDraft(scene.higgsfield_prompt); setEditingPrompt(false) }
@@ -394,30 +395,20 @@ function SceneCard({
 
         </div>
 
-        {/* ── Card footer — Overlays toggle ── */}
+        {/* ── Card footer — Overlay Studio ── */}
         <div className="mt-3 ml-10 pt-3 border-t border-white/[0.04] flex items-center">
           <button
-            onClick={() => setOverlayEditorOpen(o => !o)}
-            className={`flex items-center gap-1.5 text-[11px] transition-colors ${
-              overlayEditorOpen
-                ? 'text-indigo-300'
-                : 'text-white/25 hover:text-white/55'
-            }`}
+            onClick={onOpenOverlayStudio}
+            className="flex items-center gap-1.5 text-[11px] transition-colors text-white/25 hover:text-indigo-300"
           >
-            <Layers size={12} />
+            <Palette size={12} />
             {overlayCount > 0
-              ? `Overlays (${overlayCount})`
-              : 'Overlays'
+              ? `Overlay Studio (${overlayCount})`
+              : 'Overlay Studio'
             }
-            {overlayEditorOpen ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
           </button>
         </div>
       </div>
-
-      {/* ── Inline overlay editor panel ── */}
-      {overlayEditorOpen && (
-        <OverlayEditorPanel scene={scene} onChange={onChange} />
-      )}
     </div>
   )
 }

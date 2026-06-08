@@ -1320,3 +1320,86 @@ All 6 expected at `library/stings/`: `sting_low_drone.mp3`, `sting_rise.mp3`, `s
 3. **Fix 3 third** — settings unlock better defaults and make the app self-contained.
 4. **Fix 4 fourth** — quality pass before showing anyone.
 5. **Fix 5 last** — polish after the core is solid.
+
+
+---
+
+## Fix 12 — Professional Overlay Studio
+
+**Goal:** Replace the inline overlay editor with a full-screen, professional overlay editing experience with pre-populated templates, real-time Remotion Player preview, and support for 8+ overlay types.
+
+### New/updated files
+
+| File | Change |
+|------|--------|
+| `server/config/defaultBrand.js` | Brand defaults (accentColor, fontFamily, watermarkText, etc.) |
+| `client/src/config/overlayTemplates.js` | Full template catalog: 5 LowerThird, 2 DateStamp, 3 KineticText, 2 StatCallout, 2 ChapterTitle, 1 SourceCitation, 4 BackgroundOverlay, 1 Watermark |
+| `client/src/components/video-creator/OverlayStudio.jsx` | NEW — full-screen editor modal |
+| `remotion/src/components/overlays/LowerThird.jsx` | Updated — new format + backward compat |
+| `remotion/src/components/overlays/DateStamp.jsx` | Updated — new format + backward compat |
+| `remotion/src/components/overlays/KineticText.jsx` | Updated — new format + backward compat |
+| `remotion/src/components/overlays/StatCallout.jsx` | NEW — big_number + corner_stat |
+| `remotion/src/components/overlays/ChapterTitle.jsx` | NEW — minimal_chapter + full_screen_chapter |
+| `remotion/src/components/overlays/SourceCitation.jsx` | NEW — subtle bottom-right attribution |
+| `remotion/src/components/overlays/BackgroundOverlay.jsx` | NEW — gradient/solid/tint full-frame overlays |
+| `remotion/src/components/overlays/Watermark.jsx` | NEW — persistent low-opacity text |
+| `remotion/src/components/ImageScene.jsx` | Updated — full 8-type dispatcher |
+| `client/src/components/video-creator/SceneGrid.jsx` | Updated — "Overlay Studio" button replaces inline panel |
+| `client/src/pages/VideoCreator.jsx` | Updated — brand state, overlay studio state, handlers |
+
+### Data structure
+
+**Old format (backward-compat):**
+```js
+{ type, line1, line2, appearAt, color: {}, font: {}, animation: {} }
+```
+
+**New format (OverlayStudio output):**
+```js
+{
+  id, type, template,
+  text: { line1, line2, color, size, weight, family, letterSpacing, transform },
+  background: { color, blur, borderRadius },
+  accent: { color, width, position },
+  animation: { enter, exit, duration, easing, delay },
+  position: { x, y, offsetX, offsetY },
+  timing: { appearAt },
+  opacity,
+}
+```
+
+All Remotion overlay components detect format via `typeof overlay.text === "object"` and normalize both formats before rendering. Existing scenes with old-format overlays continue to render correctly.
+
+### OverlayStudio architecture
+- **Left panel (400px):** Type tabs (11 types) → Template picker (CSS mini-previews) → Active overlays list → Editor fields for selected overlay
+- **Right panel:** Live Remotion Player preview (single-scene) → Apply / Cancel buttons
+- **`deepMerge`:** used for nested-path field updates without stomping sibling keys
+- **Brand colors:** applied to template defaults when adding a new overlay (accentColor, fontFamily)
+
+### Bug fixes applied (Fix 12a)
+
+**Root cause — editor shows blank fields (old-format overlays):**
+AI-generated overlays use the old flat format: `{ type, line1, text: 'string', color:{}, font:{}, animation:{} }`. `OverlayEditor` reads `overlay.text.line1` — but when `overlay.text` is a string, `.line1` is `undefined`, making every input appear empty. Fix: `normalizeOverlay()` in `OverlayStudio.jsx` converts old-format on initialization so the editor always sees the new nested format.
+
+**Root cause — deepMerge shared references:**
+`deepMerge({}, tpl.defaults)` returned the same nested object references (not deep copies) when the target key didn't exist. Then `defaults.accent.color = brand.accentColor` silently mutated the original template object in `overlayTemplates.js`. Fix: when source is an object and target key is missing, recurse into `{}` (always clone). Also switched `handleAddTemplate` to `JSON.parse(JSON.stringify(tpl.defaults))` for a guaranteed clean deep clone.
+
+**Root cause — Apply Changes not updating Remotion Player:**
+`inputProps` was constructed inline on every render without memoization. Remotion's Player compares `inputProps` by reference — if React decided not to re-render VideoPlayer (e.g. due to parent memo boundaries), the composition never saw the new overlay data. Fix: `useMemo` in `VideoPlayer.jsx` with `scenes.map(s => ({ ...s }))` to force new object references when `scenes` changes. Fix: `handleOverlaySave` in `VideoCreator.jsx` uses `[...newOverlays]` (explicit new array) and combines save+close into one state batch.
+
+### Testing checklist
+- [ ] "Overlay Studio" button visible in each scene card footer
+- [ ] Clicking opens full-screen modal for that scene
+- [ ] All 11 type tabs switch template picker content
+- [ ] Clicking a template card adds an overlay and auto-selects it for editing
+- [ ] Editor fields show current values (not blank) — check for both new and old-format overlays
+- [ ] Editing Line 1 text updates the Remotion preview on the right in real time
+- [ ] Active overlays list shows all overlays; click to select, trash to delete
+- [ ] Apply Changes saves overlays to scene and closes modal
+- [ ] After Apply, main VideoPlayer immediately shows the overlay (scene resets to start)
+- [ ] Cancel closes without saving changes
+- [ ] Existing old-format overlays still render correctly in Remotion
+- [ ] New StatCallout, ChapterTitle, BackgroundOverlay, Watermark types render in Remotion
+- [ ] BackgroundOverlay gradients display full-frame
+- [ ] LowerThird accent position (left/right/bottom) works correctly
+- [ ] Position offsets (X/Y, offsetX/Y) correctly place overlays

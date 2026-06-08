@@ -7,6 +7,8 @@ import ClipLibrary from '../components/video-creator/ClipLibrary'
 import VoiceoverPanel from '../components/video-creator/VoiceoverPanel'
 import AudioPanel from '../components/video-creator/AudioPanel'
 import ExportPanel from '../components/video-creator/ExportPanel'
+import OverlayStudio from '../components/video-creator/OverlayStudio'
+import { DEFAULT_BRAND } from '../config/overlayTemplates'
 
 const SERVER_URL = 'http://localhost:3001'
 
@@ -150,6 +152,12 @@ export default function VideoCreator() {
   // Audio specs (music + ambient + stings per scene)
   const [audioSpecs,   setAudioSpecs]   = useState([])
   const [audioVolumes, setAudioVolumes] = useState({ music: 0.12, ambient: 0.06, sting: 0.45 })
+
+  // Overlay Studio
+  const [overlayStudioScene, setOverlayStudioScene] = useState(null)
+  const [brand, setBrand] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('vorta_brand')) || DEFAULT_BRAND } catch { return DEFAULT_BRAND }
+  })
 
   // Generate progress — { done, total }
   const [generateProgress, setGenerateProgress] = useState({ done: 0, total: 0 })
@@ -599,6 +607,18 @@ export default function VideoCreator() {
     setVoiceoverFocusScene(scene.scene_id)
   }
 
+  // ─── Overlay Studio ───────────────────────────────────────────────────────
+  const handleOpenOverlayStudio = (scene) => setOverlayStudioScene(scene)
+
+  // Combined save + close: spread overlays into a new array so useMemo in VideoPlayer
+  // always sees a changed reference and the Remotion Player re-renders the composition.
+  const handleOverlaySave = (sceneId, newOverlays) => {
+    setScenes(prev => prev.map(s =>
+      s.scene_id === sceneId ? { ...s, overlays: [...newOverlays] } : s
+    ))
+    setOverlayStudioScene(null)
+  }
+
   // ─── Voiceover — called by VoiceoverPanel when audio is ready ────────────
   const handleAudioGenerated = (sceneId, audioPath, audioDuration) => {
     setScenes(prev => prev.map(s => {
@@ -825,6 +845,7 @@ export default function VideoCreator() {
               onPreviewScene={setPreviewScene}
               voiceoverStatuses={voiceoverStatuses}
               onOpenVoiceover={handleOpenVoiceover}
+              onOpenOverlayStudio={handleOpenOverlayStudio}
             />
 
             <VoiceoverPanel
@@ -950,6 +971,18 @@ export default function VideoCreator() {
 
     {showClipLibrary && (
       <ClipLibrary onClose={() => setShowClipLibrary(false)} projectId={projectId} />
+    )}
+
+    {overlayStudioScene && (
+      <OverlayStudio
+        scene={overlayStudioScene}
+        imagePaths={imagePaths}
+        selectedClips={selectedClips}
+        globalSettings={globalSettings}
+        brand={brand}
+        onClose={() => setOverlayStudioScene(null)}
+        onSave={handleOverlaySave}
+      />
     )}
     </>
   )
