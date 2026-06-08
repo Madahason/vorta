@@ -436,42 +436,78 @@ export default function OverlayStudio({
   globalSettings = {},
   brand = {},
 }) {
-  const [activeType,  setActiveType]  = useState('lower_third')
-  // normalizeOverlay converts old flat AI format to the new nested format so
-  // OverlayEditor always sees text/background/accent/etc. as objects, never strings.
-  const [overlays,    setOverlays]    = useState(() => (scene?.overlays || []).map(normalizeOverlay))
+  const [activeType, setActiveType] = useState('lower_third')
+
+  // Two-stage state: previewOverlays updates live as the user edits;
+  // committedOverlays only advances when the user clicks Apply.
+  const [committedOverlays, setCommittedOverlays] = useState(
+    () => (scene?.overlays || []).map(normalizeOverlay)
+  )
+  const [previewOverlays, setPreviewOverlays] = useState(
+    () => (scene?.overlays || []).map(normalizeOverlay)
+  )
   const [selectedId,  setSelectedId]  = useState(null)
+  const [justApplied, setJustApplied] = useState(false)
 
-  const selectedOverlay = overlays.find(o => o.id === selectedId) || null
-  const previewScene    = useMemo(() => ({ ...scene, overlays }), [scene, overlays])
-  const templates       = getTemplatesForType(activeType)
+  const hasUncommittedChanges = JSON.stringify(previewOverlays) !== JSON.stringify(committedOverlays)
+  const selectedOverlay = previewOverlays.find(o => o.id === selectedId) || null
 
+  // Preview always reads live from previewOverlays — the right-panel player reflects
+  // every keystroke without touching the main video until Apply is clicked.
+  const previewScene = useMemo(() => ({
+    ...scene,
+    overlays: previewOverlays.filter(o => o.status === 'accepted' || !o.status),
+  }), [scene, previewOverlays])
+
+  const templates = getTemplatesForType(activeType)
+
+  // All mutations go to previewOverlays only — committed state is untouched
   const handleAddTemplate = (tpl) => {
-    // JSON round-trip guarantees a fully independent deep clone so brand mutations
-    // never corrupt the original template defaults in overlayTemplates.js.
     const defaults = JSON.parse(JSON.stringify(tpl.defaults))
-    if (brand?.accentColor && defaults.accent)   defaults.accent.color = brand.accentColor
-    if (brand?.fontFamily  && defaults.text)     defaults.text.family  = brand.fontFamily
+    if (brand?.accentColor && defaults.accent) defaults.accent.color = brand.accentColor
+    if (brand?.fontFamily  && defaults.text)   defaults.text.family  = brand.fontFamily
     const newOverlay = { id: genId(), type: activeType, ...defaults }
-    console.log('[OverlayStudio] handleAddTemplate → newOverlay:', newOverlay)
-    setOverlays(prev => [...prev, newOverlay])
+    setPreviewOverlays(prev => [...prev, newOverlay])
     setSelectedId(newOverlay.id)
   }
 
   const handleUpdateOverlay = (id, patch) =>
-    setOverlays(prev => prev.map(o => o.id === id ? deepMerge(o, patch) : o))
+    setPreviewOverlays(prev => prev.map(o => o.id === id ? deepMerge(o, patch) : o))
 
   const handleDeleteOverlay = (id) => {
-    setOverlays(prev => prev.filter(o => o.id !== id))
+    setPreviewOverlays(prev => prev.filter(o => o.id !== id))
     if (selectedId === id) setSelectedId(null)
   }
 
-  // onSave already calls setOverlayStudioScene(null) in VideoCreator; onClose() is a no-op
-  // but kept so Cancel still works correctly.
+  // Apply — lock preview into committed state and push to parent
   const handleApply = () => {
-    console.log('[OverlayStudio] Apply — overlays:', overlays, 'selectedId:', selectedId, 'selectedOverlay:', selectedOverlay)
-    onSave(scene.scene_id, overlays)
+    const snapshot = JSON.parse(JSON.stringify(previewOverlays))
+    setCommittedOverlays(snapshot)
+    onSave(scene.scene_id, previewOverlays)
+    setJustApplied(true)
+    setTimeout(() => setJustApplied(false), 2000)
+  }
+
+  // Reset — discard all preview changes back to last committed state
+  const handleReset = () => {
+    setPreviewOverlays(JSON.parse(JSON.stringify(committedOverlays)))
+    setSelectedId(null)
+  }
+
+  // Close with unsaved-changes guard
+  const handleClose = () => {
+    if (hasUncommittedChanges) {
+      const confirmed = window.confirm('You have unsaved overlay changes. Close without applying?')
+      if (!confirmed) return
+    }
     onClose()
+  }
+
+  // Helpers for committed-vs-preview comparison in the overlays list
+  const isNewOverlay = (o) => !committedOverlays.find(c => c.id === o.id)
+  const isModifiedOverlay = (o) => {
+    const committed = committedOverlays.find(c => c.id === o.id)
+    return committed ? JSON.stringify(o) !== JSON.stringify(committed) : false
   }
 
   return (
@@ -482,22 +518,101 @@ export default function OverlayStudio({
       fontFamily: 'system-ui, -apple-system, sans-serif',
     }}>
 
+      {/* Pulse keyframes */}
+      <style>{`@keyframes _ovPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
+
       {/* ── Header ── */}
       <div style={{
-        display: 'flex', alignItems: 'center', padding: '13px 20px',
+        display: 'flex', alignItems: 'center', padding: '12px 20px',
         borderBottom: '1px solid rgba(255,255,255,0.07)',
         gap: 10, flexShrink: 0,
+        background: 'rgba(0,0,0,0.35)',
       }}>
         <span style={{ fontSize: 13, fontWeight: 600, color: '#fff', letterSpacing: '-0.01em' }}>Overlay Studio</span>
         <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: 12 }}>—</span>
         <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.38)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          Scene {scene?.scene_number || scene?.index || '?'} — {(scene?.description || scene?.narration || '').slice(0, 72)}
-          {(scene?.description || scene?.narration || '').length > 72 ? '…' : ''}
+          Scene {scene?.scene_id || '?'} — {(scene?.script_excerpt || '').slice(0, 68)}
+          {(scene?.script_excerpt || '').length > 68 ? '…' : ''}
         </span>
-        <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.35)', display: 'flex', padding: 6, borderRadius: 6 }}
-          onMouseEnter={e => e.currentTarget.style.color = '#fff'} onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.35)'}>
-          <X size={17} />
-        </button>
+
+        {/* Live preview indicator */}
+        {hasUncommittedChanges && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '3px 10px',
+            background: 'rgba(251,191,36,0.08)',
+            border: '1px solid rgba(251,191,36,0.22)',
+            borderRadius: 20, flexShrink: 0,
+          }}>
+            <div style={{
+              width: 6, height: 6, borderRadius: '50%',
+              background: '#fbbf24',
+              animation: '_ovPulse 1.5s infinite',
+            }} />
+            <span style={{ color: '#fbbf24', fontSize: 11, whiteSpace: 'nowrap' }}>
+              Live preview — not yet applied
+            </span>
+          </div>
+        )}
+
+        {/* Applied feedback */}
+        {justApplied && !hasUncommittedChanges && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '3px 10px',
+            background: 'rgba(34,197,94,0.08)',
+            border: '1px solid rgba(34,197,94,0.22)',
+            borderRadius: 20, flexShrink: 0,
+          }}>
+            <span style={{ color: '#4ade80', fontSize: 11 }}>✓ Applied to video</span>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+          {hasUncommittedChanges && (
+            <button
+              onClick={handleReset}
+              style={{
+                padding: '6px 13px',
+                background: 'rgba(255,255,255,0.06)',
+                border: '1px solid rgba(255,255,255,0.11)',
+                borderRadius: 6, color: 'rgba(255,255,255,0.55)',
+                fontSize: 12, cursor: 'pointer',
+              }}
+            >
+              ↺ Reset
+            </button>
+          )}
+
+          <button
+            onClick={handleApply}
+            disabled={!hasUncommittedChanges}
+            style={{
+              padding: '6px 18px',
+              background: hasUncommittedChanges ? '#7c3aed' : 'rgba(124,58,237,0.18)',
+              border: 'none', borderRadius: 6,
+              color: hasUncommittedChanges ? '#fff' : 'rgba(255,255,255,0.28)',
+              fontSize: 13, fontWeight: 600,
+              cursor: hasUncommittedChanges ? 'pointer' : 'not-allowed',
+              transition: 'all 0.15s',
+            }}
+          >
+            {justApplied ? '✓ Applied' : 'Apply to video'}
+          </button>
+
+          <button
+            onClick={handleClose}
+            style={{
+              padding: '6px 13px',
+              background: 'rgba(255,255,255,0.06)',
+              border: '1px solid rgba(255,255,255,0.10)',
+              borderRadius: 6, color: 'rgba(255,255,255,0.55)',
+              fontSize: 12, cursor: 'pointer',
+            }}
+          >
+            Close
+          </button>
+        </div>
       </div>
 
       {/* ── Body ── */}
@@ -568,29 +683,49 @@ export default function OverlayStudio({
               </div>
             )}
 
-            {/* Active overlays list */}
-            {overlays.length > 0 && (
+            {/* Active overlays list — shows committed/modified/new badges */}
+            {previewOverlays.length > 0 && (
               <div style={{ marginBottom: 16 }}>
                 <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.28)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 7 }}>
-                  Active ({overlays.length})
+                  Active ({previewOverlays.length})
                 </div>
-                {overlays.map(o => {
+                {previewOverlays.map(o => {
                   const tab      = OVERLAY_TABS.find(t => t.id === o.type)
                   const isActive = o.id === selectedId
+                  const isNew    = isNewOverlay(o)
+                  const isEdited = !isNew && isModifiedOverlay(o)
                   const label    = o.text?.line1 || (typeof o.text === 'string' ? o.text : '') || o.line1 || tab?.label || o.type
+
+                  const borderColor = isActive
+                    ? 'rgba(124,58,237,0.38)'
+                    : (isNew || isEdited) ? 'rgba(251,191,36,0.22)'
+                    : 'rgba(255,255,255,0.07)'
+
                   return (
                     <div key={o.id} onClick={() => setSelectedId(isActive ? null : o.id)}
                       style={{
                         display: 'flex', alignItems: 'center', gap: 7,
                         padding: '6px 9px', borderRadius: 6, cursor: 'pointer', marginBottom: 3,
                         background: isActive ? 'rgba(124,58,237,0.12)' : 'rgba(255,255,255,0.04)',
-                        border: `1px solid ${isActive ? 'rgba(124,58,237,0.38)' : 'rgba(255,255,255,0.07)'}`,
+                        border: `1px solid ${borderColor}`,
                         transition: 'all 0.12s',
                       }}>
                       <span style={{ fontSize: 12, opacity: 0.55 }}>{tab?.icon || '▭'}</span>
                       <div style={{ flex: 1, overflow: 'hidden' }}>
-                        <div style={{ fontSize: 12, color: isActive ? '#a78bfa' : 'rgba(255,255,255,0.68)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {label}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <span style={{ fontSize: 12, color: isActive ? '#a78bfa' : 'rgba(255,255,255,0.68)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {label}
+                          </span>
+                          {isNew && (
+                            <span style={{ fontSize: 9, padding: '1px 4px', background: 'rgba(59,130,246,0.2)', color: '#93c5fd', borderRadius: 3, textTransform: 'uppercase', letterSpacing: '0.05em', flexShrink: 0 }}>
+                              new
+                            </span>
+                          )}
+                          {isEdited && (
+                            <span style={{ fontSize: 9, padding: '1px 4px', background: 'rgba(251,191,36,0.15)', color: '#fbbf24', borderRadius: 3, textTransform: 'uppercase', letterSpacing: '0.05em', flexShrink: 0 }}>
+                              edited
+                            </span>
+                          )}
                         </div>
                         <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.28)' }}>{tab?.label || o.type}</div>
                       </div>
@@ -613,20 +748,17 @@ export default function OverlayStudio({
                   Edit — {OVERLAY_TABS.find(t => t.id === selectedOverlay.type)?.label || selectedOverlay.type}
                 </div>
                 <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.18)', marginBottom: 10, letterSpacing: '0.01em' }}>
-                  Edit fields below — preview updates live on the right
+                  Preview updates live · click Apply to save to video
                 </div>
                 <OverlayEditor
                   key={selectedId}
                   overlay={selectedOverlay}
-                  onUpdate={patch => {
-                    console.log('[OverlayStudio] field update — patch:', patch)
-                    handleUpdateOverlay(selectedId, patch)
-                  }}
+                  onUpdate={patch => handleUpdateOverlay(selectedId, patch)}
                 />
               </div>
             )}
 
-            {overlays.length === 0 && templates.length > 0 && (
+            {previewOverlays.length === 0 && templates.length > 0 && (
               <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.18)', textAlign: 'center', padding: '16px 0' }}>
                 Pick a template above to start
               </div>
@@ -634,15 +766,22 @@ export default function OverlayStudio({
           </div>
         </div>
 
-        {/* ── Right panel — preview ── */}
+        {/* ── Right panel — live preview ── */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 24, gap: 14, overflow: 'hidden', minWidth: 0 }}>
+
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.28)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Live Preview</div>
-            {overlays.length > 0 && (
-              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.03em' }}>
-                {overlays.length} overlay{overlays.length !== 1 ? 's' : ''} · plays automatically
-              </div>
-            )}
+            <div style={{ fontSize: 10, letterSpacing: '0.03em' }}>
+              {hasUncommittedChanges && (
+                <span style={{ color: '#fbbf24' }}>● Showing unsaved changes</span>
+              )}
+              {!hasUncommittedChanges && committedOverlays.length > 0 && (
+                <span style={{ color: '#4ade80' }}>✓ Showing applied overlays</span>
+              )}
+              {!hasUncommittedChanges && committedOverlays.length === 0 && (
+                <span style={{ color: 'rgba(255,255,255,0.25)' }}>No overlays added</span>
+              )}
+            </div>
           </div>
 
           {!imagePaths[scene?.scene_id] && (
@@ -653,31 +792,32 @@ export default function OverlayStudio({
 
           <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <div style={{ width: '100%', maxWidth: 800 }}>
-              <VideoPlayer
-                scenes={[previewScene]}
-                imagePaths={imagePaths}
-                selectedClips={selectedClips}
-                globalSettings={globalSettings}
-                audioSpecs={[]}
-                autoPlay
-                loop
-              />
+              <div style={{
+                borderRadius: 10, overflow: 'hidden',
+                border: hasUncommittedChanges
+                  ? '1px solid rgba(251,191,36,0.35)'
+                  : justApplied
+                    ? '1px solid rgba(34,197,94,0.35)'
+                    : '1px solid rgba(255,255,255,0.06)',
+                transition: 'border-color 0.3s',
+              }}>
+                <VideoPlayer
+                  scenes={[previewScene]}
+                  imagePaths={imagePaths}
+                  selectedClips={selectedClips}
+                  globalSettings={globalSettings}
+                  audioSpecs={[]}
+                  autoPlay
+                  loop
+                />
+              </div>
             </div>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, flexShrink: 0 }}>
-            <button onClick={onClose} style={{
-              background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)',
-              color: 'rgba(255,255,255,0.6)', borderRadius: 8, padding: '8px 20px', fontSize: 13, cursor: 'pointer',
-            }}>
-              Cancel
-            </button>
-            <button onClick={handleApply} style={{
-              background: '#7c3aed', border: 'none',
-              color: '#fff', fontWeight: 600, borderRadius: 8, padding: '8px 24px', fontSize: 13, cursor: 'pointer',
-            }}>
-              Apply Changes
-            </button>
+          <div style={{ textAlign: 'center', flexShrink: 0 }}>
+            <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: 11 }}>
+              Click player to play · overlay animations preview in real time
+            </span>
           </div>
         </div>
       </div>

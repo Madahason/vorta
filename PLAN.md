@@ -1459,6 +1459,58 @@ Script analysis → Claude generates overlays[] per scene (status: "suggested")
 
 ---
 
+### Fix 14 — Live overlay preview with two-stage commit ✅ Complete
+
+**Goal:** Overlay Studio edits preview instantly in the right-panel Remotion player but don't affect the main video until the user explicitly clicks "Apply to video".
+
+**Two-stage state in OverlayStudio.jsx:**
+- `previewOverlays` — live state; updated on every field edit, add, or delete; feeds the in-studio VideoPlayer
+- `committedOverlays` — last applied state; only advances when the user clicks "Apply to video"; used only for comparison and Reset
+- `hasUncommittedChanges = JSON.stringify(previewOverlays) !== JSON.stringify(committedOverlays)`
+
+**Header changes:**
+- Yellow pulsing pill "● Live preview — not yet applied" when `hasUncommittedChanges`
+- Green pill "✓ Applied to video" for 2s after Apply
+- "↺ Reset" button (visible only when uncommitted) reverts preview to committed
+- "Apply to video" button: purple when active, dimmed + disabled when no changes
+- Close button triggers `window.confirm()` if there are uncommitted changes
+
+**Right-panel player border:**
+- Yellow `rgba(251,191,36,0.35)` when uncommitted changes are showing
+- Green `rgba(34,197,94,0.35)` immediately after applying
+- Default dim when no changes
+
+**Active overlays list badges:**
+- `new` (blue) — overlay exists in preview but not committed
+- `edited` (yellow) — overlay exists in both but values differ
+- Row border is amber when `new` or `edited`, default otherwise
+
+**`@keyframes _ovPulse`** injected via `<style>` tag inside the component.
+
+**Apply behaviour change from Fix 12:**
+- Old: Apply called `onSave` then `onClose()` — studio closed after every apply
+- New: Apply calls `onSave`, advances `committedOverlays`, shows 2s "Applied" feedback — studio stays open so the user can continue editing
+
+**Files changed:**
+- `client/src/components/video-creator/OverlayStudio.jsx` — two-stage state, header redesign with indicators and buttons, overlays list badges, right-panel player border, close guard
+
+**Testing checklist:**
+- [ ] Typing in a text field instantly updates the right-panel Remotion player (no Apply needed)
+- [ ] Yellow "Live preview — not yet applied" pill appears immediately on any edit
+- [ ] Main VideoCreator player does NOT update until Apply is clicked
+- [ ] Apply button is disabled (dimmed) when no changes exist
+- [ ] Click Apply — green "✓ Applied to video" pill appears for 2 seconds
+- [ ] After Apply, main VideoCreator player reflects the new overlays
+- [ ] ↺ Reset reverts preview back to the last applied state
+- [ ] Close with uncommitted changes → confirm dialog appears
+- [ ] Dismiss the confirm → studio stays open
+- [ ] Accept the confirm → studio closes, changes discarded
+- [ ] "new" badge on overlays added but not yet applied
+- [ ] "edited" badge on overlays modified but not yet applied
+- [ ] Player border: yellow when uncommitted, green just after Apply, default otherwise
+
+---
+
 ### Testing checklist
 - [ ] "Overlay Studio" button visible in each scene card footer
 - [ ] Clicking opens full-screen modal for that scene
