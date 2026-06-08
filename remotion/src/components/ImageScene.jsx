@@ -79,7 +79,9 @@ export default function ImageScene({ scene, imagePath, globalSettings = {} }) {
 
       <FilmLook grade={effectiveGrade} grainIntensity={grainIntensity} grainPattern={grainPattern} vignetteIntensity={vignetteIntensity} />
 
-      {overlays.map((o, i) => {
+      {overlays
+      .filter(o => o.status === 'accepted' || !o.status)
+      .map((o, i) => {
         if (o.type === 'lower_third')        return <LowerThird        key={i} overlay={o} />
         if (o.type === 'date_stamp')         return <DateStamp         key={i} overlay={o} />
         if (o.type === 'kinetic_text')       return <KineticText       key={i} overlay={o} />
@@ -88,7 +90,6 @@ export default function ImageScene({ scene, imagePath, globalSettings = {} }) {
         if (o.type === 'source_citation')    return <SourceCitation    key={i} overlay={o} />
         if (o.type === 'background_overlay') return <BackgroundOverlay key={i} overlay={o} />
         if (o.type === 'watermark')          return <Watermark         key={i} overlay={o} />
-        // vignette, grain, color_grade handled above via FilmLook
         return null
       })}
     </AbsoluteFill>

@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const { randomUUID } = require('crypto');
 
 const STYLE_LOCK = 'dark cinematic 4K shallow depth of field slow dolly movement documentary aesthetic muted tones';
 
@@ -81,21 +82,70 @@ intensity:
 - moderate: main narrative beat
 - strong: turning point, climax, emotional peak — use for no more than 3 scenes per script
 
-OVERLAYS
+OVERLAY GENERATION RULES
 
-Lower thirds only for first introductions of a named person or company:
-  { "type": "lower_third", "line1": "Steve Jobs", "line2": "Apple Co-Founder, 1976" }
+For every scene, analyze the script excerpt and generate an overlays array.
+Apply these rules strictly:
 
-Date stamps for any specific year, date, or place:
-  { "type": "date_stamp", "text": "Cupertino, California, 1976" }
+LOWER THIRD rules:
+- Add a lower_third when a real named person or company is introduced for the FIRST TIME in the entire script
+- Track entity introductions across ALL scenes — never add a lower_third for an entity already introduced in a previous scene
+- text.line1 = person or company name, text.line2 = their role/title/context at that moment
+- Never add lower_third for abstract concepts, dates, or locations — only named people and companies
+- Never add lower_third to more than one scene per named entity across the whole video
 
-Kinetic text for a single stark statistic or pivotal phrase (max 1 per 5 scenes):
-  { "type": "kinetic_text", "text": "90 days from bankruptcy", "style": "center" }
+DATE STAMP rules:
+- Add a date_stamp when the script mentions a specific year, date, or named location
+- text.line1 = "City/Location · Year" or just "Year" if no location
+- Maximum 1 date_stamp per scene
+- Do not add date_stamp if a lower_third is already on this scene
 
-Rules:
-- NEVER combine lower_third and date_stamp on the same scene.
-- Leave overlays: [] for all atmospheric and emotional scenes.
-- kinetic_text must be 8 words or fewer. No full sentences.
+STAT CALLOUT rules:
+- Add a stat_callout when the script contains a specific financial figure, percentage, user count, or measurable milestone
+- text.line1 = the number/stat with prefix/suffix (e.g. "$3T"), text.line2 = context label (e.g. "Market Cap · 2023")
+- Maximum 1 stat_callout per scene
+- Do not add stat_callout if another overlay type is already on this scene
+
+KINETIC TEXT rules:
+- Add kinetic_text for a single punchy declarative statement that carries narrative weight
+- Use sparingly — maximum 1 in every 4 scenes across the whole video
+- Examples: "The most valuable company in human history" / "90 days from bankruptcy"
+- Never duplicate kinetic_text and stat_callout on the same scene
+
+CHAPTER TITLE rules:
+- Insert a chapter_title overlay on scenes that mark major narrative transitions (new era, new phase, new subject)
+- text.line1 = "Chapter N", text.line2 = short evocative title (e.g. "The Fall")
+- Maximum 3-5 across a full documentary
+- Chapter title scenes should have no other overlays
+
+BACKGROUND OVERLAY rules:
+- Add background_overlay (template "gradient_bottom") to any scene where text overlays need legibility help
+- Background overlays can combine with any other overlay type
+
+PRIORITY RULES:
+- lower_third takes priority over date_stamp on the same scene — never both together
+- stat_callout and kinetic_text cannot coexist on same scene — pick the more impactful
+- background_overlay can always be combined with other types
+- Maximum 2 overlays per scene (excluding background_overlay)
+
+OVERLAY OUTPUT FORMAT per scene:
+"overlays": [
+  {
+    "type": "lower_third",
+    "template": "USE_THE_TEMPLATE_FROM_USER_MESSAGE",
+    "text": { "line1": "Steve Jobs", "line2": "Co-Founder · Apple" },
+    "timing": { "appearAt": 0.7 },
+    "confidence": 0.95,
+    "reason": "First mention of Steve Jobs in the script",
+    "status": "suggested"
+  }
+]
+
+- "status" must always be "suggested" — never "accepted"
+- "template" must use the template name provided in the user message for that overlay type
+- "confidence" is 0.0–1.0 — how certain you are this overlay is appropriate
+- "reason" is a plain English explanation of why you added this overlay
+- Leave overlays: [] for purely atmospheric or action scenes with no named subjects, stats, or key locations
 
 TRANSITIONS
 
@@ -186,13 +236,30 @@ function validateAndGroundPrompts(scenes) {
 async function analyzeScript({ script, metadata, defaults = {} }) {
   const client = new Anthropic()
 
-  const userMessage = `Project Title: ${metadata.title || 'Untitled'}
-Niche: ${metadata.niche || 'General'}
-Style Preset: ${metadata.stylePreset || 'Dark Cinematic'}
-Narrator Tone: ${metadata.narratorTone || 'Authoritative'}
+  const overlayTemplates = defaults.overlayTemplates || {}
+  const templateContext = `USER DEFAULT TEMPLATES:
+- lower_third template: ${overlayTemplates.lower_third || 'minimal_line'}
+- date_stamp template: ${overlayTemplates.date_stamp || 'minimal_pill'}
+- kinetic_text template: ${overlayTemplates.kinetic_text || 'center_impact'}
+- stat_callout template: ${overlayTemplates.stat_callout || 'big_number'}
+- chapter_title template: ${overlayTemplates.chapter_title || 'minimal_chapter'}
+- background_overlay template: ${overlayTemplates.background_overlay || 'gradient_bottom'}`
+
+  const userMessage = `VIDEO TITLE: ${metadata.title || 'Untitled'}
+NICHE: ${metadata.niche || 'General'}
+STYLE PRESET: ${metadata.stylePreset || 'Dark Cinematic'}
+NARRATOR TONE: ${metadata.narratorTone || 'Authoritative'}
+
+${templateContext}
+
+ENTITIES ALREADY INTRODUCED: []
+(This is the first scene — no entities introduced yet)
 
 SCRIPT:
-${script}`
+${script}
+
+Analyze the full script and return the complete scenes array.
+Track entity introductions across all scenes — each named person or company gets a lower_third only once.`
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
@@ -227,6 +294,12 @@ ${script}`
       }
     }
 
+    // Ensure every overlay has a stable ID so the review UI can accept/reject individually
+    const overlaysWithIds = (scene.overlays || []).map(o => ({
+      id: o.id || randomUUID(),
+      ...o,
+    }))
+
     return {
       ...scene,
       scene_id: String(i + 1).padStart(3, '0'),
@@ -235,7 +308,7 @@ ${script}`
       motion:           scene.shot_type === 'image'
         ? (scene.motion || { type: style.motionType || 'push_in', intensity: 'subtle' })
         : null,
-      overlays:         scene.shot_type === 'image' ? (scene.overlays || []) : [],
+      overlays:         overlaysWithIds,
       transition_out:   scene.transition_out || style.transition || 'dissolve',
       grade:            scene.shot_type === 'image' ? (scene.grade || style.grade || 'cool_blue') : null,
       duration_seconds: scene.duration_seconds || style.durationSeconds || 5,

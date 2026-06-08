@@ -1387,6 +1387,78 @@ AI-generated overlays use the old flat format: `{ type, line1, text: 'string', c
 **Root cause — Apply Changes not updating Remotion Player:**
 `inputProps` was constructed inline on every render without memoization. Remotion's Player compares `inputProps` by reference — if React decided not to re-render VideoPlayer (e.g. due to parent memo boundaries), the composition never saw the new overlay data. Fix: `useMemo` in `VideoPlayer.jsx` with `scenes.map(s => ({ ...s }))` to force new object references when `scenes` changes. Fix: `handleOverlaySave` in `VideoCreator.jsx` uses `[...newOverlays]` (explicit new array) and combines save+close into one state batch.
 
+---
+
+### Fix 13 — Automated overlay generation with review system ✅ Complete
+
+**Goal:** Claude auto-generates overlay suggestions for every scene during script analysis. The user reviews, accepts, or rejects suggestions before they render in the video.
+
+**Architecture:**
+```
+Script analysis → Claude generates overlays[] per scene (status: "suggested")
+→ Review banner appears with count of suggestions
+→ User: "Accept all" / "Dismiss all" / "Review suggestions" (opens bulk modal)
+→ Per-scene accept/reject on scene card badges
+→ Only status === "accepted" overlays render in Remotion
+```
+
+**Overlay suggestion lifecycle:** `suggested` → `accepted` | rejected (removed from array)
+
+**Rules baked into Claude system prompt:**
+- lower_third: only on first introduction of named person/company — never duplicated
+- date_stamp: specific year/location, never on same scene as lower_third
+- stat_callout: financial figures, percentages, milestones
+- kinetic_text: max 1 per 4 scenes, never with stat_callout
+- chapter_title: major narrative transitions, max 3-5 per documentary
+- background_overlay: always combinable to aid legibility
+- Priority: lower_third > date_stamp; stat_callout XOR kinetic_text
+- Max 2 overlays per scene (excluding background_overlay)
+
+**Entity tracking:** Claude tracks named entities across all scenes in a single pass — lower_third is never duplicated for the same person/company.
+
+**Overlay output format:**
+```json
+{
+  "type": "lower_third",
+  "template": "minimal_line",
+  "text": { "line1": "Steve Jobs", "line2": "Co-Founder · Apple" },
+  "timing": { "appearAt": 0.7 },
+  "confidence": 0.95,
+  "reason": "First mention of Steve Jobs in the script",
+  "status": "suggested"
+}
+```
+
+**IDs:** Every overlay gets a `crypto.randomUUID()` ID during post-processing in `claude.js` so the review UI can accept/reject individually.
+
+**Files changed:**
+- `server/services/claude.js` — extended system prompt with full overlay generation rules; user message includes template preferences from defaults; overlays get IDs in post-processing; overlays preserved on all scene types (not just image)
+- `server/config/defaults.json` — added `overlayTemplates` block with default template names per type
+- `remotion/src/components/ImageScene.jsx` — filters `overlays` to only render `status === 'accepted'` or unstatused (backward compat)
+- `client/src/pages/VideoCreator.jsx` — `overlayStats` useMemo, `overlayReviewOpen` state, 6 accept/reject handlers, overlay review banner, imports `OverlayReviewModal`
+- `client/src/components/video-creator/OverlayReviewModal.jsx` (NEW) — full-screen bulk review: suggestions grouped by scene, accept/reject per overlay or per scene, "Accept all remaining" header button
+- `client/src/components/video-creator/SceneGrid.jsx` — `onAcceptSceneOverlays` / `onRejectSceneOverlays` props; suggestion badge in scene card footer showing count + inline Accept/Reject buttons; green "✓ N overlays" badge when accepted
+- `client/src/pages/Settings.jsx` — "Default Overlay Templates" section with dropdowns for all 6 overlay types; saves to `server/config/defaults.json` via POST /api/settings
+
+**Testing checklist:**
+- [ ] Analyze a script → scenes appear with `overlays` array containing `status: "suggested"` entries
+- [ ] Review banner appears above scene grid with correct suggestion count
+- [ ] "Accept all" bulk-accepts all suggestions immediately
+- [ ] "Dismiss all" removes all suggestions from all scenes
+- [ ] "Review suggestions" opens the bulk modal
+- [ ] Bulk modal shows all scenes with suggestions grouped
+- [ ] Per-overlay Accept/Reject buttons in modal update state in real time
+- [ ] Per-scene Accept/Reject buttons in modal work
+- [ ] "Accept all remaining" in modal header accepts everything left
+- [ ] Scene card footer shows suggestion badge with count and inline Accept/Reject
+- [ ] Scene card shows green "✓ N overlays" badge after accepting
+- [ ] Accepted overlays render in the Remotion player (visible in live preview)
+- [ ] Suggested (not-yet-accepted) overlays do NOT render in Remotion
+- [ ] Settings page shows "Default Overlay Templates" section with all 6 dropdowns
+- [ ] Changing a template setting saves and is reflected in the next analysis
+
+---
+
 ### Testing checklist
 - [ ] "Overlay Studio" button visible in each scene card footer
 - [ ] Clicking opens full-screen modal for that scene

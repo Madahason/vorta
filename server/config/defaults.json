@@ -11,5 +11,13 @@
     "resolution": "1080p",
     "fps": 30,
     "concurrency": 1
+  },
+  "overlayTemplates": {
+    "lower_third": "minimal_line",
+    "date_stamp": "minimal_pill",
+    "kinetic_text": "center_impact",
+    "stat_callout": "big_number",
+    "chapter_title": "minimal_chapter",
+    "background_overlay": "gradient_bottom"
   }
 }

@@ -60,8 +60,9 @@ export default function Settings() {
     finally { setSaving(false) }
   }
 
-  const patchStyle  = (k, v) => setDefaults(d => ({ ...d, style:  { ...d.style,  [k]: v } }))
-  const patchRender = (k, v) => setDefaults(d => ({ ...d, render: { ...d.render, [k]: v } }))
+  const patchStyle    = (k, v) => setDefaults(d => ({ ...d, style:  { ...d.style,  [k]: v } }))
+  const patchRender   = (k, v) => setDefaults(d => ({ ...d, render: { ...d.render, [k]: v } }))
+  const patchOverlay  = (k, v) => setDefaults(d => ({ ...d, overlayTemplates: { ...(d.overlayTemplates || {}), [k]: v } }))
 
   // ─── Test Anthropic key ──────────────────────────────────────────────────────
   const testAnthropicKey = async () => {
@@ -121,8 +122,9 @@ export default function Settings() {
     )
   }
 
-  const s = defaults.style  || {}
-  const r = defaults.render || {}
+  const s  = defaults.style            || {}
+  const r  = defaults.render           || {}
+  const ot = defaults.overlayTemplates || {}
 
   return (
     <div className="p-8 max-w-2xl">
@@ -283,6 +285,71 @@ export default function Settings() {
         >
           {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
           {saved ? 'Saved!' : 'Save presets'}
+        </button>
+      </Section>
+
+      {/* ── Default Overlay Templates ─────────────────────────────────────────── */}
+      <Section title="Default Overlay Templates">
+        <p className="text-[11px] text-white/30 mb-4">
+          These templates are used when Claude auto-generates overlays during script analysis.
+        </p>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelCls}>Lower Third style</label>
+            <select value={ot.lower_third || 'minimal_line'} onChange={e => patchOverlay('lower_third', e.target.value)} className={selectCls}>
+              <option value="minimal_line">Minimal Line</option>
+              <option value="color_block">Color Block</option>
+              <option value="underline_reveal">Underline Reveal</option>
+              <option value="frosted_glass">Frosted Glass</option>
+              <option value="split_reveal">Split Reveal</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>Date Stamp style</label>
+            <select value={ot.date_stamp || 'minimal_pill'} onChange={e => patchOverlay('date_stamp', e.target.value)} className={selectCls}>
+              <option value="minimal_pill">Minimal Pill</option>
+              <option value="corner_badge">Corner Badge</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>Kinetic Text style</label>
+            <select value={ot.kinetic_text || 'center_impact'} onChange={e => patchOverlay('kinetic_text', e.target.value)} className={selectCls}>
+              <option value="center_impact">Center Impact</option>
+              <option value="bottom_fade">Bottom Fade</option>
+              <option value="word_by_word">Word by Word</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>Stat Callout style</label>
+            <select value={ot.stat_callout || 'big_number'} onChange={e => patchOverlay('stat_callout', e.target.value)} className={selectCls}>
+              <option value="big_number">Big Number</option>
+              <option value="corner_stat">Corner Stat</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>Chapter Title style</label>
+            <select value={ot.chapter_title || 'minimal_chapter'} onChange={e => patchOverlay('chapter_title', e.target.value)} className={selectCls}>
+              <option value="minimal_chapter">Minimal Chapter</option>
+              <option value="full_screen_chapter">Full Screen</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>Background Overlay style</label>
+            <select value={ot.background_overlay || 'gradient_bottom'} onChange={e => patchOverlay('background_overlay', e.target.value)} className={selectCls}>
+              <option value="gradient_bottom">Gradient Bottom</option>
+              <option value="full_dark">Full Dark</option>
+              <option value="vignette_strong">Strong Vignette</option>
+              <option value="cinematic_bars">Cinematic Bars</option>
+            </select>
+          </div>
+        </div>
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="mt-5 flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors"
+        >
+          {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+          {saved ? 'Saved!' : 'Save overlay defaults'}
         </button>
       </Section>
 

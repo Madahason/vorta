@@ -8,6 +8,7 @@ import VoiceoverPanel from '../components/video-creator/VoiceoverPanel'
 import AudioPanel from '../components/video-creator/AudioPanel'
 import ExportPanel from '../components/video-creator/ExportPanel'
 import OverlayStudio from '../components/video-creator/OverlayStudio'
+import { OverlayReviewModal } from '../components/video-creator/OverlayReviewModal'
 import { DEFAULT_BRAND } from '../config/overlayTemplates'
 
 const SERVER_URL = 'http://localhost:3001'
@@ -153,8 +154,9 @@ export default function VideoCreator() {
   const [audioSpecs,   setAudioSpecs]   = useState([])
   const [audioVolumes, setAudioVolumes] = useState({ music: 0.12, ambient: 0.06, sting: 0.45 })
 
-  // Overlay Studio
+  // Overlay Studio + review modal
   const [overlayStudioScene, setOverlayStudioScene] = useState(null)
+  const [overlayReviewOpen, setOverlayReviewOpen] = useState(false)
   const [brand, setBrand] = useState(() => {
     try { return JSON.parse(localStorage.getItem('vorta_brand')) || DEFAULT_BRAND } catch { return DEFAULT_BRAND }
   })
@@ -253,6 +255,69 @@ export default function VideoCreator() {
   const globalSettings = useMemo(() => ({
     grainIntensity: filmGrain ? undefined : 0,
   }), [filmGrain])
+
+  // ─── Overlay suggestion stats ─────────────────────────────────────────────
+  const overlayStats = useMemo(() => {
+    const suggested = scenes.flatMap(s => (s.overlays || []).filter(o => o.status === 'suggested'))
+    const accepted  = scenes.flatMap(s => (s.overlays || []).filter(o => o.status === 'accepted'))
+    const rejected  = scenes.flatMap(s => (s.overlays || []).filter(o => o.status === 'rejected'))
+    return {
+      total:     suggested.length + accepted.length,
+      suggested: suggested.length,
+      accepted:  accepted.length,
+      rejected:  rejected.length,
+      scenesWithSuggestions: scenes.filter(s => s.overlays?.some(o => o.status === 'suggested')).length,
+    }
+  }, [scenes])
+
+  // ─── Overlay accept/reject handlers ──────────────────────────────────────
+  const handleAcceptAllOverlays = () => {
+    setScenes(prev => prev.map(s => ({
+      ...s,
+      overlays: (s.overlays || []).map(o =>
+        o.status === 'suggested' ? { ...o, status: 'accepted' } : o
+      ),
+    })))
+  }
+
+  const handleRejectAllOverlays = () => {
+    setScenes(prev => prev.map(s => ({
+      ...s,
+      overlays: (s.overlays || []).filter(o => o.status !== 'suggested'),
+    })))
+  }
+
+  const handleAcceptSceneOverlays = (sceneId) => {
+    setScenes(prev => prev.map(s =>
+      s.scene_id === sceneId
+        ? { ...s, overlays: (s.overlays || []).map(o => ({ ...o, status: 'accepted' })) }
+        : s
+    ))
+  }
+
+  const handleRejectSceneOverlays = (sceneId) => {
+    setScenes(prev => prev.map(s =>
+      s.scene_id === sceneId
+        ? { ...s, overlays: (s.overlays || []).filter(o => o.status !== 'suggested') }
+        : s
+    ))
+  }
+
+  const handleAcceptOverlay = (sceneId, overlayId) => {
+    setScenes(prev => prev.map(s =>
+      s.scene_id === sceneId
+        ? { ...s, overlays: (s.overlays || []).map(o => o.id === overlayId ? { ...o, status: 'accepted' } : o) }
+        : s
+    ))
+  }
+
+  const handleRejectOverlay = (sceneId, overlayId) => {
+    setScenes(prev => prev.map(s =>
+      s.scene_id === sceneId
+        ? { ...s, overlays: (s.overlays || []).filter(o => o.id !== overlayId) }
+        : s
+    ))
+  }
 
   // ─── Sticky player — IntersectionObserver on sentinel div ─────────────────
   useEffect(() => {
@@ -807,6 +872,50 @@ export default function VideoCreator() {
               </div>
             )}
 
+            {/* Overlay suggestion review banner */}
+            {overlayStats.suggested > 0 && (
+              <div style={{
+                padding: '14px 20px',
+                background: 'rgba(59,130,246,0.08)',
+                border: '1px solid rgba(59,130,246,0.25)',
+                borderRadius: 10,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 16,
+              }}>
+                <div>
+                  <div style={{ color: 'white', fontSize: 14, fontWeight: 600 }}>
+                    ✨ {overlayStats.suggested} overlay suggestion{overlayStats.suggested !== 1 ? 's' : ''} ready
+                  </div>
+                  <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, marginTop: 3 }}>
+                    Claude analyzed your script and suggested overlays for {overlayStats.scenesWithSuggestions} scene{overlayStats.scenesWithSuggestions !== 1 ? 's' : ''}.
+                    Review each scene or accept all at once.
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  <button
+                    onClick={handleRejectAllOverlays}
+                    style={{ padding: '8px 14px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, color: 'rgba(255,255,255,0.6)', fontSize: 12, cursor: 'pointer' }}
+                  >
+                    Dismiss all
+                  </button>
+                  <button
+                    onClick={() => setOverlayReviewOpen(true)}
+                    style={{ padding: '8px 14px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, color: 'white', fontSize: 12, cursor: 'pointer' }}
+                  >
+                    Review suggestions
+                  </button>
+                  <button
+                    onClick={handleAcceptAllOverlays}
+                    style={{ padding: '8px 16px', background: '#3b82f6', border: 'none', borderRadius: 6, color: 'white', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    Accept all ({overlayStats.suggested})
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Sentinel — IntersectionObserver watches this to detect scroll-past */}
             {showPlayer && <div ref={sentinelRef} style={{ height: 0 }} />}
 
@@ -846,6 +955,8 @@ export default function VideoCreator() {
               voiceoverStatuses={voiceoverStatuses}
               onOpenVoiceover={handleOpenVoiceover}
               onOpenOverlayStudio={handleOpenOverlayStudio}
+              onAcceptSceneOverlays={handleAcceptSceneOverlays}
+              onRejectSceneOverlays={handleRejectSceneOverlays}
             />
 
             <VoiceoverPanel
@@ -982,6 +1093,18 @@ export default function VideoCreator() {
         brand={brand}
         onClose={() => setOverlayStudioScene(null)}
         onSave={handleOverlaySave}
+      />
+    )}
+
+    {overlayReviewOpen && (
+      <OverlayReviewModal
+        scenes={scenes}
+        onAcceptOverlay={handleAcceptOverlay}
+        onRejectOverlay={handleRejectOverlay}
+        onAcceptScene={handleAcceptSceneOverlays}
+        onRejectScene={handleRejectSceneOverlays}
+        onAcceptAll={handleAcceptAllOverlays}
+        onClose={() => setOverlayReviewOpen(false)}
       />
     )}
     </>

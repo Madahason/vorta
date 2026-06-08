@@ -68,6 +68,8 @@ export default function SceneGrid({
   voiceoverStatuses = {},
   onOpenVoiceover,
   onOpenOverlayStudio,
+  onAcceptSceneOverlays,
+  onRejectSceneOverlays,
 }) {
 
   const updateScene = (index, patch) =>
@@ -117,6 +119,8 @@ export default function SceneGrid({
               voiceoverStatus={voiceoverStatuses[scene.scene_id] || null}
               onOpenVoiceover={onOpenVoiceover ? () => onOpenVoiceover(scene) : null}
               onOpenOverlayStudio={onOpenOverlayStudio ? () => onOpenOverlayStudio(scene) : null}
+              onAcceptSceneOverlays={onAcceptSceneOverlays ? () => onAcceptSceneOverlays(scene.scene_id) : null}
+              onRejectSceneOverlays={onRejectSceneOverlays ? () => onRejectSceneOverlays(scene.scene_id) : null}
             />
           )
         })}
@@ -133,6 +137,7 @@ function SceneCard({
   motionStatus, onBuildComponent,
   clipMatch, selectedClip, onSelectClip, onConvertToImage, onManualMatch, onOpenLibrary, onPreview,
   voiceoverStatus, onOpenVoiceover, onOpenOverlayStudio,
+  onAcceptSceneOverlays, onRejectSceneOverlays,
 }) {
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft,   setPromptDraft]   = useState(scene.higgsfield_prompt)
@@ -395,8 +400,8 @@ function SceneCard({
 
         </div>
 
-        {/* ── Card footer — Overlay Studio ── */}
-        <div className="mt-3 ml-10 pt-3 border-t border-white/[0.04] flex items-center">
+        {/* ── Card footer — Overlay Studio + suggestion badges ── */}
+        <div className="mt-3 ml-10 pt-3 border-t border-white/[0.04] flex items-center gap-3 flex-wrap">
           <button
             onClick={onOpenOverlayStudio}
             className="flex items-center gap-1.5 text-[11px] transition-colors text-white/25 hover:text-indigo-300"
@@ -407,6 +412,58 @@ function SceneCard({
               : 'Overlay Studio'
             }
           </button>
+
+          {/* Overlay suggestion / accepted badges */}
+          {(() => {
+            const suggested = (scene.overlays || []).filter(o => o.status === 'suggested')
+            const accepted  = (scene.overlays || []).filter(o => o.status === 'accepted')
+            if (suggested.length === 0 && accepted.length === 0) return null
+            return (
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                {suggested.length > 0 && (
+                  <div style={{
+                    display: 'flex', gap: 4, alignItems: 'center',
+                    padding: '2px 7px',
+                    background: 'rgba(59,130,246,0.10)',
+                    border: '1px solid rgba(59,130,246,0.25)',
+                    borderRadius: 4,
+                  }}>
+                    <span style={{ color: '#93c5fd', fontSize: 10 }}>
+                      ✨ {suggested.length} suggestion{suggested.length > 1 ? 's' : ''}
+                    </span>
+                    {onAcceptSceneOverlays && (
+                      <button
+                        onClick={onAcceptSceneOverlays}
+                        style={{ color: '#4ade80', fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', padding: '0 0 0 4px' }}
+                      >
+                        Accept
+                      </button>
+                    )}
+                    {onRejectSceneOverlays && (
+                      <button
+                        onClick={onRejectSceneOverlays}
+                        style={{ color: '#f87171', fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                      >
+                        Reject
+                      </button>
+                    )}
+                  </div>
+                )}
+                {accepted.length > 0 && (
+                  <div style={{
+                    padding: '2px 7px',
+                    background: 'rgba(34,197,94,0.08)',
+                    border: '1px solid rgba(34,197,94,0.2)',
+                    borderRadius: 4,
+                  }}>
+                    <span style={{ color: '#4ade80', fontSize: 10 }}>
+                      ✓ {accepted.length} overlay{accepted.length > 1 ? 's' : ''}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
         </div>
       </div>
     </div>
