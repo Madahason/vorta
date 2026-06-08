@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { X, Trash2 } from 'lucide-react'
 import { VideoPlayer } from './VideoPlayer'
+import { DraggableOverlayCanvas } from './DraggableOverlayCanvas'
 import {
   OVERLAY_TABS, getTemplatesForType,
   ENTER_ANIMATIONS, EXIT_ANIMATIONS, EASING_OPTIONS, FONT_OPTIONS,
@@ -446,8 +447,9 @@ export default function OverlayStudio({
   const [previewOverlays, setPreviewOverlays] = useState(
     () => (scene?.overlays || []).map(normalizeOverlay)
   )
-  const [selectedId,  setSelectedId]  = useState(null)
-  const [justApplied, setJustApplied] = useState(false)
+  const [selectedId,   setSelectedId]   = useState(null)
+  const [justApplied,  setJustApplied]  = useState(false)
+  const [previewMode,  setPreviewMode]  = useState('canvas')
 
   const hasUncommittedChanges = JSON.stringify(previewOverlays) !== JSON.stringify(committedOverlays)
   const selectedOverlay = previewOverlays.find(o => o.id === selectedId) || null
@@ -766,20 +768,41 @@ export default function OverlayStudio({
           </div>
         </div>
 
-        {/* ── Right panel — live preview ── */}
+        {/* ── Right panel — drag canvas + animated preview ── */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 24, gap: 14, overflow: 'hidden', minWidth: 0 }}>
 
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.28)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Live Preview</div>
+          {/* Tab bar */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[
+                { id: 'canvas', label: '🖱 Drag & Position' },
+                { id: 'player', label: '▶ Animated Preview' },
+              ].map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setPreviewMode(tab.id)}
+                  style={{
+                    padding: '5px 13px',
+                    borderRadius: 6,
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 11,
+                    fontWeight: previewMode === tab.id ? '600' : '400',
+                    background: previewMode === tab.id ? 'rgba(59,130,246,0.22)' : 'rgba(255,255,255,0.06)',
+                    color: previewMode === tab.id ? '#93c5fd' : 'rgba(255,255,255,0.42)',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
             <div style={{ fontSize: 10, letterSpacing: '0.03em' }}>
               {hasUncommittedChanges && (
-                <span style={{ color: '#fbbf24' }}>● Showing unsaved changes</span>
+                <span style={{ color: '#fbbf24' }}>● Unsaved changes</span>
               )}
               {!hasUncommittedChanges && committedOverlays.length > 0 && (
-                <span style={{ color: '#4ade80' }}>✓ Showing applied overlays</span>
-              )}
-              {!hasUncommittedChanges && committedOverlays.length === 0 && (
-                <span style={{ color: 'rgba(255,255,255,0.25)' }}>No overlays added</span>
+                <span style={{ color: '#4ade80' }}>✓ Applied</span>
               )}
             </div>
           </div>
@@ -790,34 +813,46 @@ export default function OverlayStudio({
             </div>
           )}
 
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <div style={{ width: '100%', maxWidth: 800 }}>
-              <div style={{
-                borderRadius: 10, overflow: 'hidden',
-                border: hasUncommittedChanges
-                  ? '1px solid rgba(251,191,36,0.35)'
-                  : justApplied
-                    ? '1px solid rgba(34,197,94,0.35)'
-                    : '1px solid rgba(255,255,255,0.06)',
-                transition: 'border-color 0.3s',
-              }}>
-                <VideoPlayer
-                  scenes={[previewScene]}
-                  imagePaths={imagePaths}
-                  selectedClips={selectedClips}
-                  globalSettings={globalSettings}
-                  audioSpecs={[]}
-                  autoPlay
-                  loop
-                />
-              </div>
-            </div>
-          </div>
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', justifyContent: 'flex-start' }}>
+            {previewMode === 'canvas' && (
+              <DraggableOverlayCanvas
+                scene={{ ...scene, image_path: imagePaths[scene?.scene_id] || null }}
+                overlays={previewOverlays}
+                selectedOverlayId={selectedId}
+                onSelectOverlay={setSelectedId}
+                onUpdatePosition={(id, pos) => handleUpdateOverlay(id, { position: pos })}
+                brand={globalSettings?.brand}
+              />
+            )}
 
-          <div style={{ textAlign: 'center', flexShrink: 0 }}>
-            <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: 11 }}>
-              Click player to play · overlay animations preview in real time
-            </span>
+            {previewMode === 'player' && (
+              <div style={{ width: '100%', maxWidth: 800 }}>
+                <div style={{
+                  borderRadius: 10, overflow: 'hidden',
+                  border: hasUncommittedChanges
+                    ? '1px solid rgba(251,191,36,0.35)'
+                    : justApplied
+                      ? '1px solid rgba(34,197,94,0.35)'
+                      : '1px solid rgba(255,255,255,0.06)',
+                  transition: 'border-color 0.3s',
+                }}>
+                  <VideoPlayer
+                    scenes={[previewScene]}
+                    imagePaths={imagePaths}
+                    selectedClips={selectedClips}
+                    globalSettings={globalSettings}
+                    audioSpecs={[]}
+                    autoPlay
+                    loop
+                  />
+                </div>
+                <div style={{ textAlign: 'center', marginTop: 8 }}>
+                  <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: 11 }}>
+                    Click player to play · overlay animations preview in real time
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

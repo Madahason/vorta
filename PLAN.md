@@ -1572,3 +1572,38 @@ Script analysis → Claude generates overlays[] per scene (status: "suggested")
 - [ ] AudioPanel: volume sliders thumb visible and interactive
 - [ ] ClipLibrary: search bars have visible borders; add/upload form fields readable
 - [ ] OverlayStudio: all editor fields (text, color, select, sliders) clearly visible
+
+---
+
+### Fix 1 — Background music: Pixabay download ✅ Complete
+
+**Problem:** Pixabay queries returned 0 results; corrupted cached files were silently returned; audioSpecs not wired into render.
+
+**Changes:**
+- `server/services/pixabayMusic.js` — `downloadTrack` now validates cached file size (delete & retry if < 10 KB), validates downloaded buffer (reject if < 10 KB)
+- `server/config/musicMoods.js` — simplified `musicQuery` strings from 4-5 words to 2-3 words (e.g. `'tension suspense'`, `'documentary background'`)
+- `server/routes/audio.js` — added `GET /test-pixabay` debug endpoint
+- `server/routes/render.js` — wires `buildProjectAudioSpecsCached` into `propsData.audioSpecs`; rewrites local file paths to full HTTP URLs (`http://localhost:3001/library/...`) for Remotion headless Chrome
+
+---
+
+### Fix 2 — Ambient sound system ✅ Complete
+
+**Problem:** Ambient files had to be manually downloaded from Freesound; no automated selection per scene.
+
+**Changes:**
+- `server/services/ambientSelector.js` (new) — uses Claude Haiku to select best ambient key per scene; falls back to mood-based defaults
+- `server/services/ambientLibrary.js` — added `FREESOUND_QUERIES` map, `downloadAmbientFile(key)` (yt-dlp + ffmpeg trim to 30s), `downloadAllMissingAmbient()`
+- `server/routes/audio.js` — rewrote `POST /build-specs` to use parallel mood music + Claude ambient selection; added `POST /download-ambient` SSE stream endpoint; added `POST /download-ambient/:key` single-key endpoint
+- `client/src/components/video-creator/AudioPanel.jsx` — added "Auto-download missing" button with SSE progress tracking per ambient key
+
+---
+
+### Fix 3 — Overlay drag positioning ✅ Complete
+
+**Problem:** Overlay positions could only be set via number inputs; no direct drag-to-position workflow.
+
+**Changes:**
+- `client/` — installed `react-moveable` package
+- `client/src/components/video-creator/DraggableOverlayCanvas.jsx` (new) — canvas showing scene image + draggable overlay elements; `Moveable` handles on selected element; rule-of-thirds grid while dragging; bidirectional coordinate mapping between 1920×1080 video space and display canvas pixels; `OverlayElement` renders visual representations of all overlay types
+- `client/src/components/video-creator/OverlayStudio.jsx` — added `previewMode` state; replaced static right panel with two-tab system: "Drag & Position" (DraggableOverlayCanvas) and "Animated Preview" (VideoPlayer)

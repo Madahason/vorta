@@ -1,10 +1,21 @@
 const crypto    = require('crypto')
 const Anthropic = require('@anthropic-ai/sdk')
 const clipStore = require('./clipStore')
-const youtubeCC      = require('./sources/youtubeCC')
-const youtubeFairUse = require('./sources/youtubeFairUse')
+const youtubeCC       = require('./sources/youtubeCC')
+const youtubeFairUse  = require('./sources/youtubeFairUse')
 const internetArchive = require('./sources/internetArchive')
-const cspan          = require('./sources/cspan')
+const cspan           = require('./sources/cspan')
+const { searchTED }   = require('./sources/ted')
+const { buildFootageQuery } = require('./sources/searchUtils')
+const { scoreResults }      = require('./resultScorer')
+
+const SOURCE_PRIORITY = [
+  'internet_archive',
+  'cspan',
+  'ted',
+  'youtube_cc',
+  'youtube_fair_use',
+]
 
 // In-memory job state: seedId -> { logs: [], clients: Set }
 const seedJobs = new Map()
@@ -51,28 +62,42 @@ Example: ["Steve Jobs","Apple Inc","Macworld 2007","Cupertino California","iPod 
   return JSON.parse(clean)
 }
 
-// Search all 4 sources and return combined results, sorted by license priority
+// Search all sources in parallel and return combined results scored + priority-sorted
 async function searchAllSources(entity, maxPerSource = 3) {
+  const personQuery   = buildFootageQuery(entity, 'person')
+  const defaultQuery  = buildFootageQuery(entity)
+
   const searches = await Promise.allSettled([
-    internetArchive.search(entity, maxPerSource),
-    cspan.search(entity, maxPerSource),
-    youtubeCC.search(entity, maxPerSource),
-    youtubeFairUse.search(entity, maxPerSource),
+    internetArchive.search(personQuery,  maxPerSource),
+    cspan.search(defaultQuery,           maxPerSource),
+    searchTED(entity,                    maxPerSource),
+    youtubeCC.search(personQuery,        maxPerSource),
+    youtubeFairUse.search(personQuery,   maxPerSource),
   ])
 
-  const [archiveRes, cspanRes, ccRes, fuRes] = searches.map(r =>
+  const [archiveRes, cspanRes, tedRes, ccRes, fuRes] = searches.map(r =>
     r.status === 'fulfilled' ? r.value : []
   )
 
-  // Assign source label and priority for sorting
   const labeled = [
-    ...archiveRes.map(r => ({ ...r, _source: 'internet_archive', _priority: 1 })),
-    ...cspanRes.map(r =>   ({ ...r, _source: 'cspan',            _priority: 2 })),
-    ...ccRes.map(r =>      ({ ...r, _source: 'youtube_cc',       _priority: 3 })),
-    ...fuRes.map(r =>      ({ ...r, _source: 'youtube_fair_use', _priority: 4 })),
+    ...archiveRes.map(r => ({ ...r, _source: 'internet_archive' })),
+    ...cspanRes.map(r =>   ({ ...r, _source: 'cspan'            })),
+    ...tedRes.map(r =>     ({ ...r, _source: 'ted'              })),
+    ...ccRes.map(r =>      ({ ...r, _source: 'youtube_cc'       })),
+    ...fuRes.map(r =>      ({ ...r, _source: 'youtube_fair_use' })),
   ]
 
-  return labeled.sort((a, b) => a._priority - b._priority)
+  // Score all combined results, then sort by priority + relevance score
+  const scored = await scoreResults(labeled, entity)
+
+  return scored.sort((a, b) => {
+    const ap = SOURCE_PRIORITY.indexOf(a._source)
+    const bp = SOURCE_PRIORITY.indexOf(b._source)
+    const ai = ap === -1 ? 99 : ap
+    const bi = bp === -1 ? 99 : bp
+    if (ai !== bi) return ai - bi
+    return (b.relevanceScore || 5) - (a.relevanceScore || 5)
+  })
 }
 
 async function seedProjectClips(seedId, { title, niche, projectId, maxClips = 15 }) {
@@ -119,12 +144,15 @@ async function seedProjectClips(seedId, { title, niche, projectId, maxClips = 15
           if (candidate._source === 'internet_archive') {
             clip = await internetArchive.download({ identifier: candidate.id, ...commonArgs })
           } else if (candidate._source === 'cspan') {
-            clip = await cspan.download(commonArgs)
+            clip = await cspan.download({ ...commonArgs, startSec: 25, endSec: 33 })
           } else if (candidate._source === 'youtube_cc') {
-            const duration = Math.min(candidate.duration || 15, 30)
-            clip = await youtubeCC.download({ ...commonArgs, startSec: 0, endSec: duration })
+            clip = await youtubeCC.download({ ...commonArgs, startSec: 25, endSec: 33 })
+          } else if (candidate._source === 'ted') {
+            // TED videos are on YouTube — use CC downloader
+            clip = await youtubeCC.download({ ...commonArgs, startSec: 25, endSec: 33 })
+            if (clip) clip.source = 'ted'
           } else if (candidate._source === 'youtube_fair_use') {
-            clip = await youtubeFairUse.download({ ...commonArgs, startSec: 0, endSec: 7 })
+            clip = await youtubeFairUse.download({ ...commonArgs, startSec: 25, endSec: 33 })
           }
 
           if (clip) {

@@ -93,11 +93,43 @@ router.post('/', async (req, res) => {
       }
     : null;
 
+  // Build audio specs for background music / ambient / stings
+  let audioSpecs = []
+  try {
+    const { buildProjectAudioSpecsCached } = require('../services/audioMixer')
+    audioSpecs = buildProjectAudioSpecsCached(absoluteScenes)
+    // Rewrite local file paths to HTTP URLs so Remotion headless Chrome can fetch them
+    audioSpecs = audioSpecs.map(spec => ({
+      ...spec,
+      music: spec.music ? {
+        ...spec.music,
+        url: spec.music.url
+          ? `http://localhost:${SERVER_PORT}${spec.music.url}`
+          : null,
+      } : null,
+      ambient: spec.ambient ? {
+        ...spec.ambient,
+        url: spec.ambient.url
+          ? `http://localhost:${SERVER_PORT}${spec.ambient.url}`
+          : null,
+      } : null,
+      sting: spec.sting ? {
+        ...spec.sting,
+        url: spec.sting.url
+          ? `http://localhost:${SERVER_PORT}${spec.sting.url}`
+          : null,
+      } : null,
+    }))
+  } catch (err) {
+    console.warn('[render] audioSpecs build failed (non-fatal):', err.message)
+  }
+
   const propsData = {
     scenes:        absoluteScenes,
     imagePaths,
     selectedClips: selectedClips || {},
     audio:         audioProps,
+    audioSpecs,
   };
 
   // Write project files

@@ -18,13 +18,15 @@ export default function AudioPanel({
   audioVolumes,
   onVolumesChange,
 }) {
-  const [open,              setOpen]              = useState(true)
-  const [audioStatus,       setAudioStatus]       = useState(null)
-  const [building,          setBuilding]          = useState(false)
-  const [buildError,        setBuildError]        = useState(null)
-  const [showDownloadGuide, setShowDownloadGuide] = useState(false)
-  const [playingKey,        setPlayingKey]        = useState(null)
-  const [downloadingMoods,  setDownloadingMoods]  = useState({})
+  const [open,                  setOpen]                  = useState(true)
+  const [audioStatus,           setAudioStatus]           = useState(null)
+  const [building,              setBuilding]              = useState(false)
+  const [buildError,            setBuildError]            = useState(null)
+  const [showDownloadGuide,     setShowDownloadGuide]     = useState(false)
+  const [playingKey,            setPlayingKey]            = useState(null)
+  const [downloadingMoods,      setDownloadingMoods]      = useState({})
+  const [isDownloadingAmbient,  setIsDownloadingAmbient]  = useState(false)
+  const [ambientDownloadStatus, setAmbientDownloadStatus] = useState({})
 
   const activeAudioRef = useRef(null)
   const panelRef       = useRef(null)
@@ -86,6 +88,33 @@ export default function AudioPanel({
     } finally {
       setDownloadingMoods(p => ({ ...p, [mood]: false }))
     }
+  }
+
+  // ── Download all missing ambient files via yt-dlp SSE ────────────────────────
+  const handleDownloadAllAmbient = () => {
+    setIsDownloadingAmbient(true)
+    setAmbientDownloadStatus({})
+
+    const es = new EventSource(`${SERVER_URL}/api/audio/download-ambient`)
+    es.onmessage = (e) => {
+      try {
+        const event = JSON.parse(e.data)
+        if (event.type === 'downloading') {
+          setAmbientDownloadStatus(p => ({ ...p, [event.key]: 'downloading' }))
+        } else if (event.type === 'done') {
+          setAmbientDownloadStatus(p => ({ ...p, [event.key]: 'done' }))
+        } else if (event.type === 'skipped') {
+          setAmbientDownloadStatus(p => ({ ...p, [event.key]: 'exists' }))
+        } else if (event.type === 'error') {
+          setAmbientDownloadStatus(p => ({ ...p, [event.key]: 'error' }))
+        } else if (event.type === 'complete') {
+          setIsDownloadingAmbient(false)
+          es.close()
+          fetchStatus()
+        }
+      } catch {}
+    }
+    es.onerror = () => { setIsDownloadingAmbient(false); es.close() }
   }
 
   // ── Sting preview ────────────────────────────────────────────────────────────
@@ -331,10 +360,28 @@ export default function AudioPanel({
               <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 Ambient loops
               </span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>
                   {ambientAvail} / {audioStatus?.ambientTotal || 13} files
                 </span>
+                {ambientAvail < (audioStatus?.ambientTotal || 13) && (
+                  <button
+                    onClick={handleDownloadAllAmbient}
+                    disabled={isDownloadingAmbient}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 3, fontSize: 10,
+                      padding: '2px 8px', borderRadius: 4,
+                      background: isDownloadingAmbient ? 'rgba(255,255,255,0.04)' : 'rgba(124,58,237,0.15)',
+                      border: `1px solid ${isDownloadingAmbient ? 'rgba(255,255,255,0.08)' : 'rgba(124,58,237,0.30)'}`,
+                      color: isDownloadingAmbient ? 'rgba(255,255,255,0.25)' : 'rgba(167,139,250,0.90)',
+                      cursor: isDownloadingAmbient ? 'not-allowed' : 'pointer',
+                    }}
+                    title="Auto-download missing ambient files using yt-dlp + Freesound"
+                  >
+                    {isDownloadingAmbient ? <Loader2 size={9} className="animate-spin" /> : <Download size={9} />}
+                    {isDownloadingAmbient ? 'Downloading…' : 'Auto-download missing'}
+                  </button>
+                )}
                 <button
                   onClick={() => setShowDownloadGuide(true)}
                   style={{
@@ -342,19 +389,30 @@ export default function AudioPanel({
                     color: '#3b82f6', background: 'none', border: 'none', cursor: 'pointer',
                   }}
                 >
-                  Download guide <ExternalLink size={9} />
+                  Manual guide <ExternalLink size={9} />
                 </button>
               </div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px' }}>
-              {(audioStatus?.ambientDetails || []).map(file => (
-                <div key={file.key} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}>
-                  {dot(file.available)}
-                  <span style={{ fontSize: 10, color: file.available ? 'rgba(255,255,255,0.50)' : 'rgba(255,255,255,0.20)' }}>
-                    {file.key.replace(/_/g, ' ')}
-                  </span>
-                </div>
-              ))}
+              {(audioStatus?.ambientDetails || []).map(file => {
+                const dlStatus = ambientDownloadStatus[file.key]
+                const isDownloading = dlStatus === 'downloading'
+                const isDone = dlStatus === 'done' || file.available
+                const isError = dlStatus === 'error'
+                return (
+                  <div key={file.key} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}>
+                    {isDownloading
+                      ? <Loader2 size={7} className="animate-spin" style={{ color: '#a78bfa', flexShrink: 0 }} />
+                      : isError
+                        ? <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#f87171', display: 'inline-block', flexShrink: 0 }} />
+                        : dot(isDone)
+                    }
+                    <span style={{ fontSize: 10, color: isDone ? 'rgba(255,255,255,0.50)' : isError ? 'rgba(248,113,113,0.70)' : 'rgba(255,255,255,0.20)' }}>
+                      {file.key.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+                )
+              })}
             </div>
           </div>
 

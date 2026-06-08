@@ -1,15 +1,63 @@
 const router  = require('express').Router()
 const fs      = require('fs')
 const path    = require('path')
+const crypto  = require('crypto')
+const { exec } = require('child_process')
+const { promisify } = require('util')
+const execAsync = promisify(exec)
+const multer  = require('multer')
+
+const CLIPS_DIR = path.join(__dirname, '../../library/clips')
+
+const storage = multer.diskStorage({
+  destination: CLIPS_DIR,
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.mp4'
+    cb(null, `manual_${crypto.randomUUID()}${ext}`)
+  },
+})
+const upload = multer({
+  storage,
+  limits: { fileSize: 500 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = /^video\/(mp4|quicktime|webm)$/.test(file.mimetype)
+    cb(ok ? null : new Error('Only mp4, mov, and webm files are accepted'), ok)
+  },
+})
+
+async function getVideoDuration(filePath) {
+  try {
+    const { stdout } = await execAsync(
+      `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${filePath}"`
+    )
+    const d = parseFloat(stdout.trim())
+    return isNaN(d) ? null : Math.round(d)
+  } catch {
+    return null
+  }
+}
 
 const { matchClips }  = require('../services/clipMatcher')
 const clipStore        = require('../services/clipStore')
-const { checkYtDlp }  = require('../services/ytdlp')
+const { checkYtDlp, generateDescription }  = require('../services/ytdlp')
 const youtubeCC        = require('../services/sources/youtubeCC')
 const youtubeFairUse   = require('../services/sources/youtubeFairUse')
 const internetArchive  = require('../services/sources/internetArchive')
 const cspan            = require('../services/sources/cspan')
+const { searchTED }    = require('../services/sources/ted')
 const { startSeed, addClient, removeClient } = require('../services/clipSeeder')
+const { downloadClip, MAX_SECONDS } = require('../services/clipDownloader')
+const { buildFootageQuery } = require('../services/sources/searchUtils')
+const { scoreResults }      = require('../services/resultScorer')
+
+// Map route-slug source identifiers → internal source identifiers
+const SOURCE_NORM = {
+  'youtube-cc':       'youtube_cc',
+  'youtube-fair-use': 'youtube_fair_use',
+  'archive':          'internet_archive',
+  'cspan':            'cspan',
+  'ted':              'ted',
+}
 
 const GAPS_PATH = path.join(__dirname, '../../library/gaps.json')
 const PROJECTS_DIR = path.join(__dirname, '../../library/projects')
@@ -141,10 +189,12 @@ router.post('/add', (req, res) => {
 // ── POST /api/library/search/youtube-cc ──────────────────────────────────────
 router.post('/search/youtube-cc', async (req, res) => {
   try {
-    const { query, maxResults = 5 } = req.body
+    const { query, maxResults = 8, context, sceneContext } = req.body
     if (!query) return res.status(400).json({ error: 'query is required' })
-    const results = await youtubeCC.search(query, maxResults)
-    res.json({ results, total: results.length })
+    const enhanced = buildFootageQuery(query, context)
+    let results = await youtubeCC.search(enhanced, maxResults)
+    results = await scoreResults(results, query, sceneContext)
+    res.json({ results: results.slice(0, 5), total: results.length })
   } catch (err) {
     console.error('[library] youtube-cc search error:', err.message)
     res.status(500).json({ error: err.message })
@@ -169,10 +219,12 @@ router.post('/download/youtube-cc', async (req, res) => {
 // ── POST /api/library/search/youtube-fair-use ────────────────────────────────
 router.post('/search/youtube-fair-use', async (req, res) => {
   try {
-    const { query, maxResults = 5 } = req.body
+    const { query, maxResults = 8, context, sceneContext } = req.body
     if (!query) return res.status(400).json({ error: 'query is required' })
-    const results = await youtubeFairUse.search(query, maxResults)
-    res.json({ results, total: results.length })
+    const enhanced = buildFootageQuery(query, context)
+    let results = await youtubeFairUse.search(enhanced, maxResults)
+    results = await scoreResults(results, query, sceneContext)
+    res.json({ results: results.slice(0, 5), total: results.length })
   } catch (err) {
     console.error('[library] youtube-fair-use search error:', err.message)
     res.status(500).json({ error: err.message })
@@ -197,10 +249,12 @@ router.post('/download/youtube-fair-use', async (req, res) => {
 // ── POST /api/library/search/archive ─────────────────────────────────────────
 router.post('/search/archive', async (req, res) => {
   try {
-    const { query, maxResults = 5 } = req.body
+    const { query, maxResults = 8, context, sceneContext } = req.body
     if (!query) return res.status(400).json({ error: 'query is required' })
-    const results = await internetArchive.search(query, maxResults)
-    res.json({ results, total: results.length })
+    const enhanced = buildFootageQuery(query, context)
+    let results = await internetArchive.search(enhanced, maxResults)
+    results = await scoreResults(results, query, sceneContext)
+    res.json({ results: results.slice(0, 5), total: results.length })
   } catch (err) {
     console.error('[library] archive search error:', err.message)
     res.status(500).json({ error: err.message })
@@ -223,12 +277,28 @@ router.post('/download/archive', async (req, res) => {
 // ── POST /api/library/search/cspan ───────────────────────────────────────────
 router.post('/search/cspan', async (req, res) => {
   try {
-    const { query, maxResults = 5 } = req.body
+    const { query, maxResults = 8, context, sceneContext } = req.body
     if (!query) return res.status(400).json({ error: 'query is required' })
-    const results = await cspan.search(query, maxResults)
-    res.json({ results, total: results.length })
+    const enhanced = buildFootageQuery(query, context)
+    let results = await cspan.search(enhanced, maxResults)
+    results = await scoreResults(results, query, sceneContext)
+    res.json({ results: results.slice(0, 5), total: results.length })
   } catch (err) {
     console.error('[library] cspan search error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── POST /api/library/search/ted ─────────────────────────────────────────────
+router.post('/search/ted', async (req, res) => {
+  try {
+    const { query, maxResults = 8, sceneContext } = req.body
+    if (!query) return res.status(400).json({ error: 'query is required' })
+    let results = await searchTED(buildFootageQuery(query, 'person'), maxResults)
+    results = await scoreResults(results, query, sceneContext)
+    res.json({ results: results.slice(0, 5), total: results.length })
+  } catch (err) {
+    console.error('[library] ted search error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })
@@ -326,6 +396,99 @@ router.post('/fair-use-ack', (req, res) => {
     res.json({ ok: true })
   } catch (err) {
     console.error('[library] fair-use-ack error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── POST /api/library/download — unified SSE download for all sources ─────────
+// Streams progress events: start → trimming → generating_description → saving → done | error
+router.post('/download', async (req, res) => {
+  const { url, startSec, endSec, source: rawSource, tags = [], mood = 'neutral', category = 'general', title = '', projectId = null } = req.body
+  if (!url || !rawSource) return res.status(400).json({ error: 'url and source are required' })
+
+  // Normalise route-slug identifiers to internal identifiers
+  const source  = SOURCE_NORM[rawSource] || rawSource
+  // startSec defaults to DEFAULT_START_OFFSET inside clipDownloader — no need to set here
+  const start   = (startSec != null && Number(startSec) > 0) ? Number(startSec) : 25
+  const end     = endSec != null ? Math.min(Number(endSec), start + MAX_SECONDS) : start + MAX_SECONDS
+  const dur     = end - start
+  if (dur <= 0) return res.status(400).json({ error: 'Invalid time range' })
+  if (dur > MAX_SECONDS) return res.status(400).json({ error: `Max ${MAX_SECONDS}s per clip` })
+
+  const license = source === 'youtube_cc'       ? 'creative_commons'
+                : source === 'internet_archive' ? 'public_domain'
+                : source === 'cspan'            ? 'public_domain'
+                : source === 'ted'             ? 'creative_commons'
+                : 'fair_use'
+  const warning = license === 'fair_use'
+    ? 'Copyrighted content. Fair use for documentary/commentary only. 8 seconds max.'
+    : null
+
+  res.setHeader('Content-Type',  'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection',    'keep-alive')
+  res.setHeader('X-Accel-Buffering', 'no')
+  res.flushHeaders()
+
+  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`)
+
+  try {
+    send({ type: 'start', message: 'Downloading…' })
+
+    const clipData = await downloadClip({ url, startSec: start, endSec: end, source, tags, mood, category, license, title, warning, projectId })
+
+    send({ type: 'generating_description', message: 'Generating description…' })
+    clipData.description = await generateDescription(clipData.title, clipData.tags)
+
+    send({ type: 'saving', message: 'Saving to library…' })
+    const saved = clipStore.addClip(clipData)
+
+    send({ type: 'done', clip: saved })
+    res.end()
+  } catch (err) {
+    console.error('[library/download]', err.message)
+    send({ type: 'error', message: err.message })
+    res.end()
+  }
+})
+
+// ── POST /api/library/upload — multipart upload of a clip file ───────────────
+router.post('/upload', upload.single('clip'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+    const { title, tags: tagsRaw, mood, category, license, source_url } = req.body
+    if (!title || !mood || !category) {
+      fs.unlinkSync(req.file.path)
+      return res.status(400).json({ error: 'title, mood, and category are required' })
+    }
+
+    const tags = (tagsRaw || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
+    const filename = req.file.filename
+    const filePath = path.join(CLIPS_DIR, filename)
+    const duration = await getVideoDuration(filePath)
+
+    const clip = clipStore.addClip({
+      file: `/library/clips/${filename}`,
+      title,
+      source: 'manual',
+      license: license || 'unknown',
+      source_url: source_url || '',
+      tags,
+      mood,
+      category,
+      duration,
+      description: '',
+      warning: license === 'fair_use'
+        ? 'Copyrighted content. Fair use for documentary/commentary only.'
+        : null,
+      project_id: null,
+    })
+
+    console.log(`[library] uploaded clip ${clip.clip_id} — ${filename} — ${duration}s`)
+    res.json({ clip })
+  } catch (err) {
+    if (req.file) try { fs.unlinkSync(req.file.path) } catch { /* */ }
+    console.error('[library] upload error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })

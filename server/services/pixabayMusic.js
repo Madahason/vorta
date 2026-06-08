@@ -56,13 +56,27 @@ async function downloadTrack(track) {
   const filename    = `${track.mood}_${track.id}.mp3`
   const outputPath  = path.join(MUSIC_DIR, filename)
 
-  if (fs.existsSync(outputPath)) return outputPath
+  if (fs.existsSync(outputPath)) {
+    const size = fs.statSync(outputPath).size
+    if (size > 10000) return outputPath
+    // Corrupted/empty file from a previous failed download — delete and retry
+    fs.unlinkSync(outputPath)
+  }
 
-  const response = await fetch(track.downloadUrl)
-  if (!response.ok) throw new Error(`Download failed: ${response.status}`)
+  const url = track.downloadUrl || track.previewUrl
+  if (!url) throw new Error('Track has no downloadable URL')
+
+  console.log(`[music] downloading: ${url}`)
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`Download failed: ${response.status} ${response.statusText}`)
+
   const buffer = Buffer.from(await response.arrayBuffer())
-  fs.writeFileSync(outputPath, buffer)
+  if (buffer.length < 10000) {
+    throw new Error(`Downloaded file too small: ${buffer.length} bytes — likely not a valid audio file`)
+  }
 
+  fs.writeFileSync(outputPath, buffer)
+  console.log(`[music] saved: ${outputPath} (${(buffer.length / 1024).toFixed(0)} KB)`)
   return outputPath
 }
 

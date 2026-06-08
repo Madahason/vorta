@@ -1,5 +1,10 @@
-const path = require('path')
-const fs   = require('fs')
+const path       = require('path')
+const fs         = require('fs')
+const { execAsync } = (() => {
+  const { promisify } = require('util')
+  const { exec }      = require('child_process')
+  return { execAsync: promisify(exec) }
+})()
 
 const AMBIENT_DIR = path.resolve(__dirname, '../../library/ambient')
 if (!fs.existsSync(AMBIENT_DIR)) fs.mkdirSync(AMBIENT_DIR, { recursive: true })
@@ -134,4 +139,94 @@ function listAmbientFiles() {
   }))
 }
 
-module.exports = { AMBIENT_CATALOG, AMBIENT_DIR, getAmbientForCategory, getAmbientForMood, getAmbientByKey, listAmbientFiles }
+// Freesound CC0 search queries per ambient key for yt-dlp download
+const FREESOUND_QUERIES = {
+  trading_floor:    'stock exchange trading floor ambience',
+  office_ambient:   'office ambient background quiet',
+  city_traffic:     'city street traffic ambient',
+  data_center_hum:  'server room data center hum',
+  courtroom_silence:'courtroom interior silence',
+  factory_floor:    'factory machinery industrial ambient',
+  crowd_murmur:     'crowd murmur indoor ambient',
+  government_hall:  'large hall ambience echo',
+  tension_drone:    'cinematic tension drone dark',
+  soft_ambient:     'soft ambient neutral background',
+  press_room:       'press conference room ambient',
+  airport_ambient:  'airport terminal ambient',
+  industrial_hum:   'industrial hum machinery',
+}
+
+// Download a single ambient file using yt-dlp from Freesound
+// Trims to 30s with ffmpeg for compact looping files
+async function downloadAmbientFile(key) {
+  const ambient = AMBIENT_CATALOG[key]
+  if (!ambient) throw new Error(`Unknown ambient key: ${key}`)
+
+  const outputPath = path.join(AMBIENT_DIR, ambient.filename)
+  if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 10000) return outputPath
+
+  const query      = FREESOUND_QUERIES[key] || ambient.freesoundQuery
+  const searchUrl  = `https://freesound.org/search/?q=${encodeURIComponent(query)}&f=license%3A%22Creative+Commons+0%22`
+  const tempBase   = outputPath.replace('.mp3', '_temp')
+  const tempGlob   = `${tempBase}.%(ext)s`
+
+  // yt-dlp downloads the first result from Freesound and extracts audio
+  const dlCmd = `yt-dlp "${searchUrl}" --playlist-end 1 -o "${tempGlob}" --extract-audio --audio-format mp3 --audio-quality 128K --no-playlist --quiet`
+
+  try {
+    await execAsync(dlCmd, { timeout: 90_000 })
+  } catch (err) {
+    throw new Error(`yt-dlp download failed for ${key}: ${err.message}`)
+  }
+
+  // Find the downloaded file
+  const dir   = path.dirname(outputPath)
+  const base  = path.basename(tempBase)
+  const files = fs.readdirSync(dir).filter(f => f.startsWith(base))
+  if (!files.length) throw new Error(`No file found after yt-dlp for ${key}`)
+
+  const downloaded = path.join(dir, files[0])
+
+  // Trim to 30 seconds using ffmpeg for a compact loop
+  try {
+    await execAsync(
+      `ffmpeg -i "${downloaded}" -t 30 -c:a libmp3lame -q:a 4 "${outputPath}" -y`,
+      { timeout: 30_000 }
+    )
+    if (downloaded !== outputPath) fs.unlinkSync(downloaded)
+  } catch {
+    // ffmpeg not available — just use the full file
+    if (downloaded !== outputPath) fs.renameSync(downloaded, outputPath)
+  }
+
+  if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 1000) {
+    throw new Error(`Ambient file too small after download for ${key}`)
+  }
+
+  console.log(`[ambient] downloaded: ${key} → ${outputPath}`)
+  return outputPath
+}
+
+async function downloadAllMissingAmbient() {
+  const results = {}
+  for (const key of Object.keys(AMBIENT_CATALOG)) {
+    const filePath = path.join(AMBIENT_DIR, AMBIENT_CATALOG[key].filename)
+    if (fs.existsSync(filePath) && fs.statSync(filePath).size > 1000) {
+      results[key] = 'already exists'
+      continue
+    }
+    try {
+      await downloadAmbientFile(key)
+      results[key] = 'downloaded'
+    } catch (err) {
+      results[key] = `failed: ${err.message}`
+    }
+  }
+  return results
+}
+
+module.exports = {
+  AMBIENT_CATALOG, AMBIENT_DIR,
+  getAmbientForCategory, getAmbientForMood, getAmbientByKey, listAmbientFiles,
+  downloadAmbientFile, downloadAllMissingAmbient,
+}
