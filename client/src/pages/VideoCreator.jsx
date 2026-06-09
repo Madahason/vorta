@@ -22,6 +22,7 @@ const LS = {
   clipMatches:   'vorta_clip_matches',
   selectedClips: 'vorta_selected_clips',
   sessionKey:    'vorta_session_key',
+  audioSpecs:    'vorta_audio_specs',
 }
 
 function lsRead(key) {
@@ -151,7 +152,7 @@ export default function VideoCreator() {
   const [voiceoverFocusScene, setVoiceoverFocusScene] = useState(null)
 
   // Audio specs (music + ambient + stings per scene)
-  const [audioSpecs,   setAudioSpecs]   = useState([])
+  const [audioSpecs,   setAudioSpecs]   = useState(() => lsRead(LS.audioSpecs) || [])
   const [audioVolumes, setAudioVolumes] = useState({ music: 0.12, ambient: 0.06, sting: 0.45 })
 
   // Overlay Studio + review modal
@@ -210,6 +211,7 @@ export default function VideoCreator() {
   useEffect(() => { lsWrite(LS.projectId,     projectId)     }, [projectId])
   useEffect(() => { lsWrite(LS.statuses,      sceneStatuses) }, [sceneStatuses])
   useEffect(() => { lsWrite(LS.selectedClips, selectedClips) }, [selectedClips])
+  useEffect(() => { if (audioSpecs.length > 0) lsWrite(LS.audioSpecs, audioSpecs) }, [audioSpecs])
   useEffect(() => {
     const toSave = {}
     Object.entries(clipMatches).forEach(([sid, v]) => {
@@ -359,6 +361,7 @@ export default function VideoCreator() {
     setMotionStatuses({})
     setClipMatches({})
     setSelectedClips({})
+    setAudioSpecs([])
     setShowClipLibrary(false)
     setShowPlayer(false)
     setPlayerStuck(false)
@@ -367,6 +370,23 @@ export default function VideoCreator() {
     setSessionRestored(false)
     setBadgeFading(false)
     setResetKey(k => k + 1)
+  }
+
+  // ─── Build audio specs (music + ambient + stings per scene) ──────────────
+  const handleBuildAudioSpecs = async () => {
+    if (!scenes.length) return
+    const res  = await fetch('/api/audio/build-specs', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ scenes, projectId }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Build-specs failed')
+    if (data.success && data.specs) {
+      setAudioSpecs(data.specs)
+      lsWrite(LS.audioSpecs, data.specs)
+      console.log('[audio] specs built and saved:', data.specs.length, 'scenes')
+    }
   }
 
   // ─── SSE subscription ─────────────────────────────────────────────────────
@@ -974,7 +994,7 @@ export default function VideoCreator() {
               scenes={scenes}
               projectId={projectId}
               audioSpecs={audioSpecs}
-              onAudioSpecsChange={setAudioSpecs}
+              onBuildSpecs={handleBuildAudioSpecs}
               audioVolumes={audioVolumes}
               onVolumesChange={setAudioVolumes}
             />

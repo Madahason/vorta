@@ -160,7 +160,16 @@ router.post('/build-specs', async (req, res) => {
           const ambient = AMBIENT_CATALOG[ambientKey]
           if (ambient) {
             const ambientPath = path.join(AMBIENT_DIR, ambient.filename)
-            if (fs.existsSync(ambientPath)) {
+            if (!fs.existsSync(ambientPath)) {
+              console.log(`[audio] ambient missing for ${ambientKey} — downloading now`)
+              try {
+                const { downloadAmbientFile } = require('../services/freesoundService')
+                await downloadAmbientFile(ambientKey)
+              } catch (dlErr) {
+                console.warn(`[audio] ambient download failed: ${dlErr.message}`)
+              }
+            }
+            if (fs.existsSync(ambientPath) && fs.statSync(ambientPath).size > 1000) {
               spec.ambient = {
                 path:        ambientPath,
                 url:         `/library/ambient/${ambient.filename}`,
@@ -170,6 +179,7 @@ router.post('/build-specs', async (req, res) => {
                 description: ambient.description,
                 key:         ambientKey,
               }
+              console.log(`[audio] ambient assigned for scene ${scene.scene_id}: ${ambientKey}`)
             }
           }
         }

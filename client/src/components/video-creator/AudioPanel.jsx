@@ -14,7 +14,7 @@ export default function AudioPanel({
   scenes,
   projectId,
   audioSpecs,
-  onAudioSpecsChange,
+  onBuildSpecs,
   audioVolumes,
   onVolumesChange,
 }) {
@@ -80,13 +80,7 @@ export default function AudioPanel({
     setBuilding(true)
     setBuildError(null)
     try {
-      const res  = await fetch(`${SERVER_URL}/api/audio/build-specs?download=1`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scenes, projectId }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Build failed')
-      onAudioSpecsChange?.(data.specs)
+      await onBuildSpecs?.()
       await fetchStatus()
     } catch (err) {
       setBuildError(err.message)
@@ -259,7 +253,7 @@ export default function AudioPanel({
             {/* Sub-label describing what the button does */}
             {!building && (
               <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', marginTop: 6, textAlign: 'center' }}>
-                Downloads music from Free Music Archive (YouTube Audio Library fallback) and assigns ambient &amp; stings per scene
+                Downloads music from Freesound and assigns ambient loops &amp; transition stings per scene
               </p>
             )}
 
@@ -287,25 +281,24 @@ export default function AudioPanel({
             {/* Success summary */}
             {hasSpecs && !building && (
               <div style={{
-                display: 'flex', gap: 16, marginTop: 12,
-                padding: '9px 12px',
-                background: 'rgba(74,222,128,0.05)', border: '1px solid rgba(74,222,128,0.12)',
-                borderRadius: 7,
+                marginTop: 12, padding: '10px 14px',
+                background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.20)',
+                borderRadius: 8,
               }}>
-                {[
-                  { label: 'Music', val: `${musicCount}/${scenes?.length}`, ok: musicCount > 0 },
-                  { label: 'Ambient', val: `${ambientCount}/${scenes?.length}`, ok: ambientCount > 0 },
-                  { label: 'Stings', val: `${stingCount}/6 files`, ok: stingCount > 0 },
-                ].map(item => (
-                  <div key={item.label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.30)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                      {item.label}
-                    </span>
-                    <span style={{ fontSize: 12, fontWeight: 500, color: item.ok ? '#4ade80' : 'rgba(255,255,255,0.35)' }}>
-                      {item.val}
-                    </span>
-                  </div>
-                ))}
+                <div style={{ color: '#4ade80', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+                  ✓ Audio plan ready — {audioSpecs?.length} scenes
+                </div>
+                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                  <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12 }}>
+                    🎵 Music: {musicCount} scenes
+                  </span>
+                  <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12 }}>
+                    🔊 Ambient: {ambientCount} scenes
+                  </span>
+                  <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12 }}>
+                    🎤 Narration: {audioSpecs?.filter(s => s.narration)?.length || 0} scenes
+                  </span>
+                </div>
               </div>
             )}
           </div>
