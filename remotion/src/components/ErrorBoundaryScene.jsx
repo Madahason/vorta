@@ -19,15 +19,13 @@ export class ErrorBoundaryScene extends Component {
     if (this.state.hasError) {
       return (
         <AbsoluteFill style={{
-          backgroundColor: '#0a0a0a',
+          backgroundColor: '#1a0000',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           flexDirection: 'column', gap: 8,
         }}>
-          <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: 14, fontFamily: 'sans-serif' }}>
-            Scene {this.props.scene?.scene_id}
-          </div>
-          <div style={{ color: 'rgba(239,68,68,0.5)', fontSize: 11, fontFamily: 'sans-serif' }}>
-            {this.state.error?.message?.slice(0, 80)}
+          <div style={{ color: '#f87171', fontSize: 14, fontFamily: 'sans-serif', textAlign: 'center', padding: 20 }}>
+            Scene {this.props.scene?.scene_id} error{'\n'}
+            {this.state.error?.message?.slice(0, 100)}
           </div>
         </AbsoluteFill>
       )

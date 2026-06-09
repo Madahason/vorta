@@ -4,7 +4,6 @@ import FootageScene           from '../components/FootageScene'
 import PlaceholderScene       from '../components/PlaceholderScene'
 import { MotionGraphicScene } from '../components/MotionGraphicScene'
 import { ErrorBoundaryScene } from '../components/ErrorBoundaryScene'
-import { SafeAudio }          from '../components/SafeAudio'
 
 // ── Duration helpers ──────────────────────────────────────────────────────────
 export function calculateDocumentaryDuration(scenes) {
@@ -26,18 +25,24 @@ export function computeLayout(scenes) {
   return { startFrames, totalFrames: cursor }
 }
 
+// Only render Audio when the src is a routable URL (not a bare filesystem path)
+const isValidUrl = (src) => !!src && (src.startsWith('/') || src.startsWith('http'))
+
 // ── SceneRenderer — per-scene dispatch ───────────────────────────────────────
 function SceneRenderer({ scene, imagePath, selectedClip, globalSettings }) {
+  if (!scene) return <PlaceholderScene scene={{ scene_id: 'unknown' }} />
+
   if (scene.shot_type === 'image') {
     if (!imagePath) return <PlaceholderScene scene={scene} />
     return <ImageScene scene={scene} imagePath={imagePath} globalSettings={globalSettings} />
   }
   if (scene.shot_type === 'motion_graphic') {
+    if (!scene.motion_component) return <PlaceholderScene scene={scene} />
     return <MotionGraphicScene scene={scene} />
   }
   if (scene.shot_type === 'real_footage') {
-    if (selectedClip) return <FootageScene clip={selectedClip} />
-    return <PlaceholderScene scene={scene} />
+    if (!selectedClip) return <PlaceholderScene scene={scene} />
+    return <FootageScene clip={selectedClip} />
   }
   return <PlaceholderScene scene={scene} />
 }
@@ -73,9 +78,7 @@ export function Documentary({
 }) {
   const { fps } = useVideoConfig()
 
-  // Filter audioSpecs to only entries whose scene_id exists in the current scene list.
-  // Stale specs from a previous analysis (different scene count) are silently dropped
-  // so they never crash the Series sequencing.
+  // Filter audioSpecs to only entries whose scene_id exists in the current scene list
   const validSceneIds = new Set(scenes.map(s => s.scene_id))
   const audioSpecMap  = {}
   audioSpecs.forEach(spec => {
@@ -107,10 +110,16 @@ export function Documentary({
           const durationFrames = Math.max(Math.round((scene.duration_seconds || 5) * fps), 30)
           const spec           = audioSpecMap[scene.scene_id] || null
 
+          // Normalise audio src — only render Audio when the URL is routable
+          const narrationUrl = spec?.narration?.url || scene.audio_path || null
+          const musicUrl     = spec?.music?.url     || null
+          const ambientUrl   = spec?.ambient?.url   || null
+          const stingUrl     = spec?.sting?.url     || null
+
           return (
             <Series.Sequence key={scene.scene_id} durationInFrames={durationFrames}>
               <AbsoluteFill>
-                {/* ── Visual layer — isolated so one broken scene can't kill the rest ── */}
+                {/* ── Visual layer ── */}
                 <ErrorBoundaryScene scene={scene}>
                   <SceneRenderer
                     scene={scene}
@@ -120,12 +129,12 @@ export function Documentary({
                   />
                 </ErrorBoundaryScene>
 
-                {/* ── Audio layers — outside error boundary so audio errors are independent ── */}
+                {/* ── Audio layers — outside error boundary ── */}
 
-                {/* Layer 1: Per-scene ElevenLabs narration (spec.narration.url preferred, fallback scene.audio_path) */}
-                {(spec?.narration?.url || scene.audio_path) && (
-                  <SafeAudio
-                    src={spec?.narration?.url || scene.audio_path}
+                {/* Layer 1: Per-scene ElevenLabs narration */}
+                {isValidUrl(narrationUrl) && (
+                  <Audio
+                    src={narrationUrl}
                     volume={(frame) => {
                       const fadeStart = durationFrames - 9
                       if (frame >= fadeStart) {
@@ -138,10 +147,10 @@ export function Documentary({
                   />
                 )}
 
-                {/* Layer 2: Background music (12% volume, cross-fade at boundaries) */}
-                {spec?.music?.url && (
-                  <SafeAudio
-                    src={spec.music.url}
+                {/* Layer 2: Background music (12% volume, cross-fade) */}
+                {isValidUrl(musicUrl) && (
+                  <Audio
+                    src={musicUrl}
                     volume={(frame) => {
                       const fade    = 15
                       const fadeIn  = Math.min(frame / Math.max(fade, 1), 1)
@@ -153,18 +162,18 @@ export function Documentary({
                 )}
 
                 {/* Layer 3: Ambient sound (6%, looping) */}
-                {spec?.ambient?.url && (
-                  <SafeAudio
-                    src={spec.ambient.url}
+                {isValidUrl(ambientUrl) && (
+                  <Audio
+                    src={ambientUrl}
                     volume={spec.ambient.volume || 0.06}
                     loop
                   />
                 )}
 
-                {/* Layer 4: Transition sting (skip scene 1 — no incoming transition) */}
-                {spec?.sting?.url && index > 0 && (
-                  <SafeAudio
-                    src={spec.sting.url}
+                {/* Layer 4: Transition sting (skip scene 0 — no incoming transition) */}
+                {isValidUrl(stingUrl) && index > 0 && (
+                  <Audio
+                    src={stingUrl}
                     volume={spec.sting.volume || 0.45}
                   />
                 )}
