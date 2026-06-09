@@ -2,12 +2,8 @@ const https = require('https')
 const fs    = require('fs')
 const path  = require('path')
 
-const AMBIENT_DIR = path.resolve(__dirname, '../../library/ambient')
-const STINGS_DIR  = path.resolve(__dirname, '../../library/stings')
-
-;[AMBIENT_DIR, STINGS_DIR].forEach(dir => {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-})
+const STINGS_DIR = path.resolve(__dirname, '../../library/stings')
+if (!fs.existsSync(STINGS_DIR)) fs.mkdirSync(STINGS_DIR, { recursive: true })
 
 function getKey() {
   if (!process.env.FREESOUND_API_KEY) throw new Error('FREESOUND_API_KEY not set')
@@ -80,26 +76,6 @@ function downloadSound(previewUrl, outputPath) {
   })
 }
 
-// ── Ambient ───────────────────────────────────────────────────────────────────
-
-const AMBIENT_QUERIES = {
-  trading_floor:    { query: 'stock exchange trading floor crowd noise',   duration_min: 10, duration_max: 120 },
-  office_ambient:   { query: 'office ambient background quiet keyboard',   duration_min: 10, duration_max: 120 },
-  city_traffic:     { query: 'city street traffic urban ambience',         duration_min: 10, duration_max: 120 },
-  data_center_hum:  { query: 'server room data center fan hum',            duration_min: 10, duration_max: 120 },
-  courtroom_silence:{ query: 'quiet indoor room ambience minimal',         duration_min: 10, duration_max: 120 },
-  factory_floor:    { query: 'factory machinery industrial ambient loop',  duration_min: 10, duration_max: 120 },
-  crowd_murmur:     { query: 'crowd murmur indoor people talking',         duration_min: 10, duration_max: 120 },
-  government_hall:  { query: 'large hall echo interior ambience',          duration_min: 10, duration_max: 120 },
-  tension_drone:    { query: 'dark ambient drone tension cinematic',       duration_min: 10, duration_max: 120 },
-  soft_ambient:     { query: 'soft neutral background ambient subtle',     duration_min: 10, duration_max: 120 },
-  press_room:       { query: 'press conference room crowd cameras',        duration_min: 10, duration_max: 120 },
-  airport_ambient:  { query: 'airport terminal busy crowd',                duration_min: 10, duration_max: 120 },
-  industrial_hum:   { query: 'industrial machinery hum energy plant',      duration_min: 10, duration_max: 120 },
-}
-
-// ── Stings ────────────────────────────────────────────────────────────────────
-
 const STING_QUERIES = {
   low_drone:    { query: 'cinematic low drone bass sting short',     duration_min: 1,   duration_max: 5 },
   rise_sting:   { query: 'cinematic rise reveal sting short',        duration_min: 1,   duration_max: 4 },
@@ -107,27 +83,6 @@ const STING_QUERIES = {
   impact_sting: { query: 'cinematic impact hit dramatic short',      duration_min: 0.5, duration_max: 3 },
   soft_fade:    { query: 'soft fade gentle piano sting short',       duration_min: 1,   duration_max: 4 },
   whoosh:       { query: 'cinematic whoosh transition fast short',   duration_min: 0.3, duration_max: 2 },
-}
-
-async function downloadAmbientFile(key) {
-  // Lazy-require avoids circular dependency at module load time
-  const { AMBIENT_CATALOG } = require('./ambientLibrary')
-  const ambient = AMBIENT_CATALOG[key]
-  if (!ambient) throw new Error(`Unknown ambient key: ${key}`)
-
-  const outputPath = path.join(AMBIENT_DIR, ambient.filename)
-  if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 1000) {
-    console.log(`[freesound] ambient cached: ${key}`)
-    return outputPath
-  }
-
-  const config  = AMBIENT_QUERIES[key] || { query: `${key.replace(/_/g, ' ')} ambient`, duration_min: 10, duration_max: 120 }
-  const results = await searchFreesound(config)
-  if (!results.length) throw new Error(`No Freesound results for ambient: ${key}`)
-
-  const best = results.sort((a, b) => b.duration - a.duration)[0]
-  await downloadSound(best.previewUrl, outputPath)
-  return outputPath
 }
 
 async function downloadSting(key) {
@@ -149,4 +104,4 @@ async function downloadSting(key) {
   return outputPath
 }
 
-module.exports = { searchFreesound, downloadAmbientFile, downloadSting, AMBIENT_QUERIES, STING_QUERIES }
+module.exports = { searchFreesound, downloadSound, STING_QUERIES, downloadSting }

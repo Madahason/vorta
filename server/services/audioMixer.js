@@ -3,7 +3,6 @@ const fs   = require('fs')
 
 const transitionStings = require('../config/transitionStings')
 
-const AMBIENT_DIR = path.resolve(__dirname, '../../library/ambient')
 const STINGS_DIR  = path.resolve(__dirname, '../../library/stings')
 const MUSIC_DIR   = path.resolve(__dirname, '../../library/music')
 
@@ -15,8 +14,9 @@ const VOLUME_LEVELS = {
 }
 
 async function buildSceneAudioSpec(scene) {
-  const { getMusicForMood, normaliseMood, loadMusicIndex } = require('./musicService')
-  const { moodMap }  = require('../config/musicMoods')
+  const { generateMusic, normaliseMood }   = require('./elevenLabsAudio')
+  const { selectAndGenerateAmbient }       = require('./ambientSelector')
+  const { moodMap }                        = require('../config/musicMoods')
 
   const mood     = scene.mood || 'neutral'
   const normMood = normaliseMood(mood)
@@ -30,61 +30,28 @@ async function buildSceneAudioSpec(scene) {
     sting:     null,
   }
 
-  // Music
+  // Music — ElevenLabs AI, cached per mood
   try {
-    const music   = await getMusicForMood(mood)
-    spec.music    = { path: music.path, url: music.url, volume: VOLUME_LEVELS.music, loop: true, filename: path.basename(music.path) }
+    const music = await generateMusic(normMood)
+    spec.music  = { path: music.path, url: music.url, volume: VOLUME_LEVELS.music, loop: true, filename: path.basename(music.path) }
   } catch (err) {
     console.warn(`[mixer] music failed for scene ${scene.scene_id}:`, err.message)
   }
 
-  // Ambient — Claude selector when available, mood-based fallback
+  // Ambient — ElevenLabs AI, cached per category+mood
   try {
-    let ambientKey = null
-    try {
-      const { selectAmbientForScene } = require('./ambientSelector')
-      ambientKey = await selectAmbientForScene(scene)
-    } catch {
-      const { getAmbientForCategory, getAmbientForMood } = require('./ambientLibrary')
-      const ambient = getAmbientForCategory(scene.category) || getAmbientForMood(mood)
-      if (ambient) {
-        spec.ambient = { path: ambient.filePath, url: ambient.url, volume: VOLUME_LEVELS.ambient, loop: true, filename: ambient.filename }
-      }
-    }
-
-    if (ambientKey) {
-      const { AMBIENT_CATALOG } = require('./ambientLibrary')
-      const ambient     = AMBIENT_CATALOG[ambientKey]
-      if (ambient) {
-        const ambientPath = path.join(AMBIENT_DIR, ambient.filename)
-        if (!fs.existsSync(ambientPath)) {
-          try {
-            const { downloadAmbientFile } = require('./freesoundService')
-            await downloadAmbientFile(ambientKey)
-          } catch (dlErr) {
-            console.warn(`[mixer] ambient download failed for ${ambientKey}:`, dlErr.message)
-          }
-        }
-        if (fs.existsSync(ambientPath)) {
-          spec.ambient = {
-            path:     ambientPath,
-            url:      `/library/ambient/${ambient.filename}`,
-            volume:   VOLUME_LEVELS.ambient,
-            loop:     true,
-            key:      ambientKey,
-            filename: ambient.filename,
-          }
-        }
-      }
+    const ambient = await selectAndGenerateAmbient(scene)
+    if (ambient) {
+      spec.ambient = { path: ambient.path, url: ambient.url, volume: VOLUME_LEVELS.ambient, loop: true, filename: path.basename(ambient.path) }
     }
   } catch (err) {
     console.warn(`[mixer] ambient failed for scene ${scene.scene_id}:`, err.message)
   }
 
-  // Sting
+  // Sting — Freesound CC0, from pre-downloaded cache
   try {
-    const stingKey = moodCfg.transitionSting || 'neutral_sting'
-    const sting    = transitionStings[stingKey]
+    const stingKey  = moodCfg.transitionSting || 'neutral_sting'
+    const sting     = transitionStings[stingKey]
     if (sting) {
       const stingPath = path.join(STINGS_DIR, sting.filename)
       if (fs.existsSync(stingPath)) {
@@ -112,21 +79,22 @@ async function buildProjectAudioSpecs(scenes) {
   return specs
 }
 
-// Instant cached build — no API calls, uses only what's on disk
+// Instant cached build for render — no API calls, uses only what's on disk
 function buildProjectAudioSpecsCached(scenes) {
-  const { loadMusicIndex } = require('./musicService')
+  const { loadMusicIndex, normaliseMood } = require('./elevenLabsAudio')
   const index = loadMusicIndex()
 
   return scenes.map(scene => {
-    const mood    = scene.mood || 'neutral'
-    const entry   = index[mood]
-    const mFile   = entry?.filename ? path.join(MUSIC_DIR, entry.filename) : null
-    const mExists = mFile && fs.existsSync(mFile)
+    const normMood = normaliseMood(scene.mood || 'neutral')
+    const cacheKey = `music_${normMood}`
+    const entry    = index[cacheKey]
+    const mFile    = entry?.filename ? path.join(MUSIC_DIR, entry.filename) : null
+    const mExists  = mFile && fs.existsSync(mFile)
 
     return {
       scene_id:  scene.scene_id,
       narration: scene.audio_path ? { path: scene.audio_path, url: scene.audio_path, volume: VOLUME_LEVELS.narration } : null,
-      music:     mExists ? { path: mFile, url: `/library/music/${path.basename(mFile)}`, volume: VOLUME_LEVELS.music, loop: true, filename: path.basename(mFile) } : null,
+      music:     mExists ? { path: mFile, url: entry.url, volume: VOLUME_LEVELS.music, loop: true, filename: path.basename(mFile) } : null,
       ambient:   null,
       sting:     null,
     }
