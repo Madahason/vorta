@@ -194,6 +194,9 @@ export default function VideoCreator() {
   const [playerMinimized, setPlayerMinimized] = useState(false)
   const [filmGrain, setFilmGrain]       = useState(true)
   const [previewScene, setPreviewScene] = useState(null)
+  // Stable array ref — prevents the preview VideoPlayer from re-initialising
+  // on every parent render when a scene is previewed.
+  const previewScenes = useMemo(() => previewScene ? [previewScene] : [], [previewScene])
 
   const eventSourceRef = useRef(null)
   const sentinelRef    = useRef(null)
@@ -1098,7 +1101,7 @@ export default function VideoCreator() {
             <X size={14} /> Close
           </button>
           <VideoPlayer
-            scenes={[previewScene]}
+            scenes={previewScenes}
             imagePaths={imagePaths}
             selectedClips={selectedClips}
             globalSettings={globalSettings}

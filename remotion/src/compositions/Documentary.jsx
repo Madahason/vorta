@@ -1,3 +1,4 @@
+import { useMemo }                                                              from 'react'
 import { AbsoluteFill, Series, Audio, interpolate, useVideoConfig, useCurrentFrame } from 'remotion'
 import ImageScene             from '../components/ImageScene'
 import FootageScene           from '../components/FootageScene'
@@ -85,29 +86,39 @@ export function Documentary({
 }) {
   const { fps } = useVideoConfig()
 
-  // Filter audioSpecs to only entries whose scene_id exists in the current scene list
-  const validSceneIds = new Set(scenes.map(s => s.scene_id))
+  // Deduplicate scenes by scene_id as a safety net (VideoPlayer also deduplicates upstream).
+  // Duplicate IDs cause Series to render extra sequences, making scenes replay multiple times.
+  const uniqueScenes = useMemo(() => {
+    const seen = new Set()
+    return scenes.filter(s => {
+      if (!s?.scene_id || seen.has(s.scene_id)) return false
+      seen.add(s.scene_id)
+      return true
+    })
+  }, [scenes])
+
+  // Filter audioSpecs to only entries whose scene_id exists in the deduplicated scene list
+  const validSceneIds = new Set(uniqueScenes.map(s => s.scene_id))
   const audioSpecMap  = {}
   audioSpecs.forEach(spec => {
     if (validSceneIds.has(spec.scene_id)) audioSpecMap[spec.scene_id] = spec
   })
 
   // Derive a single music and ambient URL to play continuously under the whole video.
-  // Music and ambient loop — they don't need to remount per scene. Using one global
-  // track per layer reduces audio tags from 4×N down to N+2 (narration per scene + 2 global).
-  const allSpecs      = Object.values(audioSpecMap)
-  const musicUrls     = allSpecs.map(s => s.music?.url).filter(Boolean)
-  const ambientUrls   = allSpecs.map(s => s.ambient?.url).filter(Boolean)
-  const primaryMusic  = mostCommon(musicUrls)
+  // Global tracks outside <Series> never remount — total audio tags = uniqueScenes.length + 2.
+  const allSpecs       = Object.values(audioSpecMap)
+  const musicUrls      = allSpecs.map(s => s.music?.url).filter(Boolean)
+  const ambientUrls    = allSpecs.map(s => s.ambient?.url).filter(Boolean)
+  const primaryMusic   = mostCommon(musicUrls)
   const primaryAmbient = mostCommon(ambientUrls)
-  const musicVolume   = allSpecs.find(s => s.music?.volume)?.music?.volume  || 0.12
-  const ambientVolume = allSpecs.find(s => s.ambient?.volume)?.ambient?.volume || 0.06
+  const musicVolume    = allSpecs.find(s => s.music?.volume)?.music?.volume   || 0.12
+  const ambientVolume  = allSpecs.find(s => s.ambient?.volume)?.ambient?.volume || 0.06
 
-  console.log('[Documentary] scenes:', scenes.length,
-    'audioSpecs valid:', allSpecs.length, '/', audioSpecs.length,
-    'music:', !!primaryMusic, 'ambient:', !!primaryAmbient)
+  console.log('[Documentary] scenes:', scenes.length, '→ unique:', uniqueScenes.length,
+    '| audioSpecs:', allSpecs.length, '/', audioSpecs.length,
+    '| music:', !!primaryMusic, '| ambient:', !!primaryAmbient)
 
-  if (!scenes.length) {
+  if (!uniqueScenes.length) {
     return (
       <AbsoluteFill style={{
         backgroundColor: '#1a1a1a',
@@ -125,27 +136,27 @@ export function Documentary({
       {/* Global uploaded narration track (from ExportPanel audio upload) */}
       {audio?.path && <NarrationTrack audio={audio} />}
 
-      {/* Continuous background music — single track under the entire video.
-          Avoids remounting an Audio tag on every scene transition. */}
+      {/* Continuous background music — single global track, never remounts between scenes */}
       {isValidUrl(primaryMusic) && (
         <Audio src={primaryMusic} volume={musicVolume} loop startFrom={0} />
       )}
 
-      {/* Continuous ambient sound — single looping track under the entire video. */}
+      {/* Continuous ambient sound — single global track, never remounts between scenes */}
       {isValidUrl(primaryAmbient) && (
         <Audio src={primaryAmbient} volume={ambientVolume} loop startFrom={0} />
       )}
 
       {/* Scene sequences — visual layer + per-scene narration only.
-          Total audio tags = scenes.length + 2 (music + ambient), well within any limit. */}
+          Total audio tags = uniqueScenes.length + 2 (music + ambient). */}
       <Series>
-        {scenes.map((scene) => {
+        {uniqueScenes.map((scene) => {
           const durationFrames = Math.max(Math.round((scene.duration_seconds || 5) * fps), 30)
           const spec           = audioSpecMap[scene.scene_id] || null
           const narrationUrl   = spec?.narration?.url || scene.audio_path || null
 
           return (
-            <Series.Sequence key={scene.scene_id} durationInFrames={durationFrames}>
+            // String() coercion ensures stable string key even if scene_id is numeric
+            <Series.Sequence key={String(scene.scene_id)} durationInFrames={durationFrames}>
               <AbsoluteFill>
                 {/* ── Visual layer ── */}
                 <ErrorBoundaryScene scene={scene}>
