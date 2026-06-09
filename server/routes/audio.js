@@ -2,11 +2,11 @@ const router = require('express').Router()
 const path   = require('path')
 const fs     = require('fs')
 
-const { buildProjectAudioSpecsCached }                    = require('../services/audioMixer')
-const { getMusicForMood, loadMusicIndex, searchFMA }      = require('../services/freeMusicArchive')
-const { listAmbientFiles, AMBIENT_CATALOG, AMBIENT_DIR }  = require('../services/ambientLibrary')
-const { downloadSting }                                   = require('../services/freesoundService')
-const transitionStings                                    = require('../config/transitionStings')
+const { buildProjectAudioSpecsCached }                   = require('../services/audioMixer')
+const { getMusicForMood, loadMusicIndex }                = require('../services/musicService')
+const { listAmbientFiles, AMBIENT_CATALOG, AMBIENT_DIR } = require('../services/ambientLibrary')
+const { downloadSting }                                  = require('../services/freesoundService')
+const transitionStings                                   = require('../config/transitionStings')
 
 const STINGS_DIR = path.resolve(__dirname, '../../library/stings')
 
@@ -68,9 +68,10 @@ router.get('/status', (req, res) => {
   }))
 
   res.json({
-    fmaConnected:        true,  // Free Music Archive needs no API key
     freesoundConnected:  !!process.env.FREESOUND_API_KEY,
     freesoundKeySet:     !!process.env.FREESOUND_API_KEY,
+    fmaRemoved:          true,
+    musicSource:         'Freesound',
     ambientAvailable:    ambientFiles.filter(f => f.available).length,
     ambientTotal:        ambientFiles.length,
     ambientDetails:      ambientFiles,
@@ -84,7 +85,7 @@ router.get('/status', (req, res) => {
 
 // ── POST /build-specs — build complete audio specs for all scenes ─────────────
 router.post('/build-specs', async (req, res) => {
-  const { scenes, projectId } = req.body
+  const { scenes } = req.body
   if (!Array.isArray(scenes) || !scenes.length) {
     return res.status(400).json({ error: 'scenes array required' })
   }
@@ -94,12 +95,12 @@ router.post('/build-specs', async (req, res) => {
     const { VOLUME_LEVELS } = require('../services/audioMixer')
     const getMoodConfig     = (mood) => moodMap[mood] || moodMap.neutral
 
-    const uniqueMoods = [...new Set(scenes.map(s => s.mood || 'neutral'))]
-    const musicByMood = {}
+    const uniqueMoods  = [...new Set(scenes.map(s => s.mood || 'neutral'))]
+    const musicByMood  = {}
 
     await Promise.allSettled(uniqueMoods.map(async mood => {
       try {
-        musicByMood[mood] = await getMusicForMood(mood)
+        musicByMood[mood] = await getMusicForMood(mood)   // returns { path, url }
       } catch (err) {
         console.warn(`[audio] music for "${mood}" failed:`, err.message)
       }
@@ -124,14 +125,14 @@ router.post('/build-specs', async (req, res) => {
         sting:   null,
       }
 
-      const musicPath = musicByMood[mood]
-      if (musicPath) {
+      const musicResult = musicByMood[mood]
+      if (musicResult) {
         spec.music = {
-          path:     musicPath,
-          url:      `/library/music/${path.basename(musicPath)}`,
+          path:     musicResult.path,
+          url:      musicResult.url,
           volume:   VOLUME_LEVELS.music,
           loop:     true,
-          filename: path.basename(musicPath),
+          filename: path.basename(musicResult.path),
         }
       }
 
@@ -201,27 +202,14 @@ router.post('/build-specs', async (req, res) => {
   }
 })
 
-// ── POST /search-music — search FMA ──────────────────────────────────────────
-router.post('/search-music', async (req, res) => {
-  const { mood } = req.body
-  if (!mood) return res.status(400).json({ error: 'mood required' })
-
-  try {
-    const tracks = await searchFMA(mood)
-    res.json(tracks)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
 // ── POST /download-music — download and cache a track for a mood ──────────────
 router.post('/download-music', async (req, res) => {
   const { mood } = req.body
   if (!mood) return res.status(400).json({ error: 'mood required' })
 
   try {
-    const filePath = await getMusicForMood(mood)
-    res.json({ success: true, filePath, url: filePath ? `/library/music/${path.basename(filePath)}` : null })
+    const result = await getMusicForMood(mood)   // { path, url }
+    res.json({ success: true, path: result.path, url: result.url, mood })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -229,7 +217,7 @@ router.post('/download-music', async (req, res) => {
 
 // ── POST /download-ambient — download all missing ambient files ───────────────
 router.post('/download-ambient', async (req, res) => {
-  const { downloadAmbientFile } = require('../services/ambientLibrary')
+  const { downloadAmbientFile } = require('../services/freesoundService')
 
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
@@ -261,7 +249,7 @@ router.post('/download-ambient', async (req, res) => {
 // ── POST /download-ambient/:key — download single ambient file ────────────────
 router.post('/download-ambient/:key', async (req, res) => {
   try {
-    const { downloadAmbientFile } = require('../services/ambientLibrary')
+    const { downloadAmbientFile } = require('../services/freesoundService')
     await downloadAmbientFile(req.params.key)
     res.json({ success: true, key: req.params.key })
   } catch (err) {
@@ -271,31 +259,24 @@ router.post('/download-ambient/:key', async (req, res) => {
 
 // ── POST /download-stings — download all missing sting files via Freesound ────
 router.post('/download-stings', async (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream')
-  res.setHeader('Cache-Control', 'no-cache')
-  res.flushHeaders()
+  if (!fs.existsSync(STINGS_DIR)) fs.mkdirSync(STINGS_DIR, { recursive: true })
 
-  const sendEvent = (data) => {
-    try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {}
-  }
-
+  const results = {}
   for (const key of Object.keys(transitionStings)) {
     const filePath = path.join(STINGS_DIR, transitionStings[key].filename)
-    if (fs.existsSync(filePath)) {
-      sendEvent({ type: 'skipped', key, message: `${key} already exists` })
+    if (fs.existsSync(filePath) && fs.statSync(filePath).size > 1000) {
+      results[key] = 'downloaded'
       continue
     }
-    sendEvent({ type: 'downloading', key, message: `Downloading ${key}…` })
     try {
       await downloadSting(key)
-      sendEvent({ type: 'done', key })
+      results[key] = 'downloaded'
     } catch (err) {
-      sendEvent({ type: 'error', key, message: err.message })
+      results[key] = `failed: ${err.message}`
     }
   }
 
-  sendEvent({ type: 'complete' })
-  res.end()
+  res.json(results)
 })
 
 // ── GET /ambient-list — list all ambient files and their availability ─────────
@@ -306,6 +287,9 @@ router.get('/ambient-list', (req, res) => {
 // ── GET /diagnose — full system diagnostic ────────────────────────────────────
 router.get('/diagnose', async (req, res) => {
   const https    = require('https')
+  const { exec } = require('child_process')
+  const { promisify } = require('util')
+  const execAsync = promisify(exec)
   const results  = {}
 
   // 1. Environment variables
@@ -330,35 +314,13 @@ router.get('/diagnose', async (req, res) => {
 
   // 3. yt-dlp
   try {
-    const { execAsync } = require('../services/clipDownloader')
     const { stdout } = await execAsync('yt-dlp --version', { timeout: 10_000 })
     results.ytdlp = { installed: true, version: stdout.trim() }
   } catch (err) {
     results.ytdlp = { installed: false, error: err.message }
   }
 
-  // 4. FMA API
-  await new Promise((resolve) => {
-    https.get(
-      'https://freemusicarchive.org/api/get/tracks.json?api_key=FreePublicApiKey&limit=1',
-      { headers: { 'User-Agent': 'Vorta/1.0' } },
-      (res2) => {
-        let data = ''
-        res2.on('data', c => data += c)
-        res2.on('end', () => {
-          results.fma = {
-            status:      res2.statusCode,
-            contentType: res2.headers['content-type'],
-            isJSON:      data.trim().startsWith('{'),
-            preview:     data.slice(0, 200),
-          }
-          resolve()
-        })
-      }
-    ).on('error', err => { results.fma = { error: err.message }; resolve() })
-  })
-
-  // 5. Freesound API
+  // 4. Freesound API
   if (process.env.FREESOUND_API_KEY) {
     await new Promise((resolve) => {
       const url = 'https://freesound.org/apiv2/search/text/?query=ambient&page_size=1&fields=id,name'
@@ -375,9 +337,8 @@ router.get('/diagnose', async (req, res) => {
     results.freesound = { error: 'FREESOUND_API_KEY not set' }
   }
 
-  // 6. YouTube Audio Library search
+  // 5. YouTube Audio Library search
   try {
-    const { execAsync } = require('../services/clipDownloader')
     const { stdout } = await execAsync(
       'yt-dlp "ytsearch1:cinematic documentary background music" --print "%(title)s" --no-download --flat-playlist',
       { timeout: 30_000 }
@@ -387,7 +348,7 @@ router.get('/diagnose', async (req, res) => {
     results.youtubeSearch = { working: false, error: err.message }
   }
 
-  // 7. musicIndex.json
+  // 6. musicIndex.json
   const indexPath = path.resolve(__dirname, '../../library/musicIndex.json')
   results.musicIndex = fs.existsSync(indexPath)
     ? JSON.parse(fs.readFileSync(indexPath, 'utf8'))

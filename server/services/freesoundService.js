@@ -9,143 +9,126 @@ const STINGS_DIR  = path.resolve(__dirname, '../../library/stings')
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
 })
 
-function getApiKey() {
-  const key = process.env.FREESOUND_API_KEY
-  if (!key) throw new Error('FREESOUND_API_KEY not set in .env — get free key at freesound.org/apiv2/apply')
-  return key
+function getKey() {
+  if (!process.env.FREESOUND_API_KEY) throw new Error('FREESOUND_API_KEY not set')
+  return process.env.FREESOUND_API_KEY
 }
 
-function fetchJSON(urlStr) {
-  return new Promise((resolve, reject) => {
-    https.get(urlStr, { headers: { Authorization: `Token ${getApiKey()}`, Accept: 'application/json' } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return fetchJSON(res.headers.location).then(resolve).catch(reject)
-      }
-      let data = ''
-      res.on('data', c => data += c)
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)) }
-        catch (e) { reject(new Error(`JSON parse: ${e.message} — raw: ${data.slice(0, 100)}`)) }
-      })
-      res.on('error', reject)
-    }).on('error', reject)
-  })
-}
-
-function downloadFile(urlStr, dest) {
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest)
-    const req  = https.get(urlStr, { headers: { Authorization: `Token ${getApiKey()}` } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        file.close()
-        try { fs.unlinkSync(dest) } catch {}
-        return downloadFile(res.headers.location, dest).then(resolve).catch(reject)
-      }
-      if (res.statusCode !== 200) {
-        file.close()
-        try { fs.unlinkSync(dest) } catch {}
-        return reject(new Error(`HTTP ${res.statusCode}`))
-      }
-      res.pipe(file)
-      file.on('finish', () => {
-        file.close()
-        const size = fs.statSync(dest).size
-        if (size < 1000) {
-          fs.unlinkSync(dest)
-          return reject(new Error(`File too small: ${size} bytes`))
-        }
-        console.log(`[freesound] saved: ${path.basename(dest)} (${Math.round(size / 1024)} KB)`)
-        resolve(dest)
-      })
-      file.on('error', err => { try { fs.unlinkSync(dest) } catch {} reject(err) })
-    })
-    req.on('error', err => { file.close(); reject(err) })
-  })
-}
-
-// ── Search ────────────────────────────────────────────────────────────────────
-
-async function searchFreesound({ query, duration_min = 5, duration_max = 60, filter = 'license:"Creative Commons 0"', limit = 10 }) {
+async function searchFreesound({ query, duration_min = 5, duration_max = 120, limit = 10 }) {
+  const key    = getKey()
   const params = new URLSearchParams({
     query,
-    filter:    `${filter} duration:[${duration_min} TO ${duration_max}]`,
-    fields:    'id,name,duration,previews,license,tags',
+    filter:    `duration:[${duration_min} TO ${duration_max}] license:"Creative Commons 0"`,
+    fields:    'id,name,duration,previews',
     page_size: String(limit),
     sort:      'rating_desc',
   })
   const url = `https://freesound.org/apiv2/search/text/?${params.toString()}`
-  console.log('[freesound] searching:', query)
+  console.log('[freesound] searching:', query.slice(0, 60))
 
-  const data = await fetchJSON(url)
-  if (!data.results) throw new Error(`Freesound API error: ${JSON.stringify(data).slice(0, 200)}`)
-
-  console.log(`[freesound] ${data.results.length} results for: ${query}`)
-  return data.results.map(s => ({
-    id:         s.id,
-    name:       s.name,
-    duration:   s.duration,
-    previewUrl: s.previews?.['preview-hq-mp3'] || s.previews?.['preview-lq-mp3'],
-    license:    s.license,
-    tags:       s.tags || [],
-  }))
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { Authorization: `Token ${key}`, Accept: 'application/json' } }, (res) => {
+      let data = ''
+      res.on('data', c => data += c)
+      res.on('end', () => {
+        try {
+          const parsed  = JSON.parse(data)
+          const results = (parsed.results || [])
+            .filter(s => s.previews?.['preview-hq-mp3'])
+            .map(s => ({ id: s.id, name: s.name, duration: s.duration, previewUrl: s.previews['preview-hq-mp3'] }))
+          console.log(`[freesound] ${results.length} results for: ${query.slice(0, 40)}`)
+          resolve(results)
+        } catch (e) {
+          reject(new Error(`Parse error: ${e.message} — ${data.slice(0, 100)}`))
+        }
+      })
+    }).on('error', reject)
+  })
 }
 
-async function downloadFreesound(sound, outputPath) {
-  if (!sound.previewUrl) throw new Error(`No preview URL for sound: ${sound.name}`)
-  return downloadFile(sound.previewUrl, outputPath)
+function downloadSound(previewUrl, outputPath) {
+  const key = getKey()
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(outputPath)
+
+    const request = (url) => {
+      https.get(url, { headers: { Authorization: `Token ${key}` } }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          return request(res.headers.location)
+        }
+        if (res.statusCode !== 200) {
+          file.close()
+          try { fs.unlinkSync(outputPath) } catch {}
+          return reject(new Error(`HTTP ${res.statusCode}`))
+        }
+        res.pipe(file)
+        file.on('finish', () => {
+          file.close()
+          const size = fs.statSync(outputPath).size
+          if (size < 1000) {
+            fs.unlinkSync(outputPath)
+            return reject(new Error(`File too small: ${size} bytes`))
+          }
+          console.log(`[freesound] saved: ${path.basename(outputPath)} (${Math.round(size / 1024)} KB)`)
+          resolve(outputPath)
+        })
+        file.on('error', err => { try { fs.unlinkSync(outputPath) } catch {} reject(err) })
+      }).on('error', err => { file.close(); reject(err) })
+    }
+
+    request(previewUrl)
+  })
 }
 
-// ── Ambient queries ───────────────────────────────────────────────────────────
+// ── Ambient ───────────────────────────────────────────────────────────────────
 
 const AMBIENT_QUERIES = {
-  trading_floor:    { query: 'stock exchange trading floor crowd',           duration_min: 10, duration_max: 60 },
-  office_ambient:   { query: 'office ambient background keyboard typing',    duration_min: 10, duration_max: 60 },
-  city_traffic:     { query: 'city traffic street urban ambience',           duration_min: 10, duration_max: 60 },
-  data_center_hum:  { query: 'server room data center hum fan',              duration_min: 10, duration_max: 60 },
-  courtroom_silence:{ query: 'quiet indoor room ambience minimal',           duration_min: 10, duration_max: 60 },
-  factory_floor:    { query: 'factory machinery industrial ambient',         duration_min: 10, duration_max: 60 },
-  crowd_murmur:     { query: 'crowd murmur indoor people talking background',duration_min: 10, duration_max: 60 },
-  government_hall:  { query: 'large hall echo footsteps interior',           duration_min: 10, duration_max: 60 },
-  tension_drone:    { query: 'cinematic tension drone dark ambient',         duration_min: 10, duration_max: 60 },
-  soft_ambient:     { query: 'soft ambient neutral background subtle',       duration_min: 10, duration_max: 60 },
-  press_room:       { query: 'press conference room crowd camera',           duration_min: 10, duration_max: 60 },
-  airport_ambient:  { query: 'airport terminal busy crowd announcement',     duration_min: 10, duration_max: 60 },
-  industrial_hum:   { query: 'industrial machinery hum energy plant',        duration_min: 10, duration_max: 60 },
+  trading_floor:    { query: 'stock exchange trading floor crowd noise',   duration_min: 10, duration_max: 120 },
+  office_ambient:   { query: 'office ambient background quiet keyboard',   duration_min: 10, duration_max: 120 },
+  city_traffic:     { query: 'city street traffic urban ambience',         duration_min: 10, duration_max: 120 },
+  data_center_hum:  { query: 'server room data center fan hum',            duration_min: 10, duration_max: 120 },
+  courtroom_silence:{ query: 'quiet indoor room ambience minimal',         duration_min: 10, duration_max: 120 },
+  factory_floor:    { query: 'factory machinery industrial ambient loop',  duration_min: 10, duration_max: 120 },
+  crowd_murmur:     { query: 'crowd murmur indoor people talking',         duration_min: 10, duration_max: 120 },
+  government_hall:  { query: 'large hall echo interior ambience',          duration_min: 10, duration_max: 120 },
+  tension_drone:    { query: 'dark ambient drone tension cinematic',       duration_min: 10, duration_max: 120 },
+  soft_ambient:     { query: 'soft neutral background ambient subtle',     duration_min: 10, duration_max: 120 },
+  press_room:       { query: 'press conference room crowd cameras',        duration_min: 10, duration_max: 120 },
+  airport_ambient:  { query: 'airport terminal busy crowd',                duration_min: 10, duration_max: 120 },
+  industrial_hum:   { query: 'industrial machinery hum energy plant',      duration_min: 10, duration_max: 120 },
 }
 
-// ── Sting queries ─────────────────────────────────────────────────────────────
+// ── Stings ────────────────────────────────────────────────────────────────────
 
 const STING_QUERIES = {
-  low_drone:    { query: 'cinematic low drone bass sting',         duration_min: 1, duration_max: 4 },
-  rise_sting:   { query: 'cinematic rise reveal orchestral sting', duration_min: 1, duration_max: 3 },
-  neutral_sting:{ query: 'subtle transition sting neutral whoosh', duration_min: 0.5, duration_max: 2 },
-  impact_sting: { query: 'cinematic impact hit dramatic sting',    duration_min: 0.5, duration_max: 2 },
-  soft_fade:    { query: 'soft fade piano gentle transition',      duration_min: 1, duration_max: 4 },
-  whoosh:       { query: 'cinematic whoosh transition fast',       duration_min: 0.3, duration_max: 2 },
+  low_drone:    { query: 'cinematic low drone bass sting short',     duration_min: 1,   duration_max: 5 },
+  rise_sting:   { query: 'cinematic rise reveal sting short',        duration_min: 1,   duration_max: 4 },
+  neutral_sting:{ query: 'subtle transition whoosh sting short',     duration_min: 0.5, duration_max: 3 },
+  impact_sting: { query: 'cinematic impact hit dramatic short',      duration_min: 0.5, duration_max: 3 },
+  soft_fade:    { query: 'soft fade gentle piano sting short',       duration_min: 1,   duration_max: 4 },
+  whoosh:       { query: 'cinematic whoosh transition fast short',   duration_min: 0.3, duration_max: 2 },
 }
 
-// ── Download ambient via Freesound API ────────────────────────────────────────
-
 async function downloadAmbientFile(key) {
-  // All ambient filenames follow the pattern: ${key}.mp3
-  const filename   = `${key}.mp3`
-  const outputPath = path.join(AMBIENT_DIR, filename)
+  // Lazy-require avoids circular dependency at module load time
+  const { AMBIENT_CATALOG } = require('./ambientLibrary')
+  const ambient = AMBIENT_CATALOG[key]
+  if (!ambient) throw new Error(`Unknown ambient key: ${key}`)
 
+  const outputPath = path.join(AMBIENT_DIR, ambient.filename)
   if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 1000) {
-    console.log(`[freesound] ambient already cached: ${key}`)
+    console.log(`[freesound] ambient cached: ${key}`)
     return outputPath
   }
 
-  const qCfg   = AMBIENT_QUERIES[key] || { query: key.replace(/_/g, ' ') + ' ambient', duration_min: 10, duration_max: 60 }
-  const sounds = await searchFreesound(qCfg)
-  if (!sounds.length) throw new Error(`No Freesound results for ambient: ${key}`)
+  const config  = AMBIENT_QUERIES[key] || { query: `${key.replace(/_/g, ' ')} ambient`, duration_min: 10, duration_max: 120 }
+  const results = await searchFreesound(config)
+  if (!results.length) throw new Error(`No Freesound results for ambient: ${key}`)
 
-  const best = sounds.sort((a, b) => b.duration - a.duration)[0]
-  await downloadFreesound(best, outputPath)
+  const best = results.sort((a, b) => b.duration - a.duration)[0]
+  await downloadSound(best.previewUrl, outputPath)
   return outputPath
 }
-
-// ── Download a sting via Freesound API ────────────────────────────────────────
 
 async function downloadSting(key) {
   const transitionStings = require('../config/transitionStings')
@@ -154,21 +137,16 @@ async function downloadSting(key) {
 
   const outputPath = path.join(STINGS_DIR, sting.filename)
   if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 1000) {
-    console.log(`[freesound] sting already cached: ${key}`)
+    console.log(`[freesound] sting cached: ${key}`)
     return outputPath
   }
 
-  const qCfg  = STING_QUERIES[key] || { query: key.replace(/_/g, ' ') + ' sting', duration_min: 0.5, duration_max: 4 }
-  const sounds = await searchFreesound(qCfg)
-  if (!sounds.length) throw new Error(`No Freesound results for sting: ${key}`)
+  const config  = STING_QUERIES[key] || { query: `${key.replace(/_/g, ' ')} sting`, duration_min: 0.5, duration_max: 4 }
+  const results = await searchFreesound(config)
+  if (!results.length) throw new Error(`No Freesound results for sting: ${key}`)
 
-  const best = sounds[0]
-  await downloadFreesound(best, outputPath)
+  await downloadSound(results[0].previewUrl, outputPath)
   return outputPath
 }
 
-module.exports = {
-  searchFreesound, downloadFreesound,
-  downloadAmbientFile, downloadSting,
-  AMBIENT_QUERIES, STING_QUERIES,
-}
+module.exports = { searchFreesound, downloadAmbientFile, downloadSting, AMBIENT_QUERIES, STING_QUERIES }

@@ -54,33 +54,25 @@ export default function AudioPanel({
     if (open) setTimeout(() => panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60)
   }, [open])
 
-  // ── Primary generate action ──────────────────────────────────────────────────
-  // ── Download all stings via Freesound SSE ───────────────────────────────────
-  const handleDownloadAllStings = () => {
+  // ── Download all stings via Freesound (JSON) ─────────────────────────────────
+  const handleDownloadAllStings = async () => {
     if (!audioStatus?.freesoundKeySet) return
     setIsDownloadingStings(true)
     setStingDownloadStatus({})
-
-    const es = new EventSource(`${SERVER_URL}/api/audio/download-stings`)
-    es.onmessage = (e) => {
-      try {
-        const event = JSON.parse(e.data)
-        if (event.type === 'downloading') {
-          setStingDownloadStatus(p => ({ ...p, [event.key]: 'downloading' }))
-        } else if (event.type === 'done') {
-          setStingDownloadStatus(p => ({ ...p, [event.key]: 'done' }))
-        } else if (event.type === 'skipped') {
-          setStingDownloadStatus(p => ({ ...p, [event.key]: 'exists' }))
-        } else if (event.type === 'error') {
-          setStingDownloadStatus(p => ({ ...p, [event.key]: 'error' }))
-        } else if (event.type === 'complete') {
-          setIsDownloadingStings(false)
-          es.close()
-          fetchStatus()
-        }
-      } catch {}
+    try {
+      const res     = await fetch(`${SERVER_URL}/api/audio/download-stings`, { method: 'POST' })
+      const results = await res.json()
+      const status  = {}
+      for (const [key, val] of Object.entries(results)) {
+        status[key] = val === 'downloaded' ? 'done' : 'error'
+      }
+      setStingDownloadStatus(status)
+      await fetchStatus()
+    } catch (err) {
+      console.error('[audio] download stings failed:', err.message)
+    } finally {
+      setIsDownloadingStings(false)
     }
-    es.onerror = () => { setIsDownloadingStings(false); es.close() }
   }
 
   const handleGenerate = async () => {
