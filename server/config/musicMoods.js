@@ -54,6 +54,22 @@ module.exports = {
       ambientCategory: 'soft_ambient',
       transitionSting: 'soft_fade',
     },
+
+    // ── Aliases for Claude-generated moods not in the original set ────────────
+    confrontational: { musicQuery: 'dramatic conflict intense',     musicTags: ['dramatic'], ambientCategory: 'tension_drone', transitionSting: 'impact_sting' },
+    ominous:         { musicQuery: 'dark ominous suspense',         musicTags: ['dark'],     ambientCategory: 'tension_drone', transitionSting: 'low_drone' },
+    gravity:         { musicQuery: 'dramatic cinematic weight',     musicTags: ['dramatic'], ambientCategory: 'tension_drone', transitionSting: 'low_drone' },
+    urgent:          { musicQuery: 'urgent fast paced tension',     musicTags: ['dramatic'], ambientCategory: 'tension_drone', transitionSting: 'impact_sting' },
+    suspenseful:     { musicQuery: 'suspense thriller dark',        musicTags: ['suspense'], ambientCategory: 'tension_drone', transitionSting: 'low_drone' },
+    restrictive:     { musicQuery: 'tension suspense serious',      musicTags: ['tension'],  ambientCategory: 'tension_drone', transitionSting: 'low_drone' },
+    revelatory:      { musicQuery: 'cinematic reveal discovery',    musicTags: ['dramatic'], ambientCategory: 'soft_ambient',  transitionSting: 'rise_sting' },
+    revelation:      { musicQuery: 'cinematic reveal discovery',    musicTags: ['dramatic'], ambientCategory: 'soft_ambient',  transitionSting: 'rise_sting' },
+    hopeful:         { musicQuery: 'hopeful uplifting piano',       musicTags: ['uplifting'],ambientCategory: 'soft_ambient',  transitionSting: 'rise_sting' },
+    melancholic:     { musicQuery: 'sad melancholic emotional',     musicTags: ['sad'],      ambientCategory: 'soft_ambient',  transitionSting: 'soft_fade' },
+    inspirational:   { musicQuery: 'inspirational uplifting epic',  musicTags: ['epic'],     ambientCategory: 'soft_ambient',  transitionSting: 'rise_sting' },
+    celebratory:     { musicQuery: 'celebration triumph epic',      musicTags: ['epic'],     ambientCategory: 'crowd_murmur', transitionSting: 'rise_sting' },
+    analytical:      { musicQuery: 'documentary neutral corporate', musicTags: ['documentary'], ambientCategory: 'office_ambient', transitionSting: 'neutral_sting' },
+    comparative:     { musicQuery: 'documentary background neutral',musicTags: ['documentary'], ambientCategory: 'office_ambient', transitionSting: 'neutral_sting' },
   },
 
   categoryAmbientMap: {

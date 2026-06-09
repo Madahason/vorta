@@ -48,6 +48,20 @@ One scene = one visual idea. If a paragraph contains multiple distinct images, b
 
 Prefer "image" for emotional, atmospheric, or character-driven moments. Reserve "motion_graphic" for hard data beats — no more than 2-3 per script. Use "real_footage" sparingly — only when the tag set is specific enough to find a real match.
 
+MOOD VALUES — use ONLY these exact values for the mood field:
+tense, triumphant, somber, neutral, dramatic, reflective, anticipatory, institutional, intimate
+
+Do not invent new mood names. Map every scene to the closest value from this list:
+- tense: conflict, threat, danger, crisis, fear, confrontation, ominous, restrictive moments
+- dramatic: reveal, discovery, intense moments, high-impact narrative beats
+- triumphant: success, achievement, celebration, inspiration, hope
+- somber: grief, loss, failure, melancholy, mourning
+- reflective: nostalgia, contemplation, looking back, thoughtful moments
+- anticipatory: building toward something, suspense, upcoming event
+- institutional: corporate, political, regulatory, organizational moments
+- neutral: background, context-setting, data-heavy, explanatory scenes
+- intimate: personal stories, close character moments, quiet human scenes
+
 SCENE TEXT RULES FOR VOICEOVER
 
 Every script_excerpt will be read aloud by an AI narrator. It must be TTS-safe:

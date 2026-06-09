@@ -16,22 +16,41 @@ router.get('/status', async (req, res) => {
     }
     const client = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY })
 
-    // Try subscription info first; fall back to a voices ping if permission denied
-    let connected = false, plan = null, charactersUsed = null, charactersLimit = null, charactersRemaining = null
-    try {
-      const subscription = await client.user.subscription.get()
-      plan                = subscription.tier
-      charactersUsed      = subscription.characterCount
-      charactersLimit     = subscription.characterLimit
-      charactersRemaining = subscription.characterLimit - subscription.characterCount
-      connected           = true
-    } catch {
-      // user_read permission may be missing — verify connectivity via voices endpoint instead
-      await client.voices.getAll()
-      connected = true
+    let planInfo = {
+      plan:               'unknown',
+      charactersUsed:     0,
+      charactersLimit:    999999,
+      charactersRemaining: 999999,
     }
 
-    res.json({ connected, plan, charactersUsed, charactersLimit, charactersRemaining })
+    try {
+      // SDK shape has changed across versions — try every known path
+      let subscription = null
+      if (typeof client.user?.getSubscription === 'function') {
+        subscription = await client.user.getSubscription()
+      } else if (typeof client.user?.subscription?.get === 'function') {
+        subscription = await client.user.subscription.get()
+      }
+
+      if (subscription) {
+        const used  = subscription.characterCount  ?? subscription.character_count  ?? 0
+        const limit = subscription.characterLimit  ?? subscription.character_limit  ?? 999999
+        planInfo = {
+          plan:                subscription.tier || subscription.plan || 'active',
+          charactersUsed:      used,
+          charactersLimit:     limit,
+          charactersRemaining: Math.max(0, limit - used),
+        }
+      }
+    } catch (subErr) {
+      // Subscription details unavailable — still verify connectivity via voices ping
+      console.warn('[voiceover] subscription details unavailable:', subErr.message)
+      try { await client.voices.getAll() } catch (voiceErr) {
+        throw voiceErr // voices ping also failed — real auth error
+      }
+    }
+
+    res.json({ connected: true, ...planInfo })
   } catch (err) {
     res.json({ connected: false, error: err.message })
   }

@@ -110,16 +110,17 @@ router.post('/build-specs', async (req, res) => {
   }
 
   try {
-    const { moodMap }       = require('../config/musicMoods')
-    const download          = req.query.download === '1'
-    const { VOLUME_LEVELS } = require('../services/audioMixer')
+    const { moodMap }          = require('../config/musicMoods')
+    const download             = req.query.download === '1'
+    const { VOLUME_LEVELS }    = require('../services/audioMixer')
+    const getMoodConfig        = (mood) => moodMap[mood] || moodMap.neutral
 
     // Collect unique moods and download/cache music for each
     const uniqueMoods  = [...new Set(scenes.map(s => s.mood || 'neutral'))]
     const musicByMood  = {}
 
     await Promise.allSettled(uniqueMoods.map(async mood => {
-      const moodConfig  = moodMap[mood] || moodMap.neutral
+      const moodConfig  = getMoodConfig(mood)
       try {
         musicByMood[mood] = await getMusicForMood(mood, moodConfig.musicQuery)
       } catch (err) {
@@ -137,7 +138,7 @@ router.post('/build-specs', async (req, res) => {
 
     const specs = await Promise.all(scenes.map(async (scene) => {
       const mood       = scene.mood || 'neutral'
-      const moodConfig = moodMap[mood] || moodMap.neutral
+      const moodConfig = getMoodConfig(mood)
 
       const spec = {
         scene_id:  scene.scene_id,
@@ -248,7 +249,8 @@ router.post('/download-music', async (req, res) => {
   if (!mood) return res.status(400).json({ error: 'mood required' })
 
   const { moodMap }  = require('../config/musicMoods')
-  const moodConfig   = moodMap[mood] || moodMap.neutral
+  const moodCfg      = (m) => moodMap[m] || moodMap.neutral
+  const moodConfig   = moodCfg(mood)
   const searchQuery  = query || moodConfig.musicQuery
 
   try {

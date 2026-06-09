@@ -14,9 +14,28 @@ const VOLUME_LEVELS = {
   sting:     0.45,
 }
 
+function getMoodConfig(mood) {
+  if (moodMap[mood]) return moodMap[mood]
+
+  // Fuzzy fallback for unknown mood names Claude might generate
+  const m = (mood || '').toLowerCase()
+  const tenseWords   = ['tense', 'dark', 'conflict', 'threat', 'danger', 'crisis', 'fear', 'confrontat', 'ominous', 'restrict', 'gravity', 'urgent', 'suspens']
+  const triumphWords = ['triumph', 'celebrat', 'success', 'win', 'achiev', 'inspir', 'hope', 'uplift']
+  const somberWords  = ['somber', 'sad', 'grief', 'loss', 'fail', 'melanchol', 'mourn']
+  const dramaticWords= ['dramatic', 'intense', 'reveal', 'revelation', 'impact', 'revelat']
+
+  if (tenseWords.some(w => m.includes(w)))    return moodMap.tense
+  if (triumphWords.some(w => m.includes(w)))  return moodMap.triumphant
+  if (somberWords.some(w => m.includes(w)))   return moodMap.somber
+  if (dramaticWords.some(w => m.includes(w))) return moodMap.dramatic
+
+  console.warn(`[audioMixer] unknown mood "${mood}" — falling back to neutral`)
+  return moodMap.neutral
+}
+
 function buildSceneSpec(scene, musicPath) {
   const mood       = scene.mood || 'neutral'
-  const moodConfig = moodMap[mood] || moodMap.neutral
+  const moodConfig = getMoodConfig(mood)
 
   const spec = {
     scene_id:  scene.scene_id,
@@ -75,7 +94,7 @@ async function buildProjectAudioSpecs(scenes) {
 
   // Download unique moods in parallel — failures are silently skipped
   await Promise.allSettled(uniqueMoods.map(async mood => {
-    const moodConfig = moodMap[mood] || moodMap.neutral
+    const moodConfig = getMoodConfig(mood)
     try {
       musicByMood[mood] = await getMusicForMood(mood, moodConfig.musicQuery)
     } catch (err) {

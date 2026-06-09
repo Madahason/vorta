@@ -26,20 +26,42 @@ function getCachedTrackForMood(mood) {
 }
 
 async function searchMusic(query, mood) {
-  if (!process.env.PIXABAY_API_KEY) throw new Error('PIXABAY_API_KEY not set in .env')
+  const apiKey = process.env.PIXABAY_API_KEY
+  if (!apiKey) throw new Error('PIXABAY_API_KEY not set in .env')
 
-  const params = new URLSearchParams({
-    key:        process.env.PIXABAY_API_KEY,
-    q:          query,
-    per_page:   10,
-    safesearch: true,
-  })
+  // Build URL with key as first param — Pixabay rejects malformed requests with HTML
+  const params = new URLSearchParams()
+  params.append('key',      apiKey)
+  params.append('q',        query)
+  params.append('per_page', '10')
 
-  const response = await fetch(`${PIXABAY_API}?${params}`)
-  if (!response.ok) throw new Error(`Pixabay API error: ${response.status} ${response.statusText}`)
+  const url = `${PIXABAY_API}?${params.toString()}`
+  console.log('[pixabay] requesting:', url.replace(apiKey, 'KEY_HIDDEN'))
+
+  const nodeFetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args))
+  let response
+  try {
+    response = await nodeFetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'Vorta/1.0' } })
+  } catch {
+    // node-fetch not available — fall back to native fetch (Node 18+)
+    response = await fetch(url, { headers: { Accept: 'application/json' } })
+  }
+
+  const contentType = response.headers.get('content-type') || ''
+  if (!contentType.includes('application/json')) {
+    const text = await response.text()
+    console.error('[pixabay] non-JSON response (status', response.status + '):', text.slice(0, 200))
+    throw new Error(`Pixabay returned non-JSON (${response.status}) — check PIXABAY_API_KEY: ${text.slice(0, 80)}`)
+  }
+
   const data = await response.json()
 
-  if (!data.hits?.length) return []
+  if (data.error) throw new Error(`Pixabay API error: ${data.error}`)
+  if (!data.hits)  throw new Error(`Pixabay unexpected response: ${JSON.stringify(data).slice(0, 200)}`)
+
+  console.log('[pixabay] found', data.hits.length, 'tracks for query:', query)
+
+  if (!data.hits.length) return []
 
   return data.hits.map(track => ({
     id:          track.id,
@@ -67,7 +89,13 @@ async function downloadTrack(track) {
   if (!url) throw new Error('Track has no downloadable URL')
 
   console.log(`[music] downloading: ${url}`)
-  const response = await fetch(url)
+  const nodeFetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args))
+  let response
+  try {
+    response = await nodeFetch(url)
+  } catch {
+    response = await fetch(url)
+  }
   if (!response.ok) throw new Error(`Download failed: ${response.status} ${response.statusText}`)
 
   const buffer = Buffer.from(await response.arrayBuffer())

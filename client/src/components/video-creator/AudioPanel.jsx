@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Music, Volume2, ChevronDown, ChevronUp, Loader2, Play, RefreshCw, AlertTriangle, CheckCircle, ExternalLink, X, Zap } from 'lucide-react'
+import { Music, Volume2, ChevronDown, ChevronUp, Loader2, Play, RefreshCw, AlertTriangle, CheckCircle, ExternalLink, X, Zap, Download } from 'lucide-react'
 
 const SERVER_URL = 'http://localhost:3001'
 
