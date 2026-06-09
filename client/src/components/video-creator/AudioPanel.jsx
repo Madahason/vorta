@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Volume2, ChevronDown, ChevronUp, Loader2, Play, Zap, Download, Sparkles } from 'lucide-react'
+import { Volume2, ChevronDown, ChevronUp, Loader2, Zap, Sparkles } from 'lucide-react'
 
 const SERVER_URL = 'http://localhost:3001'
 
@@ -31,8 +31,7 @@ export default function AudioPanel({
   const [building,          setBuilding]          = useState(false)
   const [buildError,        setBuildError]        = useState(null)
   const [playingKey,        setPlayingKey]        = useState(null)
-  const [isDownloadingStings, setIsDownloadingStings] = useState(false)
-  const [stingDownloadStatus, setStingDownloadStatus] = useState({})
+  const [soundLibraryStats, setSoundLibraryStats] = useState(null)
   const [isPrewarming,      setIsPrewarming]      = useState(false)
   const [prewarmProgress,   setPrewarmProgress]   = useState({ done: 0, total: 8, current: null, errors: [] })
 
@@ -48,7 +47,7 @@ export default function AudioPanel({
   const fetchStatus = () =>
     fetch(`${SERVER_URL}/api/audio/status`)
       .then(r => r.json())
-      .then(setAudioStatus)
+      .then(data => { setAudioStatus(data); setSoundLibraryStats(data.soundLibrary || null) })
       .catch(() => setAudioStatus({ error: 'Cannot reach server' }))
 
   useEffect(() => {
@@ -98,44 +97,19 @@ export default function AudioPanel({
     es.onerror = () => { setIsPrewarming(false); es.close() }
   }
 
-  const handleDownloadAllStings = async () => {
-    setIsDownloadingStings(true)
-    setStingDownloadStatus({})
-    try {
-      const res     = await fetch(`${SERVER_URL}/api/audio/download-stings`, { method: 'POST' })
-      const results = await res.json()
-      const status  = {}
-      for (const [key, val] of Object.entries(results)) {
-        status[key] = val === 'downloaded' ? 'done' : 'error'
-      }
-      setStingDownloadStatus(status)
-      await fetchStatus()
-    } catch (err) {
-      console.error('[audio] download stings failed:', err.message)
-    } finally {
-      setIsDownloadingStings(false)
-    }
-  }
-
-  const handlePlaySting = (sting) => {
-    if (playingKey === sting.key) {
-      activeAudioRef.current?.pause()
-      setPlayingKey(null)
-      return
-    }
+  const handlePlayPreview = (url) => {
     activeAudioRef.current?.pause()
-    const audio = new Audio(`${SERVER_URL}/library/stings/${sting.filename}`)
+    const audio = new Audio(`${SERVER_URL}${url}`)
     audio.onended = () => setPlayingKey(null)
     audio.play().catch(() => {})
     activeAudioRef.current = audio
-    setPlayingKey(sting.key)
   }
 
   useEffect(() => () => { activeAudioRef.current?.pause() }, [])
 
-  const musicCount   = audioSpecs?.filter(s => s.music).length  || 0
-  const ambientCount = audioSpecs?.filter(s => s.ambient).length || 0
-  const stingCount   = audioStatus?.stingsAvailable || 0
+  const musicCount   = audioSpecs?.filter(s => s.music).length   || 0
+  const ambientCount = audioSpecs?.filter(s => s.ambient).length  || 0
+  const stingCount   = soundLibraryStats?.byType?.sting || 0
   const sceneMoods   = [...new Set((scenes || []).map(s => s.mood || 'neutral'))]
   const hasSpecs     = audioSpecs?.length > 0
   const canGenerate  = !building && !!scenes?.length
@@ -178,7 +152,7 @@ export default function AudioPanel({
             {[
               { label: 'Background Music', source: 'ElevenLabs AI', color: '#a78bfa', count: audioStatus?.cachedMusicTracks || 0, unit: 'moods' },
               { label: 'Ambient Sound',    source: 'ElevenLabs AI', color: '#38bdf8', count: audioStatus?.cachedAmbientTracks || 0, unit: 'scenes' },
-              { label: 'Transition Stings',source: 'Freesound CC0', color: '#fbbf24', count: stingCount, unit: `/ ${audioStatus?.stingsTotal || 6}` },
+              { label: 'Transition Stings',source: 'ElevenLabs AI', color: '#fbbf24', count: stingCount, unit: '/ 6' },
             ].map(({ label, source, color, count, unit }) => (
               <div key={label} style={{
                 padding: '8px 10px', borderRadius: 7,
@@ -381,81 +355,35 @@ export default function AudioPanel({
             </div>
           </div>
 
-          {/* ── Transition stings — still Freesound ── */}
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                Transition stings
-              </span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>
-                  {stingCount} / {audioStatus?.stingsTotal || 6} files
-                </span>
-                {stingCount < (audioStatus?.stingsTotal || 6) && (
-                  <button
-                    onClick={handleDownloadAllStings}
-                    disabled={isDownloadingStings || !audioStatus?.freesoundConnected}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 3, fontSize: 10,
-                      padding: '2px 8px', borderRadius: 4,
-                      background: isDownloadingStings ? 'rgba(255,255,255,0.04)' : 'rgba(251,191,36,0.10)',
-                      border: `1px solid ${isDownloadingStings ? 'rgba(255,255,255,0.08)' : 'rgba(251,191,36,0.25)'}`,
-                      color: isDownloadingStings ? 'rgba(255,255,255,0.25)' : 'rgba(251,191,36,0.85)',
-                      cursor: (isDownloadingStings || !audioStatus?.freesoundConnected) ? 'not-allowed' : 'pointer',
-                    }}
-                  >
-                    {isDownloadingStings ? <Loader2 size={9} className="animate-spin" /> : <Download size={9} />}
-                    {isDownloadingStings ? 'Downloading…' : 'Download missing'}
-                  </button>
-                )}
+          {/* ── Sound library summary ── */}
+          {soundLibraryStats !== null && (
+            <div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+                Sound library
               </div>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {(audioStatus?.stings || []).map(sting => {
-                const dlStatus = stingDownloadStatus[sting.key]
-                const isDone   = sting.available || dlStatus === 'done'
-                return (
-                  <div key={sting.key} style={{
-                    display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px',
-                    background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 6,
-                  }}>
-                    {dlStatus === 'error'
-                      ? <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#f87171', display: 'inline-block', flexShrink: 0 }} />
-                      : dot(isDone)
-                    }
-                    <span style={{ flex: 1, fontSize: 11, color: isDone ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.20)' }}>
-                      {sting.description}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 12px' }}>
+                {[
+                  { label: 'Transition stings', count: soundLibraryStats.byType?.sting   || 0, total: 6,  color: '#fbbf24' },
+                  { label: 'Ambient loops',     count: soundLibraryStats.byType?.ambient || 0, total: 12, color: '#38bdf8' },
+                  { label: 'Overlay sounds',    count: soundLibraryStats.byType?.overlay || 0, total: 11, color: '#f59e0b' },
+                  { label: 'Music tracks',      count: soundLibraryStats.byType?.music   || 0, total: 8,  color: '#a78bfa' },
+                ].map(({ label, count, total, color }) => (
+                  <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}>
+                    {dot(count >= total)}
+                    <span style={{ fontSize: 10, color: count > 0 ? 'rgba(255,255,255,0.50)' : 'rgba(255,255,255,0.22)' }}>
+                      {label}
                     </span>
-                    {isDone
-                      ? (
-                        <button
-                          onClick={() => handlePlaySting(sting)}
-                          style={{
-                            display: 'flex', alignItems: 'center', gap: 3, padding: '2px 9px',
-                            background: playingKey === sting.key ? 'rgba(74,222,128,0.10)' : 'rgba(255,255,255,0.05)',
-                            border: `1px solid ${playingKey === sting.key ? 'rgba(74,222,128,0.25)' : 'rgba(255,255,255,0.08)'}`,
-                            borderRadius: 4,
-                            color: playingKey === sting.key ? '#4ade80' : 'rgba(255,255,255,0.40)',
-                            fontSize: 10, cursor: 'pointer',
-                          }}
-                        >
-                          <Play size={8} /> {playingKey === sting.key ? 'Playing…' : 'Preview'}
-                        </button>
-                      )
-                      : <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.18)' }}>
-                          {dlStatus === 'error' ? 'failed' : 'missing'}
-                        </span>
-                    }
+                    <span style={{ fontSize: 9, color, marginLeft: 'auto', fontVariantNumeric: 'tabular-nums' }}>
+                      {count}/{total}
+                    </span>
                   </div>
-                )
-              })}
-            </div>
-            {!audioStatus?.freesoundConnected && (
-              <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.22)', marginTop: 8 }}>
-                Add <code style={{ fontSize: 9, background: 'rgba(255,255,255,0.06)', padding: '0 3px', borderRadius: 2 }}>FREESOUND_API_KEY</code> to enable auto-download, or place .mp3 files manually in <code style={{ fontSize: 9 }}>library/stings/</code>
+                ))}
+              </div>
+              <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.20)', marginTop: 6 }}>
+                ElevenLabs AI — use the Sound Library button to pre-generate all 29 sounds
               </p>
-            )}
-          </div>
+            </div>
+          )}
 
         </div>
       )}

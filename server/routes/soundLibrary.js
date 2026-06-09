@@ -28,8 +28,8 @@ router.delete('/:id', (req, res) => {
   res.json({ success: !!removed, removed })
 })
 
-// POST /api/sound-library/prewarm — SSE stream that generates all 29 sounds
-router.post('/prewarm', async (req, res) => {
+// GET /api/sound-library/prewarm — SSE stream that generates all 29 sounds
+router.get('/prewarm', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.flushHeaders()
