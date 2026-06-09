@@ -220,6 +220,19 @@ export default function VideoCreator() {
     lsWrite(LS.clipMatches, toSave)
   }, [clipMatches])
 
+  // ─── One-time migration: clear audioSpecs if they don't match current scenes ─
+  useEffect(() => {
+    const savedSpecs  = lsRead(LS.audioSpecs)  || []
+    const savedScenes = lsRead(LS.scenes)       || []
+    if (savedSpecs.length > 0 && savedScenes.length > 0 &&
+        savedSpecs.length !== savedScenes.length) {
+      console.warn('[init] audioSpecs count mismatch — clearing stale specs',
+        savedSpecs.length, '!=', savedScenes.length)
+      localStorage.removeItem('vorta_audio_specs')
+      setAudioSpecs([])
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Auto-save snapshot when generation completes (thumbnail available) ──
   useEffect(() => {
     if (!generateDone || !sessionKey || !scenes.length) return
@@ -461,6 +474,10 @@ export default function VideoCreator() {
       if (!res.ok) throw new Error(data.error || 'Analysis failed')
       setScenes(data.scenes)
       setHasAnalyzed(true)
+      // Clear audioSpecs — they belong to the previous scene set and would mismatch
+      setAudioSpecs([])
+      localStorage.removeItem('vorta_audio_specs')
+      console.log('[analyze] cleared stale audioSpecs — new scene count:', data.scenes.length)
       matchClipsForScenes(data.scenes)
 
       // Register in project list for project management
