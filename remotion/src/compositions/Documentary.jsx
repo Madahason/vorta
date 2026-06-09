@@ -10,7 +10,7 @@ const FPS = 30
 export function calculateDocumentaryDuration(scenes) {
   if (!scenes?.length) return 30
   return Math.max(
-    scenes.reduce((sum, s) => sum + (s.duration_seconds || 5) * FPS, 0),
+    scenes.reduce((sum, s) => sum + Math.round((s.duration_seconds || 5) * FPS), 0),
     30
   )
 }
@@ -21,7 +21,7 @@ export function computeLayout(scenes) {
   let cursor = 0
   scenes.forEach((scene) => {
     startFrames.push(cursor)
-    cursor += (scene.duration_seconds || 5) * FPS
+    cursor += Math.round((scene.duration_seconds || 5) * FPS)
   })
   return { startFrames, totalFrames: cursor }
 }
@@ -99,7 +99,7 @@ export function Documentary({
 
       <Series>
         {scenes.map((scene, index) => {
-          const durationFrames = (scene.duration_seconds || 5) * FPS
+          const durationFrames = Math.max(Math.round((scene.duration_seconds || 5) * FPS), 30)
           const audioSpec      = audioSpecMap[scene.scene_id]
 
           return (

@@ -19,10 +19,13 @@ export function VideoPlayer({ scenes, imagePaths, selectedClips, globalSettings,
     audioSpecs:     audioSpecs     || [],
   }), [scenes, imagePaths, selectedClips, globalSettings, audioSpecs])
 
-  const totalFrames = useMemo(
-    () => scenes?.length ? Math.max(calculateDocumentaryDuration(scenes), 30) : 30,
-    [scenes],
-  )
+  const totalFrames = useMemo(() => {
+    const t = scenes?.length
+      ? Math.max(scenes.reduce((sum, s) => sum + Math.round((s.duration_seconds || 5) * 30), 0), 30)
+      : 30
+    console.log('[VideoPlayer] scenes:', scenes?.length, 'totalFrames:', t)
+    return t
+  }, [scenes])
 
   if (!scenes?.length) return null
 
