@@ -303,4 +303,97 @@ router.get('/ambient-list', (req, res) => {
   res.json(listAmbientFiles())
 })
 
+// ── GET /diagnose — full system diagnostic ────────────────────────────────────
+router.get('/diagnose', async (req, res) => {
+  const https    = require('https')
+  const results  = {}
+
+  // 1. Environment variables
+  results.env = {
+    FREESOUND_API_KEY:  !!process.env.FREESOUND_API_KEY,
+    ANTHROPIC_API_KEY:  !!process.env.ANTHROPIC_API_KEY,
+    ELEVENLABS_API_KEY: !!process.env.ELEVENLABS_API_KEY,
+  }
+
+  // 2. Library directories
+  const dirs = {
+    music:   path.resolve(__dirname, '../../library/music'),
+    ambient: path.resolve(__dirname, '../../library/ambient'),
+    stings:  path.resolve(__dirname, '../../library/stings'),
+  }
+  results.directories = {}
+  for (const [name, dir] of Object.entries(dirs)) {
+    const exists = fs.existsSync(dir)
+    const files  = exists ? fs.readdirSync(dir).filter(f => f.endsWith('.mp3')) : []
+    results.directories[name] = { exists, fileCount: files.length, files }
+  }
+
+  // 3. yt-dlp
+  try {
+    const { execAsync } = require('../services/clipDownloader')
+    const { stdout } = await execAsync('yt-dlp --version', { timeout: 10_000 })
+    results.ytdlp = { installed: true, version: stdout.trim() }
+  } catch (err) {
+    results.ytdlp = { installed: false, error: err.message }
+  }
+
+  // 4. FMA API
+  await new Promise((resolve) => {
+    https.get(
+      'https://freemusicarchive.org/api/get/tracks.json?api_key=FreePublicApiKey&limit=1',
+      { headers: { 'User-Agent': 'Vorta/1.0' } },
+      (res2) => {
+        let data = ''
+        res2.on('data', c => data += c)
+        res2.on('end', () => {
+          results.fma = {
+            status:      res2.statusCode,
+            contentType: res2.headers['content-type'],
+            isJSON:      data.trim().startsWith('{'),
+            preview:     data.slice(0, 200),
+          }
+          resolve()
+        })
+      }
+    ).on('error', err => { results.fma = { error: err.message }; resolve() })
+  })
+
+  // 5. Freesound API
+  if (process.env.FREESOUND_API_KEY) {
+    await new Promise((resolve) => {
+      const url = 'https://freesound.org/apiv2/search/text/?query=ambient&page_size=1&fields=id,name'
+      https.get(url, { headers: { Authorization: `Token ${process.env.FREESOUND_API_KEY}`, Accept: 'application/json' } }, (res2) => {
+        let data = ''
+        res2.on('data', c => data += c)
+        res2.on('end', () => {
+          results.freesound = { status: res2.statusCode, isJSON: data.trim().startsWith('{'), preview: data.slice(0, 200) }
+          resolve()
+        })
+      }).on('error', err => { results.freesound = { error: err.message }; resolve() })
+    })
+  } else {
+    results.freesound = { error: 'FREESOUND_API_KEY not set' }
+  }
+
+  // 6. YouTube Audio Library search
+  try {
+    const { execAsync } = require('../services/clipDownloader')
+    const { stdout } = await execAsync(
+      'yt-dlp "ytsearch1:cinematic documentary background music" --print "%(title)s" --no-download --flat-playlist',
+      { timeout: 30_000 }
+    )
+    results.youtubeSearch = { working: true, result: stdout.trim().slice(0, 100) }
+  } catch (err) {
+    results.youtubeSearch = { working: false, error: err.message }
+  }
+
+  // 7. musicIndex.json
+  const indexPath = path.resolve(__dirname, '../../library/musicIndex.json')
+  results.musicIndex = fs.existsSync(indexPath)
+    ? JSON.parse(fs.readFileSync(indexPath, 'utf8'))
+    : 'not found'
+
+  res.json(results)
+})
+
 module.exports = router
