@@ -29,6 +29,8 @@ export default function AudioPanel({
   const [ambientDownloadStatus, setAmbientDownloadStatus] = useState({})
   const [isDownloadingMusic,    setIsDownloadingMusic]    = useState(false)
   const [musicDownloadStatus,   setMusicDownloadStatus]   = useState({})
+  const [isDownloadingStings,   setIsDownloadingStings]   = useState(false)
+  const [stingDownloadStatus,   setStingDownloadStatus]   = useState({})
 
   const activeAudioRef = useRef(null)
   const panelRef       = useRef(null)
@@ -53,13 +55,40 @@ export default function AudioPanel({
   }, [open])
 
   // ── Primary generate action ──────────────────────────────────────────────────
+  // ── Download all stings via Freesound SSE ───────────────────────────────────
+  const handleDownloadAllStings = () => {
+    if (!audioStatus?.freesoundKeySet) return
+    setIsDownloadingStings(true)
+    setStingDownloadStatus({})
+
+    const es = new EventSource(`${SERVER_URL}/api/audio/download-stings`)
+    es.onmessage = (e) => {
+      try {
+        const event = JSON.parse(e.data)
+        if (event.type === 'downloading') {
+          setStingDownloadStatus(p => ({ ...p, [event.key]: 'downloading' }))
+        } else if (event.type === 'done') {
+          setStingDownloadStatus(p => ({ ...p, [event.key]: 'done' }))
+        } else if (event.type === 'skipped') {
+          setStingDownloadStatus(p => ({ ...p, [event.key]: 'exists' }))
+        } else if (event.type === 'error') {
+          setStingDownloadStatus(p => ({ ...p, [event.key]: 'error' }))
+        } else if (event.type === 'complete') {
+          setIsDownloadingStings(false)
+          es.close()
+          fetchStatus()
+        }
+      } catch {}
+    }
+    es.onerror = () => { setIsDownloadingStings(false); es.close() }
+  }
+
   const handleGenerate = async () => {
     if (!scenes?.length) return
     setBuilding(true)
     setBuildError(null)
-    const download = !!audioStatus?.pixabayKeySet
     try {
-      const res  = await fetch(`${SERVER_URL}/api/audio/build-specs${download ? '?download=1' : ''}`, {
+      const res  = await fetch(`${SERVER_URL}/api/audio/build-specs?download=1`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scenes, projectId }),
       })
@@ -92,7 +121,7 @@ export default function AudioPanel({
     }
   }
 
-  // ── Download music for all moods (Pixabay → YouTube Audio Library fallback) ──
+  // ── Download music for all moods (FMA → YouTube Audio Library fallback) ──────
   const MUSIC_MOODS = ['tense', 'triumphant', 'somber', 'neutral', 'dramatic', 'reflective', 'anticipatory', 'institutional']
 
   const handleDownloadAllMusic = async () => {
@@ -238,10 +267,7 @@ export default function AudioPanel({
             {/* Sub-label describing what the button does */}
             {!building && (
               <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', marginTop: 6, textAlign: 'center' }}>
-                {audioStatus?.pixabayKeySet
-                  ? 'Downloads music from Pixabay (YouTube Audio Library fallback) and assigns ambient & stings per scene'
-                  : 'Music via YouTube Audio Library (yt-dlp) — add PIXABAY_API_KEY to .env for higher-quality tracks'
-                }
+                Downloads music from Free Music Archive (YouTube Audio Library fallback) and assigns ambient &amp; stings per scene
               </p>
             )}
 
@@ -249,8 +275,8 @@ export default function AudioPanel({
               <p style={{ fontSize: 11, color: '#f87171', marginTop: 8 }}>{buildError}</p>
             )}
 
-            {/* Pixabay key missing warning */}
-            {audioStatus !== null && !audioStatus.pixabayKeySet && (
+            {/* Freesound key missing warning */}
+            {audioStatus !== null && !audioStatus.freesoundKeySet && (
               <div style={{
                 display: 'flex', gap: 8, alignItems: 'flex-start',
                 marginTop: 10, padding: '9px 12px',
@@ -258,7 +284,11 @@ export default function AudioPanel({
                 borderRadius: 7, fontSize: 11, color: 'rgba(234,179,8,0.75)',
               }}>
                 <AlertTriangle size={12} style={{ flexShrink: 0, marginTop: 1 }} />
-                No Pixabay key — add <code style={{ margin: '0 3px', fontSize: 10 }}>PIXABAY_API_KEY=your_key</code> to <code style={{ fontSize: 10 }}>.env</code> for background music. Free key at pixabay.com/api
+                No Freesound key — ambient and sting auto-download disabled.
+                Add <code style={{ margin: '0 3px', fontSize: 10 }}>FREESOUND_API_KEY=your_key</code> to <code style={{ fontSize: 10 }}>.env</code>.
+                Free key at{' '}
+                <a href="https://freesound.org/apiv2/apply/" target="_blank" rel="noreferrer"
+                  style={{ color: '#3b82f6', textDecoration: 'none' }}>freesound.org/apiv2/apply</a>
               </div>
             )}
 
@@ -289,7 +319,7 @@ export default function AudioPanel({
           </div>
 
           {/* ── Per-mood tracks ── */}
-          {audioStatus?.pixabayKeySet && sceneMoods.length > 0 && (
+          {sceneMoods.length > 0 && (
             <div>
               <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
                 Music tracks by mood
@@ -345,7 +375,7 @@ export default function AudioPanel({
                   color: isDownloadingMusic ? 'rgba(255,255,255,0.25)' : 'rgba(167,139,250,0.90)',
                   cursor: isDownloadingMusic ? 'not-allowed' : 'pointer',
                 }}
-                title="Download background music for all moods. Uses Pixabay if key set, falls back to YouTube Audio Library via yt-dlp."
+                title="Download background music for all moods via Free Music Archive (YouTube Audio Library fallback)."
               >
                 {isDownloadingMusic ? <Loader2 size={9} className="animate-spin" /> : <Download size={9} />}
                 {isDownloadingMusic ? 'Downloading…' : 'Download all moods'}
@@ -378,11 +408,9 @@ export default function AudioPanel({
                 )
               })}
             </div>
-            {!audioStatus?.pixabayKeySet && (
-              <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.20)', marginTop: 6 }}>
-                Using YouTube Audio Library (yt-dlp) — add <code style={{ fontSize: 9, background: 'rgba(255,255,255,0.06)', padding: '0 3px', borderRadius: 2 }}>PIXABAY_API_KEY</code> for higher-quality tracks
-              </p>
-            )}
+            <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.20)', marginTop: 6 }}>
+              Free Music Archive (no key needed) — falls back to YouTube Audio Library if FMA returns no results
+            </p>
           </div>
 
           {/* ── Scene assignments (after generate) ── */}
@@ -514,9 +542,29 @@ export default function AudioPanel({
               <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 Transition stings
               </span>
-              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>
-                {stingCount} / 6 files
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>
+                  {stingCount} / 6 files
+                </span>
+                {stingCount < 6 && audioStatus?.freesoundKeySet && (
+                  <button
+                    onClick={handleDownloadAllStings}
+                    disabled={isDownloadingStings}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 3, fontSize: 10,
+                      padding: '2px 8px', borderRadius: 4,
+                      background: isDownloadingStings ? 'rgba(255,255,255,0.04)' : 'rgba(124,58,237,0.15)',
+                      border: `1px solid ${isDownloadingStings ? 'rgba(255,255,255,0.08)' : 'rgba(124,58,237,0.30)'}`,
+                      color: isDownloadingStings ? 'rgba(255,255,255,0.25)' : 'rgba(167,139,250,0.90)',
+                      cursor: isDownloadingStings ? 'not-allowed' : 'pointer',
+                    }}
+                    title="Auto-download missing stings via Freesound API"
+                  >
+                    {isDownloadingStings ? <Loader2 size={9} className="animate-spin" /> : <Download size={9} />}
+                    {isDownloadingStings ? 'Downloading…' : 'Auto-download missing'}
+                  </button>
+                )}
+              </div>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {(audioStatus?.stings || []).map(sting => (
@@ -551,7 +599,10 @@ export default function AudioPanel({
             </div>
             {stingCount < 6 && (
               <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.22)', marginTop: 8 }}>
-                Place sting .mp3 files in <code style={{ fontSize: 9, background: 'rgba(255,255,255,0.06)', padding: '0 4px', borderRadius: 3 }}>library/stings/</code>
+                {audioStatus?.freesoundKeySet
+                  ? 'Click "Auto-download missing" to fetch stings from Freesound.'
+                  : <>Add <code style={{ fontSize: 9, background: 'rgba(255,255,255,0.06)', padding: '0 3px', borderRadius: 2 }}>FREESOUND_API_KEY</code> to enable auto-download, or place .mp3 files manually in <code style={{ fontSize: 9 }}>library/stings/</code></>
+                }
               </p>
             )}
           </div>
@@ -589,10 +640,12 @@ export default function AudioPanel({
 
             <div style={{ padding: '16px 20px', overflowY: 'auto', flex: 1 }}>
               <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.40)', marginBottom: 16, lineHeight: 1.6 }}>
-                Download CC0-licensed ambient loops from Freesound.org and save them to{' '}
-                <code style={{ fontSize: 10, background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: 3 }}>
-                  vorta/library/ambient/
-                </code>. Rename each file exactly as shown below.
+                {audioStatus?.freesoundKeySet
+                  ? <>Freesound API key detected — click <strong style={{ color: 'rgba(255,255,255,0.65)' }}>Auto-download missing</strong> on the Ambient loops section to auto-fetch files. Or download CC0 loops manually from Freesound.org.</>
+                  : <>Download CC0-licensed ambient loops from Freesound.org and save them to{' '}
+                    <code style={{ fontSize: 10, background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: 3 }}>vorta/library/ambient/</code>.
+                    Or add <code style={{ fontSize: 10, background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: 3 }}>FREESOUND_API_KEY</code> to <code style={{ fontSize: 10 }}>.env</code> for one-click auto-download.</>
+                }
               </p>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

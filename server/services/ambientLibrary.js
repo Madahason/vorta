@@ -156,30 +156,40 @@ const FREESOUND_QUERIES = {
   industrial_hum:   'industrial hum machinery',
 }
 
-// Download a single ambient file using yt-dlp from Freesound
-// Trims to 30s with ffmpeg for compact looping files
+// Download a single ambient file.
+// Primary: Freesound API (requires FREESOUND_API_KEY in .env)
+// Fallback: yt-dlp search on Freesound website
 async function downloadAmbientFile(key) {
   const ambient = AMBIENT_CATALOG[key]
   if (!ambient) throw new Error(`Unknown ambient key: ${key}`)
 
   const outputPath = path.join(AMBIENT_DIR, ambient.filename)
-  if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 10000) return outputPath
+  if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 1000) return outputPath
 
-  const query      = FREESOUND_QUERIES[key] || ambient.freesoundQuery
-  const searchUrl  = `https://freesound.org/search/?q=${encodeURIComponent(query)}&f=license%3A%22Creative+Commons+0%22`
-  const tempBase   = outputPath.replace('.mp3', '_temp')
-  const tempGlob   = `${tempBase}.%(ext)s`
+  // Tier 1: Freesound API
+  if (process.env.FREESOUND_API_KEY) {
+    try {
+      const { downloadAmbientFile: freesoundDownload } = require('./freesoundService')
+      return await freesoundDownload(key)
+    } catch (err) {
+      console.warn(`[ambient] Freesound API failed for ${key}: ${err.message} — trying yt-dlp`)
+    }
+  }
 
-  // yt-dlp downloads the first result from Freesound and extracts audio
+  // Tier 2: yt-dlp search on Freesound website
+  const query     = FREESOUND_QUERIES[key] || ambient.freesoundQuery
+  const searchUrl = `https://freesound.org/search/?q=${encodeURIComponent(query)}&f=license%3A%22Creative+Commons+0%22`
+  const tempBase  = outputPath.replace('.mp3', '_temp')
+  const tempGlob  = `${tempBase}.%(ext)s`
+
   const dlCmd = `yt-dlp "${searchUrl}" --playlist-end 1 -o "${tempGlob}" --extract-audio --audio-format mp3 --audio-quality 128K --no-playlist --quiet`
 
   try {
     await execAsync(dlCmd, { timeout: 90_000 })
   } catch (err) {
-    throw new Error(`yt-dlp download failed for ${key}: ${err.message}`)
+    throw new Error(`All ambient sources failed for ${key}: ${err.message}`)
   }
 
-  // Find the downloaded file
   const dir   = path.dirname(outputPath)
   const base  = path.basename(tempBase)
   const files = fs.readdirSync(dir).filter(f => f.startsWith(base))
@@ -187,15 +197,10 @@ async function downloadAmbientFile(key) {
 
   const downloaded = path.join(dir, files[0])
 
-  // Trim to 30 seconds using ffmpeg for a compact loop
   try {
-    await execAsync(
-      `ffmpeg -i "${downloaded}" -t 30 -c:a libmp3lame -q:a 4 "${outputPath}" -y`,
-      { timeout: 30_000 }
-    )
+    await execAsync(`ffmpeg -i "${downloaded}" -t 30 -c:a libmp3lame -q:a 4 "${outputPath}" -y`, { timeout: 30_000 })
     if (downloaded !== outputPath) fs.unlinkSync(downloaded)
   } catch {
-    // ffmpeg not available — just use the full file
     if (downloaded !== outputPath) fs.renameSync(downloaded, outputPath)
   }
 

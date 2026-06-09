@@ -3,7 +3,7 @@ const fs   = require('fs')
 const { moodMap, categoryAmbientMap } = require('../config/musicMoods')
 const transitionStings                = require('../config/transitionStings')
 const { getAmbientForCategory, getAmbientForMood } = require('./ambientLibrary')
-const { getMusicForMood, getCachedTrackForMood }   = require('./pixabayMusic')
+const { getMusicForMood, getCachedTrackForMood }   = require('./freeMusicArchive')
 
 const STINGS_DIR = path.resolve(__dirname, '../../library/stings')
 

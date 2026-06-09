@@ -1689,3 +1689,106 @@ getMusicForMood(mood)
 - [ ] `library/music/yal_{mood}.mp3` file created after YAL download
 - [ ] `getCachedTrackForMood` returns YAL file on next call (no re-download)
 - [ ] AudioPanel sub-label reads "YouTube Audio Library" when no Pixabay key
+
+---
+
+### Fix 6 — Replace Pixabay with Free Music Archive + Freesound ✅ Complete
+
+**Goal:** Remove Pixabay entirely. Replace with Free Music Archive (no key needed) for background music and Freesound API for ambient/stings.
+
+**Source map:**
+| Layer | Old source | New source | Key required? |
+|-------|------------|-----------|---------------|
+| Background music | Pixabay (key required) | Free Music Archive | No (public API) |
+| Ambient loops | Manual / yt-dlp fallback | Freesound API → yt-dlp fallback | Yes (`FREESOUND_API_KEY`) |
+| Transition stings | Manual only | Freesound API auto-download | Yes (`FREESOUND_API_KEY`) |
+
+**Architecture — music:**
+```
+getMusicForMood(mood)
+  → normaliseMood() (fuzzy alias resolution)
+  → cache check: musicIndex.json (FMA) + yal_{mood}.mp3 (YAL)
+  → Tier 1: Free Music Archive API (freemusicarchive.org/api/get/tracks.json)
+  → Tier 2: YouTube Audio Library via yt-dlp
+  → throws if both fail
+```
+
+**Architecture — ambient/stings:**
+```
+downloadAmbientFile(key) in ambientLibrary.js
+  → Tier 1: freesoundService.downloadAmbientFile(key) via Freesound API
+  → Tier 2: yt-dlp on freesound.org search page
+
+downloadSting(key) in freesoundService.js
+  → Freesound API search (STING_QUERIES per key)
+  → downloads preview-hq-mp3 to library/stings/
+```
+
+**Files added:**
+- `server/services/freeMusicArchive.js` (replaces `pixabayMusic.js`):
+  - `fetchJSON(url)` / `httpGetToFile(url, dest)` — native https/http, redirect-safe
+  - `MOOD_TO_TAGS` — 10 moods → FMA tag arrays
+  - `searchFMA(mood, limit)` — `freemusicarchive.org/api/get/tracks.json?api_key=FreePublicApiKey`; filters tracks > 60s; returns `{ id, title, artist, duration, downloadUrl, mood, source }`
+  - `downloadFMATrack(track, outputPath)` — streams via `httpGetToFile`; validates size
+  - `normaliseMood(mood)` — canonical mood resolution with fuzzy keyword fallback
+  - `getCachedTrackForMood(mood)` — checks `musicIndex.json` + `yal_{mood}.mp3` on disk
+  - `getMusicForMood(mood)` — two-tier: FMA → YAL; exports `loadMusicIndex`, `getCachedTrackForMood`
+  - Cache filename: `{mood}_fma_{id}.mp3`
+
+- `server/services/freesoundService.js` (NEW):
+  - `fetchJSON(url)` / `downloadFile(url, dest)` — Freesound API calls with `Authorization: Token {key}`
+  - `AMBIENT_QUERIES` — 13 ambient keys → `{ query, duration_min, duration_max }`
+  - `STING_QUERIES` — 6 sting keys → `{ query, duration_min, duration_max }`
+  - `searchFreesound({ query, duration_min, duration_max, filter, limit })` — CC0 filter by default
+  - `downloadFreesound(sound, outputPath)` — downloads `preview-hq-mp3`
+  - `downloadAmbientFile(key)` — derives filename as `${key}.mp3` (no circular dep with ambientLibrary)
+  - `downloadSting(key)` — looks up filename from `transitionStings[key]`
+  - No circular dependency: does NOT import `ambientLibrary.js`
+
+**Files modified:**
+- `server/services/pixabayMusic.js` — **deleted**
+- `server/services/audioMixer.js` — import updated from `pixabayMusic` → `freeMusicArchive`
+- `server/services/ambientLibrary.js` — `downloadAmbientFile` now tries Freesound API (tier 1) then falls back to existing yt-dlp logic (tier 2)
+- `server/routes/audio.js` — rewritten: import from `freeMusicArchive` and `freesoundService`; status endpoint uses `fmaConnected: true` + `freesoundConnected: !!FREESOUND_API_KEY`; removed `GET /test-pixabay`; `POST /search-music` calls `searchFMA(mood)`; `POST /download-stings` SSE endpoint added; `POST /build-specs` always passes `?download=1` (FMA needs no key)
+- `client/src/components/video-creator/AudioPanel.jsx`:
+  - `isDownloadingStings` / `stingDownloadStatus` states added
+  - `handleDownloadAllStings()` — SSE loop via `GET /api/audio/download-stings`
+  - `handleGenerate` — `download` flag removed (always true, FMA is free)
+  - Pixabay warning replaced with Freesound key missing warning
+  - Per-mood tracks section always visible (not gated on Pixabay key)
+  - Music library footer updated (FMA note, no Pixabay mention)
+  - Stings section: "Auto-download missing" button appears when `freesoundKeySet`
+  - Stings footer: context-aware message (auto-download vs manual instructions)
+  - Download guide modal: Freesound key status shown; auto-download hint when key set
+- `.env` — `PIXABAY_API_KEY` removed (commented out with note); `FREESOUND_API_KEY` added with comment
+
+**Environment:**
+```
+# Removed:
+PIXABAY_API_KEY   (no longer used)
+
+# Added:
+FREESOUND_API_KEY=your_freesound_api_key_here
+# Get free key at: https://freesound.org/apiv2/apply/
+# Used for: ambient loops auto-download + transition stings auto-download
+
+# FMA (Free Music Archive) — no key needed
+# Used for: background music per mood (freemusicarchive.org)
+```
+
+**FMA public API:**
+- Endpoint: `https://freemusicarchive.org/api/get/tracks.json?api_key=FreePublicApiKey`
+- `FreePublicApiKey` is the documented public demo key — no registration needed
+- Tracks must have `track_file` set and `track_duration_in_seconds > 60` to be usable
+- Cache filename: `{mood}_fma_{track_id}.mp3`
+
+**Testing checklist:**
+- [ ] No `FREESOUND_API_KEY` → ambient and sting auto-download buttons hidden; Freesound warning banner shows
+- [ ] `FREESOUND_API_KEY` set → ambient "Auto-download missing" and sting "Auto-download missing" buttons appear
+- [ ] "Download all moods" → FMA search returns tracks; `{mood}_fma_{id}.mp3` files appear in `library/music/`
+- [ ] FMA returns 0 results → falls back to YouTube Audio Library; `yal_{mood}.mp3` created
+- [ ] `GET /api/audio/status` → `fmaConnected: true`, `freesoundConnected: true/false` based on key
+- [ ] Stings SSE stream downloads 6 sting files; status grid updates in real time
+- [ ] Ambient SSE stream uses Freesound API when key set; falls back to yt-dlp when key missing
+- [ ] `pixabayMusic.js` is gone — no 404 or require error on server start
+- [ ] AudioPanel has no Pixabay text anywhere
