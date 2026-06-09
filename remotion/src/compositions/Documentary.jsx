@@ -1,18 +1,21 @@
 import { useMemo }                                                              from 'react'
-import { AbsoluteFill, Series, Audio, interpolate, useVideoConfig, useCurrentFrame } from 'remotion'
+import { AbsoluteFill, Audio, interpolate, useVideoConfig, useCurrentFrame }   from 'remotion'
+import { TransitionSeries, springTiming }                                       from '@remotion/transitions'
+import { fade }                                                                 from '@remotion/transitions/fade'
 import ImageScene             from '../components/ImageScene'
 import FootageScene           from '../components/FootageScene'
 import PlaceholderScene       from '../components/PlaceholderScene'
 import { MotionGraphicScene } from '../components/MotionGraphicScene'
 import { ErrorBoundaryScene } from '../components/ErrorBoundaryScene'
 
+const TRANSITION_FRAMES = 12 // 0.4 s at 30 fps — cross-fade overlap
+
 // ── Duration helpers ──────────────────────────────────────────────────────────
-export function calculateDocumentaryDuration(scenes) {
+export function calculateDocumentaryDuration(scenes, fps = 30) {
   if (!scenes?.length) return 30
-  return Math.max(
-    scenes.reduce((sum, s) => sum + Math.round((s.duration_seconds || 5) * 30), 0),
-    30
-  )
+  const base       = scenes.reduce((sum, s) => sum + Math.round((s.duration_seconds || 5) * fps), 0)
+  const deduction  = Math.max(0, scenes.length - 1) * TRANSITION_FRAMES
+  return Math.max(base - deduction, 30)
 }
 
 // Kept for backward compat — Remotion Studio still imports it
@@ -26,10 +29,10 @@ export function computeLayout(scenes) {
   return { startFrames, totalFrames: cursor }
 }
 
-// Only render Audio when the src is a routable URL (not a bare filesystem path)
+// Only render Audio when src is a routable URL (not a bare filesystem path)
 const isValidUrl = (src) => !!src && (src.startsWith('/') || src.startsWith('http'))
 
-// Return the most frequently occurring value in an array (picks one music/ambient URL for the whole video)
+// Return most frequently occurring value in array (picks one music/ambient URL for whole video)
 function mostCommon(arr) {
   if (!arr.length) return null
   const freq = arr.reduce((map, val) => { map[val] = (map[val] || 0) + 1; return map }, {})
@@ -86,8 +89,8 @@ export function Documentary({
 }) {
   const { fps } = useVideoConfig()
 
-  // Deduplicate scenes by scene_id as a safety net (VideoPlayer also deduplicates upstream).
-  // Duplicate IDs cause Series to render extra sequences, making scenes replay multiple times.
+  // Deduplicate scenes by scene_id — duplicate IDs cause TransitionSeries to render
+  // extra sequences, making scenes replay multiple times.
   const uniqueScenes = useMemo(() => {
     const seen = new Set()
     return scenes.filter(s => {
@@ -105,12 +108,10 @@ export function Documentary({
   })
 
   // Derive a single music and ambient URL to play continuously under the whole video.
-  // Global tracks outside <Series> never remount — total audio tags = uniqueScenes.length + 2.
+  // Global tracks outside <TransitionSeries> never remount — total audio tags = uniqueScenes.length + 2.
   const allSpecs       = Object.values(audioSpecMap)
-  const musicUrls      = allSpecs.map(s => s.music?.url).filter(Boolean)
-  const ambientUrls    = allSpecs.map(s => s.ambient?.url).filter(Boolean)
-  const primaryMusic   = mostCommon(musicUrls)
-  const primaryAmbient = mostCommon(ambientUrls)
+  const primaryMusic   = mostCommon(allSpecs.map(s => s.music?.url).filter(Boolean))
+  const primaryAmbient = mostCommon(allSpecs.map(s => s.ambient?.url).filter(Boolean))
   const musicVolume    = allSpecs.find(s => s.music?.volume)?.music?.volume   || 0.12
   const ambientVolume  = allSpecs.find(s => s.ambient?.volume)?.ambient?.volume || 0.06
 
@@ -131,6 +132,61 @@ export function Documentary({
     )
   }
 
+  // Build flat array of Sequences and Transitions for TransitionSeries.
+  // TransitionSeries requires direct children — no wrapping fragments.
+  const seriesChildren = uniqueScenes.flatMap((scene, index) => {
+    const durationFrames = Math.max(Math.round((scene.duration_seconds || 5) * fps), 30)
+    const spec           = audioSpecMap[scene.scene_id] || null
+    const narrationUrl   = spec?.narration?.url || scene.audio_path || null
+
+    const sequence = (
+      <TransitionSeries.Sequence
+        key={String(scene.scene_id)}
+        durationInFrames={durationFrames}
+      >
+        <AbsoluteFill>
+          {/* ── Visual layer ── */}
+          <ErrorBoundaryScene scene={scene}>
+            <SceneRenderer
+              scene={scene}
+              imagePath={imagePaths[scene.scene_id]}
+              selectedClip={selectedClips[scene.scene_id] || null}
+              globalSettings={globalSettings}
+            />
+          </ErrorBoundaryScene>
+
+          {/* Per-scene narration — fades out in final 9 frames */}
+          {isValidUrl(narrationUrl) && (
+            <Audio
+              src={narrationUrl}
+              volume={(frame) => {
+                const fadeStart = durationFrames - 9
+                if (frame >= fadeStart) {
+                  return interpolate(frame, [fadeStart, durationFrames], [1.0, 0], {
+                    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
+                  })
+                }
+                return 1.0
+              }}
+            />
+          )}
+        </AbsoluteFill>
+      </TransitionSeries.Sequence>
+    )
+
+    if (index < uniqueScenes.length - 1) {
+      const transition = (
+        <TransitionSeries.Transition
+          key={`t-${scene.scene_id}`}
+          timing={springTiming({ durationInFrames: TRANSITION_FRAMES, config: { damping: 200 } })}
+          presentation={fade()}
+        />
+      )
+      return [sequence, transition]
+    }
+    return [sequence]
+  })
+
   return (
     <AbsoluteFill style={{ background: '#000' }}>
       {/* Global uploaded narration track (from ExportPanel audio upload) */}
@@ -146,48 +202,11 @@ export function Documentary({
         <Audio src={primaryAmbient} volume={ambientVolume} loop startFrom={0} />
       )}
 
-      {/* Scene sequences — visual layer + per-scene narration only.
+      {/* Scene sequences with cross-fade transitions.
           Total audio tags = uniqueScenes.length + 2 (music + ambient). */}
-      <Series>
-        {uniqueScenes.map((scene) => {
-          const durationFrames = Math.max(Math.round((scene.duration_seconds || 5) * fps), 30)
-          const spec           = audioSpecMap[scene.scene_id] || null
-          const narrationUrl   = spec?.narration?.url || scene.audio_path || null
-
-          return (
-            // String() coercion ensures stable string key even if scene_id is numeric
-            <Series.Sequence key={String(scene.scene_id)} durationInFrames={durationFrames}>
-              <AbsoluteFill>
-                {/* ── Visual layer ── */}
-                <ErrorBoundaryScene scene={scene}>
-                  <SceneRenderer
-                    scene={scene}
-                    imagePath={imagePaths[scene.scene_id]}
-                    selectedClip={selectedClips[scene.scene_id] || null}
-                    globalSettings={globalSettings}
-                  />
-                </ErrorBoundaryScene>
-
-                {/* Per-scene narration — fades out in final 9 frames */}
-                {isValidUrl(narrationUrl) && (
-                  <Audio
-                    src={narrationUrl}
-                    volume={(frame) => {
-                      const fadeStart = durationFrames - 9
-                      if (frame >= fadeStart) {
-                        return interpolate(frame, [fadeStart, durationFrames], [1.0, 0], {
-                          extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
-                        })
-                      }
-                      return 1.0
-                    }}
-                  />
-                )}
-              </AbsoluteFill>
-            </Series.Sequence>
-          )
-        })}
-      </Series>
+      <TransitionSeries>
+        {seriesChildren}
+      </TransitionSeries>
     </AbsoluteFill>
   )
 }

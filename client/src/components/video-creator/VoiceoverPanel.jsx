@@ -207,14 +207,14 @@ export default function VoiceoverPanel({
           try {
             const event = JSON.parse(line.slice(6))
             if (event.type === 'scene_done') {
-              const { scene_id, audio_path, duration } = event
+              const { scene_id, audio_path, audio_duration, scene_duration } = event
               setSceneStatuses(prev => {
-                const next = { ...prev, [scene_id]: { status: 'done', duration, error: null } }
+                const next = { ...prev, [scene_id]: { status: 'done', duration: audio_duration, error: null } }
                 onVoiceoverStatusChange?.(next)
                 return next
               })
               setGenProgress(p => ({ ...p, current: p.current + 1 }))
-              onAudioGenerated?.(scene_id, audio_path, duration)
+              onAudioGenerated?.(scene_id, audio_path, audio_duration, scene_duration)
             } else if (event.type === 'scene_error') {
               const { scene_id, error } = event
               setSceneStatuses(prev => {
@@ -238,31 +238,59 @@ export default function VoiceoverPanel({
       })
     } finally {
       setGenerating(false)
-      // Auto-sync scene durations to audio length after every generation run.
-      // Uses functional updater so we read the freshest scenes state.
-      if (onScenesChange) {
-        onScenesChange(prev => prev.map(s => {
-          const duration = s.audio_duration
-          if (!duration) return s
-          const newDuration = Math.ceil(duration + 1.5)
-          return newDuration !== s.duration_seconds ? { ...s, duration_seconds: newDuration } : s
-        }))
+      // After generation completes, re-measure all audio files from disk and sync
+      // scene.duration_seconds to the real audio length + 0.8s tail buffer.
+      if (projectId && onScenesChange) {
+        try {
+          const syncRes = await fetch(`${SERVER_URL}/api/voiceover/sync-timings`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ scenes, projectId }),
+          })
+          const syncData = await syncRes.json()
+          if (syncData.updatedScenes) {
+            onScenesChange(() => syncData.updatedScenes)
+            const total = syncData.updatedScenes.reduce((s, sc) => s + (sc.duration_seconds || 5), 0)
+            console.log('[voiceover] timings synced — total:', total.toFixed(1), 'seconds')
+          }
+        } catch (err) {
+          console.warn('[voiceover] sync-timings failed:', err.message)
+        }
       }
     }
   }
 
   // ── Sync all scene durations to audio length ──────────────────────────────
-  const handleSyncTimings = () => {
+  const handleSyncTimings = async () => {
     if (!onScenesChange) return
+    if (projectId) {
+      try {
+        const res = await fetch(`${SERVER_URL}/api/voiceover/sync-timings`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ scenes, projectId }),
+        })
+        const data = await res.json()
+        if (data.updatedScenes) {
+          onScenesChange(() => data.updatedScenes)
+          const count = data.updatedScenes.filter(s => s.audio_duration).length
+          console.log('[voiceover] sync-timings — synced', count, 'scenes')
+          return
+        }
+      } catch (err) {
+        console.warn('[voiceover] sync-timings failed, falling back to local sync:', err.message)
+      }
+    }
+    // Local fallback when endpoint unavailable or no projectId
     let count = 0
     const updated = scenes.map(s => {
       const duration = sceneStatuses[s.scene_id]?.duration ?? s.audio_duration
       if (!duration) return s
       count++
-      return { ...s, duration_seconds: Math.ceil(duration + 0.5) }
+      return { ...s, duration_seconds: parseFloat((duration + 0.8).toFixed(2)) }
     })
     onScenesChange(() => updated)
-    console.log(`[voiceover] synced ${count} scene durations`)
+    console.log(`[voiceover] local sync — ${count} scenes`)
   }
 
   // ── Voice filter + group by category ─────────────────────────────────────

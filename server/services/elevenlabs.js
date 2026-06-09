@@ -119,17 +119,17 @@ async function generateAndConcatenate({ chunks, voiceId, modelId, outputPath, vo
   return outputPath
 }
 
-async function addSilencePadding(filePath, paddingMs = 300) {
-  const paddingSecs = paddingMs / 1000
+async function addSilencePadding(filePath, startMs = 100, endMs = 600) {
+  const endSecs  = endMs / 1000
   const tempPath = filePath.replace(/\.mp3$/, `_pad_${Date.now()}.mp3`)
 
   try {
     await execAsync(
-      `ffmpeg -i "${filePath}" -af "adelay=${paddingMs}|${paddingMs},apad=pad_dur=${paddingSecs}" "${tempPath}" -y`
+      `ffmpeg -i "${filePath}" -af "adelay=${startMs}|${startMs},apad=pad_dur=${endSecs}" -c:a libmp3lame "${tempPath}" -y`
     )
     fs.renameSync(tempPath, filePath)
+    console.log('[elevenlabs] silence padding added:', filePath)
   } catch (err) {
-    // Padding is cosmetic — don't fail the whole generation if ffmpeg errors
     console.warn('[elevenlabs] silence padding failed (non-fatal):', err.message)
     try { fs.unlinkSync(tempPath) } catch {}
   }
@@ -149,7 +149,7 @@ async function generateAudio({ text, voiceId, modelId = DEFAULT_MODEL, outputPat
     await generateAndConcatenate({ chunks: textChunks, voiceId, modelId, outputPath, voiceSettings })
   }
 
-  await addSilencePadding(outputPath, 300)
+  await addSilencePadding(outputPath) // 100ms at start, 600ms at end
 
   return outputPath
 }

@@ -36,12 +36,14 @@ export function VideoPlayer({ scenes, imagePaths, selectedClips, globalSettings,
   }, [scenes, imagePaths, selectedClips, globalSettings, audioSpecs])
 
   const totalFrames = useMemo(() => {
-    const t = scenes?.length
-      ? Math.max(scenes.reduce((sum, s) => sum + Math.round((s.duration_seconds || 5) * 30), 0), 30)
-      : 30
-    console.log('[VideoPlayer] scenes:', scenes?.length, 'totalFrames:', t)
+    if (!scenes?.length) return 30
+    const TRANSITION_FRAMES = 12
+    const base      = scenes.reduce((sum, s) => sum + Math.round((s.duration_seconds || 5) * fps), 0)
+    const deduction = Math.max(0, scenes.length - 1) * TRANSITION_FRAMES
+    const t = Math.max(base - deduction, 30)
+    console.log('[VideoPlayer] scenes:', scenes?.length, 'totalFrames:', t, '(incl. crossfade deduction)')
     return t
-  }, [scenes])
+  }, [scenes, fps])
 
   if (!scenes?.length) return null
 

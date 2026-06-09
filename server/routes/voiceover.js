@@ -111,12 +111,15 @@ router.post('/generate', async (req, res) => {
           voiceSettings: voiceSettings || {},
         })
 
-        const duration   = await getAudioDuration(outputPath)
+        const audioDuration = await getAudioDuration(outputPath)
+        const sceneDuration = audioDuration
+          ? parseFloat((audioDuration + 0.8).toFixed(2))
+          : (scene.duration_seconds || 5)
         const audio_path = `/projects/${projectId}/audio/scene_${scene.scene_id}.mp3`
 
-        results.push({ scene_id: scene.scene_id, audio_path, duration, status: 'done' })
+        results.push({ scene_id: scene.scene_id, audio_path, audio_duration: audioDuration, scene_duration: sceneDuration, status: 'done' })
 
-        send({ type: 'scene_done', scene_id: scene.scene_id, audio_path, duration })
+        send({ type: 'scene_done', scene_id: scene.scene_id, audio_path, audio_duration: audioDuration, scene_duration: sceneDuration })
 
       } catch (err) {
         send({ type: 'scene_error', scene_id: scene.scene_id, error: err.message })
@@ -149,6 +152,32 @@ router.post('/preview', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
+})
+
+// POST /api/voiceover/sync-timings
+// Re-measures audio durations from disk and returns updated scene objects.
+// Called automatically after Generate All completes and by the Sync Timings button.
+router.post('/sync-timings', async (req, res) => {
+  const { scenes, projectId } = req.body
+  if (!Array.isArray(scenes) || !projectId) {
+    return res.status(400).json({ error: 'scenes array and projectId required' })
+  }
+
+  const updatedScenes = await Promise.all(scenes.map(async (scene) => {
+    const audioPath = path.resolve(PROJECTS_DIR, projectId, 'audio', `scene_${scene.scene_id}.mp3`)
+    if (!fs.existsSync(audioPath)) return scene
+    const duration = await getAudioDuration(audioPath)
+    if (!duration) return scene
+    return {
+      ...scene,
+      audio_duration:   duration,
+      duration_seconds: parseFloat((duration + 0.8).toFixed(2)),
+    }
+  }))
+
+  const synced = updatedScenes.filter(s => s.audio_duration).length
+  console.log(`[voiceover] sync-timings — synced ${synced} / ${scenes.length} scenes`)
+  res.json({ success: true, updatedScenes })
 })
 
 module.exports = router

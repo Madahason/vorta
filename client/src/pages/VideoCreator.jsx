@@ -1,15 +1,18 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { Loader2, Zap, Trash2, Play, Library, X, ChevronDown, ChevronUp } from 'lucide-react'
-import ScriptInput from '../components/video-creator/ScriptInput'
-import SceneGrid from '../components/video-creator/SceneGrid'
+import { Trash2, Library, X, ChevronDown, ChevronUp } from 'lucide-react'
 import { VideoPlayer } from '../components/video-creator/VideoPlayer'
 import ClipLibrary from '../components/video-creator/ClipLibrary'
-import VoiceoverPanel from '../components/video-creator/VoiceoverPanel'
-import AudioPanel from '../components/video-creator/AudioPanel'
-import ExportPanel from '../components/video-creator/ExportPanel'
 import OverlayStudio from '../components/video-creator/OverlayStudio'
 import { OverlayReviewModal } from '../components/video-creator/OverlayReviewModal'
+import { WizardNav } from '../components/video-creator/WizardNav'
 import { DEFAULT_BRAND } from '../config/overlayTemplates'
+import { useWizardState } from '../hooks/useWizardState'
+import { ScriptStep }  from './wizard/ScriptStep'
+import { ScenesStep }  from './wizard/ScenesStep'
+import { VisualsStep } from './wizard/VisualsStep'
+import { VoiceStep }   from './wizard/VoiceStep'
+import { AudioStep }   from './wizard/AudioStep'
+import { ExportStep }  from './wizard/ExportStep'
 
 const SERVER_URL = 'http://localhost:3001'
 
@@ -106,6 +109,8 @@ function SkeletonCard() {
 }
 
 export default function VideoCreator() {
+  const wizard = useWizardState()
+
   // ─── State — lazy-initialised from localStorage ─────────────────────────
   const [scenes, setScenes] = useState(() => {
     const saved = lsRead(LS.scenes) || []
@@ -390,6 +395,7 @@ export default function VideoCreator() {
     setSessionRestored(false)
     setBadgeFading(false)
     setResetKey(k => k + 1)
+    wizard.resetWizard()
   }
 
   // ─── Apply audio specs — single source of truth for persisting specs ──────
@@ -500,6 +506,9 @@ export default function VideoCreator() {
       localStorage.removeItem('vorta_audio_specs')
       console.log('[analyze] cleared stale audioSpecs — new scene count:', data.scenes.length)
       matchClipsForScenes(data.scenes)
+      // Advance wizard to Scenes step
+      wizard.markComplete('script')
+      wizard.goNext()
 
       // Register in project list for project management
       const key = sessionKey || `proj_${Date.now()}`
@@ -764,15 +773,16 @@ export default function VideoCreator() {
     setOverlayStudioScene(null)
   }
 
-  // ─── Voiceover — called by VoiceoverPanel when audio is ready ────────────
-  const handleAudioGenerated = (sceneId, audioPath, audioDuration) => {
+  // ─── Voiceover — called by VoiceoverPanel on scene_done SSE event ────────
+  const handleAudioGenerated = (sceneId, audioPath, audioDuration, sceneDuration) => {
     setScenes(prev => prev.map(s => {
       if (s.scene_id !== sceneId) return s
       const base = { ...s, audio_path: audioPath, audio_duration: audioDuration }
-      // Only update duration_seconds when we have a valid duration — null means ffprobe
-      // was unavailable; preserve the existing scene duration rather than setting to 1s.
-      if (audioDuration && audioDuration > 0) {
-        base.duration_seconds = Math.ceil(audioDuration + 1.5)
+      if (sceneDuration) {
+        // Server measured the real duration and added 0.8s buffer
+        base.duration_seconds = sceneDuration
+      } else if (audioDuration && audioDuration > 0) {
+        base.duration_seconds = parseFloat((audioDuration + 0.8).toFixed(2))
       }
       return base
     }))
@@ -809,385 +819,309 @@ export default function VideoCreator() {
     footageSceneCount > 0 && `${footageSceneCount} footage match${footageSceneCount !== 1 ? 'es' : ''}`,
   ].filter(Boolean)
 
+  // ─── Step renderer ───────────────────────────────────────────────────────
+  const renderStep = () => {
+    switch (wizard.currentStep) {
+      case 'script':
+        return (
+          <ScriptStep
+            scenes={scenes}
+            isAnalyzing={isAnalyzing}
+            analyzeError={analyzeError}
+            onAnalyze={handleAnalyze}
+            wizard={wizard}
+            resetKey={resetKey}
+          />
+        )
+      case 'scenes':
+        return (
+          <ScenesStep
+            scenes={scenes}
+            onScenesChange={setScenes}
+            sceneStatuses={sceneStatuses}
+            onRetry={handleRetry}
+            motionStatuses={motionStatuses}
+            onBuildComponent={handleBuildComponent}
+            clipMatches={clipMatches}
+            selectedClips={selectedClips}
+            onSelectClip={handleSelectClip}
+            onConvertToImage={handleConvertToImage}
+            onManualMatch={handleManualMatch}
+            onOpenLibrary={() => setShowClipLibrary(true)}
+            onPreviewScene={setPreviewScene}
+            voiceoverStatuses={voiceoverStatuses}
+            onOpenVoiceover={handleOpenVoiceover}
+            onOpenOverlayStudio={handleOpenOverlayStudio}
+            onAcceptSceneOverlays={handleAcceptSceneOverlays}
+            onRejectSceneOverlays={handleRejectSceneOverlays}
+            overlayStats={overlayStats}
+            onAcceptAllOverlays={handleAcceptAllOverlays}
+            onRejectAllOverlays={handleRejectAllOverlays}
+            onOpenReviewModal={() => setOverlayReviewOpen(true)}
+            wizard={wizard}
+          />
+        )
+      case 'visuals':
+        return (
+          <VisualsStep
+            scenes={scenes}
+            sceneStatuses={sceneStatuses}
+            isGenerating={isGenerating}
+            generateDone={generateDone}
+            generateProgress={generateProgress}
+            generateError={generateError}
+            onGenerateAll={handleGenerateAll}
+            onRetry={handleRetry}
+            motionStatuses={motionStatuses}
+            onBuildComponent={handleBuildComponent}
+            clipMatches={clipMatches}
+            selectedClips={selectedClips}
+            onSelectClip={handleSelectClip}
+            onConvertToImage={handleConvertToImage}
+            onManualMatch={handleManualMatch}
+            onOpenLibrary={() => setShowClipLibrary(true)}
+            onPreviewScene={setPreviewScene}
+            voiceoverStatuses={voiceoverStatuses}
+            onOpenVoiceover={handleOpenVoiceover}
+            onOpenOverlayStudio={handleOpenOverlayStudio}
+            onAcceptSceneOverlays={handleAcceptSceneOverlays}
+            onRejectSceneOverlays={handleRejectSceneOverlays}
+            wizard={wizard}
+          />
+        )
+      case 'voice':
+        return (
+          <VoiceStep
+            scenes={scenes}
+            projectId={projectId}
+            onAudioGenerated={handleAudioGenerated}
+            voiceoverStatuses={voiceoverStatuses}
+            onVoiceoverStatusChange={setVoiceoverStatuses}
+            onScenesChange={setScenes}
+            wizard={wizard}
+          />
+        )
+      case 'audio':
+        return (
+          <AudioStep
+            scenes={scenes}
+            projectId={projectId}
+            audioSpecs={audioSpecs}
+            onBuildSpecs={handleBuildAudioSpecs}
+            onApplySpecs={handleApplyAudioSpecs}
+            audioVolumes={audioVolumes}
+            onVolumesChange={setAudioVolumes}
+            wizard={wizard}
+          />
+        )
+      case 'export':
+        return (
+          <ExportStep
+            scenes={scenes}
+            sceneStatuses={sceneStatuses}
+            selectedClips={selectedClips}
+            voiceoverStatuses={voiceoverStatuses}
+            audioSpecs={audioSpecs}
+            projectId={projectId}
+            wizard={wizard}
+          />
+        )
+      default:
+        return null
+    }
+  }
+
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
     <>
-    <div className="p-8 max-w-4xl">
-      {/* Header */}
-      <div className="mb-8">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold text-white">Video Creator</h1>
-          <div className="flex items-center gap-4">
+      {/* ── Wizard layout ── */}
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+
+        {/* Top bar: wizard nav + utility actions */}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0,
+        }}>
+          <WizardNav wizard={wizard} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '0 20px', flexShrink: 0 }}>
             {sessionRestored && (
-              <span
-                className={`text-xs text-green-400/60 transition-opacity duration-500 ${badgeFading ? 'opacity-0' : 'opacity-100'}`}
-              >
+              <span style={{
+                fontSize: 11, color: 'rgba(134,239,172,0.6)',
+                opacity: badgeFading ? 0 : 1, transition: 'opacity 0.5s',
+              }}>
                 Session restored
               </span>
             )}
             {hasAnalyzed && (
               <button
                 onClick={() => setShowClipLibrary(true)}
-                className="flex items-center gap-1.5 text-xs text-white/30 hover:text-white/60 transition-colors"
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'rgba(255,255,255,0.3)', background: 'none', border: 'none', cursor: 'pointer' }}
+                onMouseEnter={e => e.currentTarget.style.color = 'rgba(255,255,255,0.6)'}
+                onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.3)'}
               >
-                <Library size={11} />
-                Clip Library
-              </button>
-            )}
-            {hasAnalyzed && scenes.some(s => s.shot_type === 'motion_graphic') && (
-              <button
-                onClick={handleRebuildAllComponents}
-                disabled={isRebuildingAll}
-                className="flex items-center gap-1.5 text-xs text-white/30 hover:text-white/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                title="Regenerate all motion graphic components in the new React.createElement format"
-              >
-                {isRebuildingAll ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
-                {isRebuildingAll ? 'Rebuilding…' : 'Rebuild Components'}
-              </button>
-            )}
-            {showPlayer && (
-              <button
-                onClick={() => setFilmGrain(g => !g)}
-                className={`text-xs transition-colors ${
-                  filmGrain ? 'text-white/30 hover:text-white/55' : 'text-white/15'
-                }`}
-                title="Toggle film grain in player"
-              >
-                Grain {filmGrain ? 'ON' : 'OFF'}
-              </button>
-            )}
-            {hasAnalyzed && scenes.length > 0 && (
-              <button
-                onClick={() => setShowPlayer(p => !p)}
-                className={`flex items-center gap-1.5 text-xs transition-colors ${
-                  showPlayer ? 'text-blue-400' : 'text-white/30 hover:text-white/60'
-                }`}
-              >
-                <Play size={11} />
-                {showPlayer ? 'Hide Player' : 'Preview Video'}
+                <Library size={11} /> Clip Library
               </button>
             )}
             <button
               onClick={handleClearSession}
-              className="flex items-center gap-1.5 text-xs text-white/25 hover:text-white/50 transition-colors"
-              title="Clear session and start a new project"
+              style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'rgba(255,255,255,0.25)', background: 'none', border: 'none', cursor: 'pointer' }}
+              onMouseEnter={e => e.currentTarget.style.color = 'rgba(255,255,255,0.5)'}
+              onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.25)'}
+              title="Clear session"
             >
-              <Trash2 size={11} />
-              Clear session
+              <Trash2 size={11} /> Clear
             </button>
           </div>
         </div>
-        <p className="text-white/40 mt-1 text-sm">
-          Transform a script into a fully assembled documentary video.
-        </p>
-      </div>
 
-      <div className="space-y-10">
-        <ScriptInput
-          key={resetKey}
-          onAnalyze={handleAnalyze}
-          isAnalyzing={isAnalyzing}
-        />
-
-        {analyzeError && (
-          <div className="rounded-lg border border-red-500/20 bg-red-500/[0.04] px-4 py-3 text-sm text-red-400">
-            {formatError(analyzeError)}
-          </div>
-        )}
-
-        {/* Skeleton cards while analyzing */}
-        {isAnalyzing && (
-          <div>
-            <p className="text-xs text-white/25 mb-4">Breaking script into scenes…</p>
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-              {Array.from({ length: 9 }).map((_, i) => <SkeletonCard key={i} />)}
-            </div>
-          </div>
-        )}
-
-        {hasAnalyzed && !isAnalyzing && scenes.length === 0 && (
-          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-8 py-12 text-center">
-            <p className="text-white/30 text-sm mb-2">No scenes were generated.</p>
-            <p className="text-white/20 text-xs">Try a longer script or check your API key in Settings.</p>
-          </div>
-        )}
-
-        {hasAnalyzed && scenes.length > 0 && (
-          <>
-            {/* Generate Assets button */}
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={handleGenerateAll}
-                  disabled={isGenerating || scenes.length === 0}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
-                >
-                  {isGenerating
-                    ? <Loader2 size={14} className="animate-spin" />
-                    : <Zap size={14} />
-                  }
-                  {isGenerating
-                    ? `Generating… (${generateProgress.done} / ${generateProgress.total})`
-                    : generateDone
-                      ? 'Regenerate All'
-                      : `Generate Assets (${scenes.length})`
-                  }
-                </button>
-                {generateDone && !isGenerating && (
-                  <span className="text-xs text-white/30">
-                    Generation complete
-                  </span>
-                )}
-              </div>
-              {!isGenerating && breakdownParts.length > 0 && (
-                <span className="text-xs text-white/25 ml-1">
-                  {breakdownParts.join(' · ')}
-                </span>
-              )}
-            </div>
-
-            {generateError && (
-              <div className="rounded-lg border border-red-500/20 bg-red-500/[0.04] px-4 py-3 text-sm text-red-400">
-                {formatError(generateError)}
-              </div>
-            )}
-
-            {/* Overlay suggestion review banner */}
-            {overlayStats.suggested > 0 && (
-              <div style={{
-                padding: '14px 20px',
-                background: 'rgba(59,130,246,0.08)',
-                border: '1px solid rgba(59,130,246,0.25)',
-                borderRadius: 10,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 16,
-              }}>
-                <div>
-                  <div style={{ color: 'white', fontSize: 14, fontWeight: 600 }}>
-                    ✨ {overlayStats.suggested} overlay suggestion{overlayStats.suggested !== 1 ? 's' : ''} ready
-                  </div>
-                  <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, marginTop: 3 }}>
-                    Claude analyzed your script and suggested overlays for {overlayStats.scenesWithSuggestions} scene{overlayStats.scenesWithSuggestions !== 1 ? 's' : ''}.
-                    Review each scene or accept all at once.
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-                  <button
-                    onClick={handleRejectAllOverlays}
-                    style={{ padding: '8px 14px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, color: 'rgba(255,255,255,0.6)', fontSize: 12, cursor: 'pointer' }}
-                  >
-                    Dismiss all
-                  </button>
-                  <button
-                    onClick={() => setOverlayReviewOpen(true)}
-                    style={{ padding: '8px 14px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, color: 'white', fontSize: 12, cursor: 'pointer' }}
-                  >
-                    Review suggestions
-                  </button>
-                  <button
-                    onClick={handleAcceptAllOverlays}
-                    style={{ padding: '8px 16px', background: '#3b82f6', border: 'none', borderRadius: 6, color: 'white', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
-                  >
-                    Accept all ({overlayStats.suggested})
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Sentinel — IntersectionObserver watches this to detect scroll-past */}
-            {showPlayer && <div ref={sentinelRef} style={{ height: 0 }} />}
-
-            {/* Normal inline player (only when not stuck) */}
-            {showPlayer && !playerStuck && (
-              <div className="rounded-xl overflow-hidden border border-white/[0.08]">
-                <VideoPlayer
-                  scenes={scenes}
-                  imagePaths={imagePaths}
-                  selectedClips={selectedClips}
-                  globalSettings={globalSettings}
-                  audioSpecs={audioSpecs}
-                />
-              </div>
-            )}
-
-            {/* Spacer to hold layout when player is in fixed compact mode */}
-            {showPlayer && playerStuck && (
-              <div style={{ height: '36vw', maxHeight: 504 }} />
-            )}
-
-            {(() => { console.log('[CLIP DEBUG 4] SceneGrid render, clipMatches keys:', Object.keys(clipMatches), 'count:', Object.keys(clipMatches).length); return null })()}
-            <SceneGrid
-              scenes={scenes}
-              onScenesChange={setScenes}
-              sceneStatuses={sceneStatuses}
-              onRetry={handleRetry}
-              motionStatuses={motionStatuses}
-              onBuildComponent={handleBuildComponent}
-              clipMatches={clipMatches}
-              selectedClips={selectedClips}
-              onSelectClip={handleSelectClip}
-              onConvertToImage={handleConvertToImage}
-              onManualMatch={handleManualMatch}
-              onOpenLibrary={() => setShowClipLibrary(true)}
-              onPreviewScene={setPreviewScene}
-              voiceoverStatuses={voiceoverStatuses}
-              onOpenVoiceover={handleOpenVoiceover}
-              onOpenOverlayStudio={handleOpenOverlayStudio}
-              onAcceptSceneOverlays={handleAcceptSceneOverlays}
-              onRejectSceneOverlays={handleRejectSceneOverlays}
-            />
-
-            <VoiceoverPanel
-              scenes={scenes}
-              projectId={projectId}
-              isOpen={voiceoverPanelOpen}
-              onClose={() => { setVoiceoverPanelOpen(false); setVoiceoverFocusScene(null) }}
-              focusSceneId={voiceoverFocusScene}
-              onAudioGenerated={handleAudioGenerated}
-              onVoiceoverStatusChange={setVoiceoverStatuses}
-              onScenesChange={setScenes}
-            />
-
-            <AudioPanel
-              scenes={scenes}
-              projectId={projectId}
-              audioSpecs={audioSpecs}
-              onBuildSpecs={handleBuildAudioSpecs}
-              onApplySpecs={handleApplyAudioSpecs}
-              audioVolumes={audioVolumes}
-              onVolumesChange={setAudioVolumes}
-            />
-
-            <div id="vorta-export-panel">
-              <ExportPanel
+        {/* Sticky mini player — visible on all steps except Script */}
+        {wizard.currentStep !== 'script' && scenes.length > 0 && (
+          <div style={{
+            display:        'flex',
+            alignItems:     'center',
+            gap:             16,
+            padding:        '8px 24px',
+            background:     'rgba(10,10,10,0.96)',
+            backdropFilter: 'blur(12px)',
+            borderBottom:   '1px solid rgba(255,255,255,0.06)',
+            flexShrink:      0,
+          }}>
+            <div style={{ width: 240, flexShrink: 0 }}>
+              <VideoPlayer
                 scenes={scenes}
-                sceneStatuses={sceneStatuses}
+                imagePaths={imagePaths}
                 selectedClips={selectedClips}
-                voiceoverStatuses={voiceoverStatuses}
+                globalSettings={globalSettings}
                 audioSpecs={audioSpecs}
-                projectId={projectId}
+                style={{ width: '100%', aspectRatio: '16/9', borderRadius: 6, overflow: 'hidden' }}
               />
             </div>
-          </>
+            <div>
+              <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: 12, marginBottom: 2 }}>
+                {scenes.length} scene{scenes.length !== 1 ? 's' : ''} ·{' '}
+                {scenes.reduce((s, sc) => s + (sc.duration_seconds || 5), 0).toFixed(0)}s total
+              </div>
+              {Object.values(sceneStatuses).filter(s => s.status === 'done').length > 0 && (
+                <div style={{ color: 'rgba(74,222,128,0.7)', fontSize: 11 }}>
+                  ✓ {Object.values(sceneStatuses).filter(s => s.status === 'done').length} visuals ready
+                </div>
+              )}
+            </div>
+          </div>
         )}
-      </div>
-    </div>
 
-    {/* Single-scene compact preview modal */}
-    {previewScene && (
-      <div
-        onClick={e => { if (e.target === e.currentTarget) setPreviewScene(null) }}
-        style={{
-          position: 'fixed', inset: 0, zIndex: 50,
-          background: 'rgba(0,0,0,0.88)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          padding: '24px',
-        }}
-      >
-        <div style={{ width: '100%', maxWidth: 680, position: 'relative' }}>
-          <button
-            onClick={() => setPreviewScene(null)}
-            style={{
-              position: 'absolute', top: -40, right: 0,
-              display: 'flex', alignItems: 'center', gap: 6,
-              color: 'rgba(255,255,255,0.35)', background: 'none',
-              border: 'none', cursor: 'pointer', fontSize: 13,
-            }}
-            onMouseEnter={e => e.currentTarget.style.color = 'rgba(255,255,255,0.65)'}
-            onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.35)'}
-          >
-            <X size={14} /> Close
-          </button>
-          <VideoPlayer
-            scenes={previewScenes}
-            imagePaths={imagePaths}
-            selectedClips={selectedClips}
-            globalSettings={globalSettings}
-            style={{ width: '100%', aspectRatio: '16 / 9', borderRadius: '10px', overflow: 'hidden' }}
-          />
-          <p style={{
-            marginTop: 12, fontSize: 12,
-            color: 'rgba(255,255,255,0.25)', textAlign: 'center',
-          }}>
-            {previewScene.script_excerpt}
-          </p>
+        {/* Step content */}
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {renderStep()}
         </div>
       </div>
-    )}
 
-    {/* Compact sticky player — appears when scrolled past the inline player */}
-    {showPlayer && playerStuck && (
-      <div style={{
-        position: 'fixed', top: 16, right: 24, zIndex: 60,
-        width: 320,
-        background: 'rgba(10,10,10,0.95)',
-        backdropFilter: 'blur(12px)',
-        borderRadius: 10,
-        border: '1px solid rgba(255,255,255,0.10)',
-        boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
-        overflow: 'hidden',
-      }}>
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '7px 12px',
-          borderBottom: '1px solid rgba(255,255,255,0.07)',
-          cursor: playerMinimized ? 'pointer' : 'default',
-        }}
-          onClick={() => playerMinimized && setPlayerMinimized(false)}
+      {/* ── Global modals (persist across all steps) ── */}
+
+      {/* Single-scene preview modal */}
+      {previewScene && (
+        <div
+          onClick={e => { if (e.target === e.currentTarget) setPreviewScene(null) }}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 50,
+            background: 'rgba(0,0,0,0.88)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '24px',
+          }}
         >
-          <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-            Live Preview
-          </span>
-          <button
-            onClick={e => { e.stopPropagation(); setPlayerMinimized(m => !m) }}
-            style={{ color: 'rgba(255,255,255,0.25)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex' }}
-          >
-            {playerMinimized ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-          </button>
+          <div style={{ width: '100%', maxWidth: 680, position: 'relative' }}>
+            <button
+              onClick={() => setPreviewScene(null)}
+              style={{
+                position: 'absolute', top: -40, right: 0,
+                display: 'flex', alignItems: 'center', gap: 6,
+                color: 'rgba(255,255,255,0.35)', background: 'none',
+                border: 'none', cursor: 'pointer', fontSize: 13,
+              }}
+              onMouseEnter={e => e.currentTarget.style.color = 'rgba(255,255,255,0.65)'}
+              onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.35)'}
+            >
+              <X size={14} /> Close
+            </button>
+            <VideoPlayer
+              scenes={previewScenes}
+              imagePaths={imagePaths}
+              selectedClips={selectedClips}
+              globalSettings={globalSettings}
+              style={{ width: '100%', aspectRatio: '16 / 9', borderRadius: '10px', overflow: 'hidden' }}
+            />
+            <p style={{ marginTop: 12, fontSize: 12, color: 'rgba(255,255,255,0.25)', textAlign: 'center' }}>
+              {previewScene.script_excerpt}
+            </p>
+          </div>
         </div>
+      )}
 
-        {!playerMinimized && (
-          <VideoPlayer
-            scenes={scenes}
-            imagePaths={imagePaths}
-            selectedClips={selectedClips}
-            globalSettings={globalSettings}
-            audioSpecs={audioSpecs}
-            style={{ width: '100%', aspectRatio: '16 / 9', display: 'block' }}
-          />
-        )}
-      </div>
-    )}
+      {/* Compact sticky player — legacy, triggered when scrolled past inline player */}
+      {showPlayer && playerStuck && (
+        <div style={{
+          position: 'fixed', top: 16, right: 24, zIndex: 60, width: 320,
+          background: 'rgba(10,10,10,0.95)', backdropFilter: 'blur(12px)',
+          borderRadius: 10, border: '1px solid rgba(255,255,255,0.10)',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.55)', overflow: 'hidden',
+        }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '7px 12px', borderBottom: '1px solid rgba(255,255,255,0.07)',
+            cursor: playerMinimized ? 'pointer' : 'default',
+          }}
+            onClick={() => playerMinimized && setPlayerMinimized(false)}
+          >
+            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+              Live Preview
+            </span>
+            <button
+              onClick={e => { e.stopPropagation(); setPlayerMinimized(m => !m) }}
+              style={{ color: 'rgba(255,255,255,0.25)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex' }}
+            >
+              {playerMinimized ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            </button>
+          </div>
+          {!playerMinimized && (
+            <VideoPlayer
+              scenes={scenes}
+              imagePaths={imagePaths}
+              selectedClips={selectedClips}
+              globalSettings={globalSettings}
+              audioSpecs={audioSpecs}
+              style={{ width: '100%', aspectRatio: '16 / 9', display: 'block' }}
+            />
+          )}
+        </div>
+      )}
 
-    {showClipLibrary && (
-      <ClipLibrary onClose={() => setShowClipLibrary(false)} projectId={projectId} />
-    )}
+      {showClipLibrary && (
+        <ClipLibrary onClose={() => setShowClipLibrary(false)} projectId={projectId} />
+      )}
 
-    {overlayStudioScene && (
-      <OverlayStudio
-        scene={overlayStudioScene}
-        imagePaths={imagePaths}
-        selectedClips={selectedClips}
-        globalSettings={globalSettings}
-        brand={brand}
-        onClose={() => setOverlayStudioScene(null)}
-        onSave={handleOverlaySave}
-      />
-    )}
+      {overlayStudioScene && (
+        <OverlayStudio
+          scene={overlayStudioScene}
+          imagePaths={imagePaths}
+          selectedClips={selectedClips}
+          globalSettings={globalSettings}
+          brand={brand}
+          onClose={() => setOverlayStudioScene(null)}
+          onSave={handleOverlaySave}
+        />
+      )}
 
-    {overlayReviewOpen && (
-      <OverlayReviewModal
-        scenes={scenes}
-        onAcceptOverlay={handleAcceptOverlay}
-        onRejectOverlay={handleRejectOverlay}
-        onAcceptScene={handleAcceptSceneOverlays}
-        onRejectScene={handleRejectSceneOverlays}
-        onAcceptAll={handleAcceptAllOverlays}
-        onClose={() => setOverlayReviewOpen(false)}
-      />
-    )}
+      {overlayReviewOpen && (
+        <OverlayReviewModal
+          scenes={scenes}
+          onAcceptOverlay={handleAcceptOverlay}
+          onRejectOverlay={handleRejectOverlay}
+          onAcceptScene={handleAcceptSceneOverlays}
+          onRejectScene={handleRejectSceneOverlays}
+          onAcceptAll={handleAcceptAllOverlays}
+          onClose={() => setOverlayReviewOpen(false)}
+        />
+      )}
     </>
   )
 }
