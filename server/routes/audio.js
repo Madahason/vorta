@@ -91,120 +91,114 @@ router.post('/build-specs', async (req, res) => {
   }
 
   try {
-    const { moodMap }       = require('../config/musicMoods')
-    const { VOLUME_LEVELS } = require('../services/audioMixer')
-    const getMoodConfig     = (mood) => moodMap[mood] || moodMap.neutral
+    const { normaliseMood }   = require('../services/musicService')
+    const { moodMap }         = require('../config/musicMoods')
+    const { downloadAmbientFile, downloadSting: dlSting } = require('../services/freesoundService')
 
-    const uniqueMoods  = [...new Set(scenes.map(s => s.mood || 'neutral'))]
-    const musicByMood  = {}
+    let selectAmbientForScene = null
+    try { selectAmbientForScene = require('../services/ambientSelector').selectAmbientForScene } catch {}
 
-    await Promise.allSettled(uniqueMoods.map(async mood => {
+    // ── Step 1: pre-download music for every unique normalised mood ────────────
+    console.log('[audio] pre-downloading music for all scene moods…')
+    const uniqueMoods  = [...new Set(scenes.map(s => normaliseMood(s.mood || 'neutral')))]
+    const musicCache   = {}
+
+    for (const mood of uniqueMoods) {
       try {
-        musicByMood[mood] = await getMusicForMood(mood)   // returns { path, url }
+        musicCache[mood] = await getMusicForMood(mood)
+        console.log(`[audio] music ready for mood: ${mood}`)
       } catch (err) {
-        console.warn(`[audio] music for "${mood}" failed:`, err.message)
+        console.warn(`[audio] music failed for mood ${mood}:`, err.message)
+        if (mood !== 'neutral' && musicCache['neutral']) musicCache[mood] = musicCache['neutral']
       }
-    }))
+    }
+    if (!musicCache['neutral']) {
+      try { musicCache['neutral'] = await getMusicForMood('neutral') } catch {}
+    }
 
-    let selectAmbient = null
-    try {
-      selectAmbient = require('../services/ambientSelector').selectAmbientForScene
-    } catch { /* ambient selector optional */ }
+    // ── Step 2: pre-download all stings ───────────────────────────────────────
+    console.log('[audio] pre-downloading transition stings…')
+    if (!fs.existsSync(STINGS_DIR)) fs.mkdirSync(STINGS_DIR, { recursive: true })
+    const stingCache = {}
+    for (const [key, sting] of Object.entries(transitionStings)) {
+      const stingPath = path.join(STINGS_DIR, sting.filename)
+      if (!fs.existsSync(stingPath) || fs.statSync(stingPath).size < 1000) {
+        try {
+          await dlSting(key)
+          console.log(`[audio] sting downloaded: ${key}`)
+        } catch (err) {
+          console.warn(`[audio] sting failed ${key}:`, err.message)
+        }
+      }
+      if (fs.existsSync(stingPath) && fs.statSync(stingPath).size > 1000) {
+        stingCache[key] = { path: stingPath, url: `/library/stings/${sting.filename}` }
+      }
+    }
 
-    const specs = await Promise.all(scenes.map(async (scene) => {
-      const mood       = scene.mood || 'neutral'
-      const moodConfig = getMoodConfig(mood)
+    // ── Step 3: build per-scene specs ─────────────────────────────────────────
+    console.log(`[audio] building specs for ${scenes.length} scenes…`)
+    const specs = []
+
+    for (const scene of scenes) {
+      const normMood  = normaliseMood(scene.mood || 'neutral')
+      const moodCfg   = moodMap[normMood] || moodMap.neutral
 
       const spec = {
         scene_id:  scene.scene_id,
-        narration: scene.audio_path
-          ? { path: scene.audio_path, url: scene.audio_path, volume: VOLUME_LEVELS.narration }
-          : null,
-        music:   null,
-        ambient: null,
-        sting:   null,
+        narration: scene.audio_path ? { url: scene.audio_path, volume: 1.0 } : null,
+        music:     null,
+        ambient:   null,
+        sting:     null,
       }
 
-      const musicResult = musicByMood[mood]
+      // Music — normalised-mood cache with neutral fallback
+      const musicResult = musicCache[normMood] || musicCache['neutral']
       if (musicResult) {
-        spec.music = {
-          path:     musicResult.path,
-          url:      musicResult.url,
-          volume:   VOLUME_LEVELS.music,
-          loop:     true,
-          filename: path.basename(musicResult.path),
-        }
+        spec.music = { url: musicResult.url, path: musicResult.path, volume: 0.12, loop: true }
       }
 
+      // Ambient — Claude selector → fallback → auto-download if missing
       try {
-        let ambientKey
-        if (selectAmbient) {
-          ambientKey = await selectAmbient(scene)
+        let ambientKey = null
+        if (selectAmbientForScene) {
+          ambientKey = await selectAmbientForScene(scene)
         } else {
-          const { getAmbientForMood, getAmbientForCategory } = require('../services/ambientLibrary')
-          const ambient = getAmbientForCategory(scene.category) || getAmbientForMood(mood)
-          if (ambient) {
-            spec.ambient = {
-              path:        ambient.filePath,
-              url:         ambient.url,
-              volume:      VOLUME_LEVELS.ambient,
-              loop:        true,
-              filename:    ambient.filename,
-              description: ambient.description,
-            }
-          }
-          ambientKey = null
+          const { getAmbientForCategory, getAmbientForMood } = require('../services/ambientLibrary')
+          const a = getAmbientForCategory(scene.category) || getAmbientForMood(normMood)
+          if (a) spec.ambient = { url: a.url, path: a.filePath, volume: 0.06, loop: true, key: a.key, filename: a.filename }
         }
 
         if (ambientKey) {
           const ambient = AMBIENT_CATALOG[ambientKey]
           if (ambient) {
             const ambientPath = path.join(AMBIENT_DIR, ambient.filename)
-            if (!fs.existsSync(ambientPath)) {
-              console.log(`[audio] ambient missing for ${ambientKey} — downloading now`)
-              try {
-                const { downloadAmbientFile } = require('../services/freesoundService')
-                await downloadAmbientFile(ambientKey)
-              } catch (dlErr) {
-                console.warn(`[audio] ambient download failed: ${dlErr.message}`)
+            if (!fs.existsSync(ambientPath) || fs.statSync(ambientPath).size < 1000) {
+              console.log(`[audio] auto-downloading ambient: ${ambientKey}`)
+              try { await downloadAmbientFile(ambientKey) } catch (dlErr) {
+                console.warn(`[audio] ambient download failed for ${ambientKey}:`, dlErr.message)
               }
             }
             if (fs.existsSync(ambientPath) && fs.statSync(ambientPath).size > 1000) {
-              spec.ambient = {
-                path:        ambientPath,
-                url:         `/library/ambient/${ambient.filename}`,
-                volume:      VOLUME_LEVELS.ambient,
-                loop:        true,
-                filename:    ambient.filename,
-                description: ambient.description,
-                key:         ambientKey,
-              }
-              console.log(`[audio] ambient assigned for scene ${scene.scene_id}: ${ambientKey}`)
+              spec.ambient = { url: `/library/ambient/${ambient.filename}`, path: ambientPath, volume: 0.06, loop: true, key: ambientKey }
+              console.log(`[audio] ambient assigned: ${ambientKey} → scene ${scene.scene_id}`)
             }
           }
         }
       } catch (err) {
-        console.warn(`[audio] ambient for scene ${scene.scene_id} failed:`, err.message)
+        console.warn(`[audio] ambient selection failed for scene ${scene.scene_id}:`, err.message)
       }
 
-      const stingKey = moodConfig.transitionSting || 'neutral_sting'
-      const stingDef = transitionStings[stingKey]
-      if (stingDef) {
-        const stingPath = path.join(STINGS_DIR, stingDef.filename)
-        if (fs.existsSync(stingPath)) {
-          spec.sting = {
-            path:     stingPath,
-            url:      `/library/stings/${stingDef.filename}`,
-            volume:   VOLUME_LEVELS.sting,
-            filename: stingDef.filename,
-            duration: stingDef.duration,
-          }
-        }
-      }
+      // Sting — from pre-downloaded cache
+      const stingKey = moodCfg?.transitionSting || 'neutral_sting'
+      if (stingCache[stingKey]) spec.sting = { ...stingCache[stingKey], volume: 0.45 }
 
-      return spec
-    }))
+      specs.push(spec)
+      console.log(`[audio] spec: scene ${scene.scene_id} music=${!!spec.music} ambient=${!!spec.ambient} sting=${!!spec.sting}`)
+    }
 
+    const withMusic   = specs.filter(s => s.music).length
+    const withAmbient = specs.filter(s => s.ambient).length
+    console.log(`[audio] complete — ${withMusic}/${specs.length} music, ${withAmbient}/${specs.length} ambient`)
     res.json({ success: true, specs })
   } catch (err) {
     console.error('[audio] build-specs error:', err)
@@ -225,8 +219,8 @@ router.post('/download-music', async (req, res) => {
   }
 })
 
-// ── POST /download-ambient — download all missing ambient files ───────────────
-router.post('/download-ambient', async (req, res) => {
+// ── GET /download-ambient — download all missing ambient files (SSE) ─────────
+router.get('/download-ambient', async (req, res) => {
   const { downloadAmbientFile } = require('../services/freesoundService')
 
   res.setHeader('Content-Type', 'text/event-stream')
@@ -287,6 +281,55 @@ router.post('/download-stings', async (req, res) => {
   }
 
   res.json(results)
+})
+
+// ── GET /download-all — download stings + ambient in one SSE stream ──────────
+router.get('/download-all', async (req, res) => {
+  const { downloadAmbientFile, downloadSting: dlSting } = require('../services/freesoundService')
+
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.flushHeaders()
+
+  const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {} }
+
+  // Stings first (small files)
+  send({ type: 'phase', message: 'Downloading transition stings…' })
+  if (!fs.existsSync(STINGS_DIR)) fs.mkdirSync(STINGS_DIR, { recursive: true })
+  for (const key of Object.keys(transitionStings)) {
+    const fp = path.join(STINGS_DIR, transitionStings[key].filename)
+    if (fs.existsSync(fp) && fs.statSync(fp).size > 1000) {
+      send({ type: 'done', category: 'sting', key })
+      continue
+    }
+    send({ type: 'downloading', category: 'sting', key })
+    try {
+      await dlSting(key)
+      send({ type: 'done', category: 'sting', key })
+    } catch (err) {
+      send({ type: 'error', category: 'sting', key, message: err.message })
+    }
+  }
+
+  // Ambient loops
+  send({ type: 'phase', message: 'Downloading ambient loops…' })
+  for (const key of Object.keys(AMBIENT_CATALOG)) {
+    const fp = path.join(AMBIENT_DIR, AMBIENT_CATALOG[key].filename)
+    if (fs.existsSync(fp) && fs.statSync(fp).size > 1000) {
+      send({ type: 'done', category: 'ambient', key })
+      continue
+    }
+    send({ type: 'downloading', category: 'ambient', key })
+    try {
+      await downloadAmbientFile(key)
+      send({ type: 'done', category: 'ambient', key })
+    } catch (err) {
+      send({ type: 'error', category: 'ambient', key, message: err.message })
+    }
+  }
+
+  send({ type: 'complete', message: 'All audio assets downloaded' })
+  res.end()
 })
 
 // ── GET /ambient-list — list all ambient files and their availability ─────────

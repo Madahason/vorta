@@ -375,6 +375,23 @@ export default function VideoCreator() {
   // ─── Build audio specs (music + ambient + stings per scene) ──────────────
   const handleBuildAudioSpecs = async () => {
     if (!scenes.length) return
+
+    // Pre-download missing ambient + stings so build-specs doesn't time out waiting
+    try {
+      const statusRes = await fetch('/api/audio/status')
+      const status    = await statusRes.json()
+      const needsAssets = (status.ambientAvailable < status.ambientTotal) ||
+                          (status.stingsAvailable  < status.stingsTotal)
+      if (needsAssets) {
+        console.log('[audio] downloading missing assets before building specs…')
+        // Fire JSON endpoints (not SSE) for simple awaitable pre-download
+        await Promise.allSettled([
+          fetch('/api/audio/download-stings', { method: 'POST' }),
+        ])
+        // Ambient SSE can't be awaited cleanly here; build-specs auto-downloads per scene
+      }
+    } catch { /* non-fatal — build-specs handles missing files internally */ }
+
     const res  = await fetch('/api/audio/build-specs', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -385,7 +402,12 @@ export default function VideoCreator() {
     if (data.success && data.specs) {
       setAudioSpecs(data.specs)
       lsWrite(LS.audioSpecs, data.specs)
-      console.log('[audio] specs built and saved:', data.specs.length, 'scenes')
+      console.log('[audio] specs ready:', {
+        total:         data.specs.length,
+        withMusic:     data.specs.filter(s => s.music).length,
+        withAmbient:   data.specs.filter(s => s.ambient).length,
+        withNarration: data.specs.filter(s => s.narration).length,
+      })
     }
   }
 

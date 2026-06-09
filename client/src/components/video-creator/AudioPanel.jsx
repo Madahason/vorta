@@ -31,6 +31,9 @@ export default function AudioPanel({
   const [musicDownloadStatus,   setMusicDownloadStatus]   = useState({})
   const [isDownloadingStings,   setIsDownloadingStings]   = useState(false)
   const [stingDownloadStatus,   setStingDownloadStatus]   = useState({})
+  const [isDownloadingAll,      setIsDownloadingAll]      = useState(false)
+  const [downloadProgress,      setDownloadProgress]      = useState({})
+  const [downloadPhase,         setDownloadPhase]         = useState('')
 
   const activeAudioRef = useRef(null)
   const panelRef       = useRef(null)
@@ -140,12 +143,40 @@ export default function AudioPanel({
     await fetchStatus()
   }
 
-  // ── Download all missing ambient files via yt-dlp SSE ────────────────────────
+  // ── Download all assets (stings + ambient) via SSE ───────────────────────────
+  const handleDownloadAllAssets = () => {
+    setIsDownloadingAll(true)
+    setDownloadProgress({})
+    setDownloadPhase('Starting…')
+
+    const es = new EventSource(`/api/audio/download-all`)
+    es.onmessage = (e) => {
+      try {
+        const event = JSON.parse(e.data)
+        if (event.type === 'phase') {
+          setDownloadPhase(event.message)
+        } else if (event.type === 'downloading') {
+          setDownloadProgress(p => ({ ...p, [`${event.category}_${event.key}`]: 'downloading' }))
+        } else if (event.type === 'done') {
+          setDownloadProgress(p => ({ ...p, [`${event.category}_${event.key}`]: 'done' }))
+        } else if (event.type === 'error') {
+          setDownloadProgress(p => ({ ...p, [`${event.category}_${event.key}`]: 'error' }))
+        } else if (event.type === 'complete') {
+          setIsDownloadingAll(false)
+          es.close()
+          fetchStatus()
+        }
+      } catch {}
+    }
+    es.onerror = () => { setIsDownloadingAll(false); es.close() }
+  }
+
+  // ── Download all missing ambient files via SSE ────────────────────────────────
   const handleDownloadAllAmbient = () => {
     setIsDownloadingAmbient(true)
     setAmbientDownloadStatus({})
 
-    const es = new EventSource(`${SERVER_URL}/api/audio/download-ambient`)
+    const es = new EventSource(`/api/audio/download-ambient`)
     es.onmessage = (e) => {
       try {
         const event = JSON.parse(e.data)
@@ -225,6 +256,61 @@ export default function AudioPanel({
 
       {open && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+
+          {/* ── Asset status row + bulk download ── */}
+          {audioStatus && (
+            <div>
+              <div style={{ display: 'flex', gap: 16, marginBottom: 8, fontSize: 12, flexWrap: 'wrap' }}>
+                <span style={{ color: audioStatus.cachedMusicTracks > 0 ? '#4ade80' : 'rgba(255,255,255,0.30)' }}>
+                  🎵 Music: {audioStatus.cachedMusicTracks || 0} moods cached
+                </span>
+                <span style={{ color: audioStatus.ambientAvailable > 0 ? '#4ade80' : 'rgba(255,255,255,0.30)' }}>
+                  🔊 Ambient: {audioStatus.ambientAvailable || 0} / {audioStatus.ambientTotal || 13}
+                </span>
+                <span style={{ color: audioStatus.stingsAvailable > 0 ? '#4ade80' : 'rgba(255,255,255,0.30)' }}>
+                  ⚡ Stings: {audioStatus.stingsAvailable || 0} / {audioStatus.stingsTotal || 6}
+                </span>
+              </div>
+
+              {(audioStatus.ambientAvailable < audioStatus.ambientTotal ||
+                audioStatus.stingsAvailable < audioStatus.stingsTotal) && (
+                <button
+                  onClick={handleDownloadAllAssets}
+                  disabled={isDownloadingAll}
+                  style={{
+                    width: '100%', padding: '8px 0', marginBottom: 6,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                    background: isDownloadingAll ? 'rgba(255,255,255,0.04)' : 'rgba(59,130,246,0.12)',
+                    border: `1px solid ${isDownloadingAll ? 'rgba(255,255,255,0.08)' : 'rgba(59,130,246,0.30)'}`,
+                    borderRadius: 7, fontSize: 12, fontWeight: 500,
+                    color: isDownloadingAll ? 'rgba(255,255,255,0.25)' : 'rgba(147,197,253,0.90)',
+                    cursor: isDownloadingAll ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {isDownloadingAll
+                    ? <><Loader2 size={12} className="animate-spin" /> Downloading… {Object.values(downloadProgress).filter(v => v === 'done').length} / {Object.values(downloadProgress).length}</>
+                    : <><Download size={12} /> Download all ambient &amp; stings</>
+                  }
+                </button>
+              )}
+
+              {isDownloadingAll && Object.keys(downloadProgress).length > 0 && (() => {
+                const done  = Object.values(downloadProgress).filter(v => v === 'done').length
+                const total = Object.keys(downloadProgress).length
+                return (
+                  <div style={{ marginBottom: 4 }}>
+                    <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, marginBottom: 4 }}>{downloadPhase}</div>
+                    <div style={{ height: 3, background: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${(done / Math.max(total, 1)) * 100}%`, background: '#3b82f6', transition: 'width 0.3s' }} />
+                    </div>
+                    <div style={{ color: 'rgba(255,255,255,0.25)', fontSize: 10, marginTop: 3 }}>
+                      {done} of {total} files downloaded
+                    </div>
+                  </div>
+                )
+              })()}
+            </div>
+          )}
 
           {/* ── Primary generate button ── */}
           <div>
@@ -394,7 +480,7 @@ export default function AudioPanel({
               })}
             </div>
             <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.20)', marginTop: 6 }}>
-              Free Music Archive (no key needed) — falls back to YouTube Audio Library if FMA returns no results
+              Freesound CC0 music — one track per mood, cached in library/music/
             </p>
           </div>
 
