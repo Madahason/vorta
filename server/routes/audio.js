@@ -98,22 +98,27 @@ router.post('/build-specs', async (req, res) => {
     let selectAmbientForScene = null
     try { selectAmbientForScene = require('../services/ambientSelector').selectAmbientForScene } catch {}
 
-    // ── Step 1: pre-download music for every unique normalised mood ────────────
+    // ── Step 1: pre-download neutral FIRST (guaranteed fallback), then other moods
     console.log('[audio] pre-downloading music for all scene moods…')
-    const uniqueMoods  = [...new Set(scenes.map(s => normaliseMood(s.mood || 'neutral')))]
-    const musicCache   = {}
+    const uniqueMoods = [...new Set(scenes.map(s => normaliseMood(s.mood || 'neutral')))]
+    const musicCache  = {}
 
-    for (const mood of uniqueMoods) {
+    // Neutral must exist before the loop so every failing mood gets a fallback
+    try {
+      musicCache['neutral'] = await getMusicForMood('neutral')
+      console.log('[audio] music ready for mood: neutral')
+    } catch (err) {
+      console.warn('[audio] neutral music failed:', err.message)
+    }
+
+    for (const mood of uniqueMoods.filter(m => m !== 'neutral')) {
       try {
         musicCache[mood] = await getMusicForMood(mood)
         console.log(`[audio] music ready for mood: ${mood}`)
       } catch (err) {
         console.warn(`[audio] music failed for mood ${mood}:`, err.message)
-        if (mood !== 'neutral' && musicCache['neutral']) musicCache[mood] = musicCache['neutral']
+        if (musicCache['neutral']) musicCache[mood] = musicCache['neutral']
       }
-    }
-    if (!musicCache['neutral']) {
-      try { musicCache['neutral'] = await getMusicForMood('neutral') } catch {}
     }
 
     // ── Step 2: pre-download all stings ───────────────────────────────────────
@@ -157,35 +162,39 @@ router.post('/build-specs', async (req, res) => {
         spec.music = { url: musicResult.url, path: musicResult.path, volume: 0.12, loop: true }
       }
 
-      // Ambient — Claude selector → fallback → auto-download if missing
+      // Ambient — AI selector (optional) → category/mood map fallback → auto-download
       try {
         let ambientKey = null
+
+        // 1. Try AI selector — null return is normal, errors are swallowed
         if (selectAmbientForScene) {
-          ambientKey = await selectAmbientForScene(scene)
-        } else {
-          const { getAmbientForCategory, getAmbientForMood } = require('../services/ambientLibrary')
-          const a = getAmbientForCategory(scene.category) || getAmbientForMood(normMood)
-          if (a) spec.ambient = { url: a.url, path: a.filePath, volume: 0.06, loop: true, key: a.key, filename: a.filename }
+          try { ambientKey = await selectAmbientForScene(scene) } catch {}
         }
 
-        if (ambientKey) {
-          const ambient = AMBIENT_CATALOG[ambientKey]
-          if (ambient) {
-            const ambientPath = path.join(AMBIENT_DIR, ambient.filename)
-            if (!fs.existsSync(ambientPath) || fs.statSync(ambientPath).size < 1000) {
-              console.log(`[audio] auto-downloading ambient: ${ambientKey}`)
-              try { await downloadAmbientFile(ambientKey) } catch (dlErr) {
-                console.warn(`[audio] ambient download failed for ${ambientKey}:`, dlErr.message)
-              }
+        // 2. Always fall back to config maps when AI returns nothing
+        if (!ambientKey) {
+          const { categoryAmbientMap, moodMap: mm } = require('../config/musicMoods')
+          ambientKey = categoryAmbientMap[scene.category]
+            || mm[normMood]?.ambientCategory
+            || 'soft_ambient'
+        }
+
+        const ambient = AMBIENT_CATALOG[ambientKey]
+        if (ambient) {
+          const ambientPath = path.join(AMBIENT_DIR, ambient.filename)
+          // Auto-download if missing — file might not be on disk yet
+          if (!fs.existsSync(ambientPath) || fs.statSync(ambientPath).size < 1000) {
+            try { await downloadAmbientFile(ambientKey) } catch (dlErr) {
+              console.warn(`[audio] ambient download failed for ${ambientKey}:`, dlErr.message)
             }
-            if (fs.existsSync(ambientPath) && fs.statSync(ambientPath).size > 1000) {
-              spec.ambient = { url: `/library/ambient/${ambient.filename}`, path: ambientPath, volume: 0.06, loop: true, key: ambientKey }
-              console.log(`[audio] ambient assigned: ${ambientKey} → scene ${scene.scene_id}`)
-            }
+          }
+          if (fs.existsSync(ambientPath) && fs.statSync(ambientPath).size > 1000) {
+            spec.ambient = { url: `/library/ambient/${ambient.filename}`, path: ambientPath, volume: 0.06, loop: true, key: ambientKey }
+            console.log(`[audio] ambient: ${ambientKey} → scene ${scene.scene_id}`)
           }
         }
       } catch (err) {
-        console.warn(`[audio] ambient selection failed for scene ${scene.scene_id}:`, err.message)
+        console.warn(`[audio] ambient failed for scene ${scene.scene_id}:`, err.message)
       }
 
       // Sting — from pre-downloaded cache
