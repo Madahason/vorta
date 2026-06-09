@@ -1,5 +1,18 @@
 import { Composition } from 'remotion'
+import { loadFont as loadInter }      from '@remotion/google-fonts/Inter'
+import { loadFont as loadMontserrat } from '@remotion/google-fonts/Montserrat'
+import { loadFont as loadPlayfair }   from '@remotion/google-fonts/PlayfairDisplay'
+import { loadFont as loadDMSans }     from '@remotion/google-fonts/DMSans'
+import { loadFont as loadBebas }      from '@remotion/google-fonts/BebasNeue'
 import { Documentary, calculateDocumentaryDuration } from './compositions/Documentary'
+
+// Load all fonts once at module level — prevents the "too many requests" warning
+// that occurs when overlay components each call loadFont() for the same family.
+loadInter()
+loadMontserrat()
+loadPlayfair()
+loadDMSans()
+loadBebas()
 import AnimatedCounter from './components/AnimatedCounter'
 import TimelineBar     from './components/TimelineBar'
 import ComparisonChart from './components/ComparisonChart'

@@ -1,12 +1,6 @@
-import { loadFont as loadInter }      from '@remotion/google-fonts/Inter'
-import { loadFont as loadMontserrat } from '@remotion/google-fonts/Montserrat'
-
-const { fontFamily: interFamily }      = loadInter()
-const { fontFamily: montserratFamily } = loadMontserrat()
-
 const FONT_MAP = {
-  'Inter':      interFamily,
-  'Montserrat': montserratFamily,
+  'Inter':      'Inter',
+  'Montserrat': 'Montserrat',
 }
 
 export default function Watermark({ overlay = {} }) {

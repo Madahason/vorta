@@ -1,19 +1,10 @@
 import { useCurrentFrame, interpolate, useVideoConfig } from 'remotion'
-import { loadFont as loadInter }      from '@remotion/google-fonts/Inter'
-import { loadFont as loadMontserrat } from '@remotion/google-fonts/Montserrat'
-import { loadFont as loadPlayfair }   from '@remotion/google-fonts/PlayfairDisplay'
-import { loadFont as loadDMSans }     from '@remotion/google-fonts/DMSans'
-
-const { fontFamily: interFamily }      = loadInter()
-const { fontFamily: montserratFamily } = loadMontserrat()
-const { fontFamily: playfairFamily }   = loadPlayfair()
-const { fontFamily: dmSansFamily }     = loadDMSans()
 
 const FONT_MAP = {
-  'Inter':            interFamily,
-  'Montserrat':       montserratFamily,
-  'Playfair Display': playfairFamily,
-  'DM Sans':          dmSansFamily,
+  'Inter':            'Inter',
+  'Montserrat':       'Montserrat',
+  'Playfair Display': 'Playfair Display',
+  'DM Sans':          'DM Sans',
   'Helvetica Neue':   'Helvetica Neue, Helvetica, Arial, sans-serif',
   'Georgia':          'Georgia, serif',
   'Courier New':      'Courier New, monospace',

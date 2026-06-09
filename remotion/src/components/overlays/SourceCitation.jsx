@@ -1,7 +1,6 @@
 import { useCurrentFrame, interpolate, useVideoConfig } from 'remotion'
-import { loadFont as loadInter } from '@remotion/google-fonts/Inter'
 
-const { fontFamily: interFamily } = loadInter()
+const interFamily = 'Inter'
 
 export default function SourceCitation({ overlay = {} }) {
   const frame = useCurrentFrame()
