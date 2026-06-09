@@ -1607,3 +1607,85 @@ Script analysis → Claude generates overlays[] per scene (status: "suggested")
 - `client/` — installed `react-moveable` package
 - `client/src/components/video-creator/DraggableOverlayCanvas.jsx` (new) — canvas showing scene image + draggable overlay elements; `Moveable` handles on selected element; rule-of-thirds grid while dragging; bidirectional coordinate mapping between 1920×1080 video space and display canvas pixels; `OverlayElement` renders visual representations of all overlay types
 - `client/src/components/video-creator/OverlayStudio.jsx` — added `previewMode` state; replaced static right panel with two-tab system: "Drag & Position" (DraggableOverlayCanvas) and "Animated Preview" (VideoPlayer)
+
+---
+
+### Fix 4 — Audio system resilience ✅ Complete
+
+**Problem:** Three audio system failures found during testing: ElevenLabs Generate All button stayed greyed, Pixabay returned HTML instead of JSON, and Claude generated mood names not in `moodMap`.
+
+**Changes:**
+
+**ElevenLabs SDK resilience (`server/routes/voiceover.js`):**
+- Status endpoint now tries two SDK shapes: `client.user.getSubscription()` then `client.user.subscription.get()` with `typeof` guards
+- Falls back to `voices.getAll()` ping if subscription call throws entirely
+- Normalizes field names: `characterCount ?? character_count`, `characterLimit ?? character_limit`
+
+**Pixabay HTML fix (`server/services/pixabayMusic.js`):**
+- Replaced `node-fetch` / native `fetch` with Node's built-in `https` module (`httpGetJson`, `httpGetToFile`)
+- Checks both `content-type` header and `body.trimStart().startsWith('{')` before `JSON.parse`
+- Logs first 200 chars of non-JSON response for debugging
+
+**Mood alias system:**
+- `server/config/musicMoods.js` — added 14 mood aliases: `confrontational`, `ominous`, `gravity`, `urgent`, `suspenseful`, `restrictive`, `revelatory`, `revelation`, `hopeful`, `melancholic`, `inspirational`, `celebratory`, `analytical`, `comparative`
+- `server/services/audioMixer.js` — added `getMoodConfig(mood)` with fuzzy keyword fallback (tense/triumph/somber/dramatic word lists)
+- `server/routes/audio.js` — same fuzzy fallback inline in `POST /build-specs`
+- `server/services/claude.js` — restricted mood field in system prompt to 9 canonical values with mapping guide; unknown moods forbidden
+
+---
+
+### Fix 5 — YouTube Audio Library music fallback ✅ Complete
+
+**Problem:** Pixabay is the only music source; when `PIXABAY_API_KEY` is missing or Pixabay fails, the audio system has no music.
+
+**Architecture — two-tier fallback:**
+```
+getMusicForMood(mood)
+  → Tier 1: Pixabay (if PIXABAY_API_KEY set)
+      → cache hit: return library/music/{mood}_{id}.mp3
+      → miss: searchMusic → downloadTrack → save
+  → Tier 2: YouTube Audio Library via yt-dlp
+      → cache hit: return library/music/yal_{mood}.mp3
+      → miss: searchYouTubeAudioLibrary → downloadYouTubeAudioTrack → save
+  → throws if both fail
+```
+
+**Files added/changed:**
+
+- `server/services/youtubeAudioLibrary.js` (NEW):
+  - Own `execAsync = promisify(exec)` — does NOT reuse clipDownloader's
+  - `MOOD_QUERIES` map with cinematic search strings for 22 moods
+  - `searchYouTubeAudioLibrary(mood, maxResults=5)` — `yt-dlp ytsearch5:...` with `--print id|||title|||duration|||url --no-download`
+  - `downloadYouTubeAudioTrack(track, outputPath)` — `yt-dlp --extract-audio --audio-format mp3 --audio-quality 128K`; renames file if yt-dlp wrote a different extension; validates size > 10 KB
+  - `getMusicFromYouTubeAudioLibrary(mood)` — cache check at `yal_{mood}.mp3`, search, pick longest, download
+  - Exports: `getMusicFromYouTubeAudioLibrary`, `searchYouTubeAudioLibrary`
+
+- `server/services/pixabayMusic.js` — rewritten:
+  - `httpGetJson(url)` — native `https`/`http` with redirect handling, returns `{ statusCode, headers, body }`
+  - `httpGetToFile(url, dest)` — pipes response directly to `fs.createWriteStream`; handles redirects; cleans up on error
+  - `getMoodConfig(mood)` — same fuzzy fallback as `audioMixer.js`
+  - `getCachedTrackForMood(mood)` — now checks both `musicIndex.json` (Pixabay) AND `yal_{mood}.mp3` (YAL) on disk
+  - `getMusicForMood(mood, query)` — two-tier: Pixabay first → `getMusicFromYouTubeAudioLibrary` fallback
+
+- `client/src/components/video-creator/AudioPanel.jsx`:
+  - Added `isDownloadingMusic`, `musicDownloadStatus` states
+  - `MUSIC_MOODS = ['tense','triumphant','somber','neutral','dramatic','reflective','anticipatory','institutional']`
+  - `handleDownloadAllMusic()` — sequential loop, skips already-cached, POSTs `/api/audio/download-music` per mood, updates status grid
+  - New "Music library" section: 2-column grid showing all 8 moods with status dots (spinner / error / cached / empty)
+  - "Download all moods" button triggers `handleDownloadAllMusic`; YAL fallback note shown when no Pixabay key
+  - Generate button sub-label updated to mention YouTube Audio Library fallback
+
+**Cache file naming:**
+- Pixabay: `library/music/{mood}_{track_id}.mp3` (unchanged, backward compatible)
+- YAL: `library/music/yal_{mood}.mp3`
+- `getCachedTrackForMood` checks both — whichever exists first is returned
+
+**Testing checklist:**
+- [ ] No `PIXABAY_API_KEY` → "Download all moods" uses yt-dlp YAL fallback
+- [ ] `PIXABAY_API_KEY` set → Tier 1 (Pixabay) runs first; YAL only if Pixabay fails
+- [ ] Already-cached mood shows ✓ in grid immediately (skipped in download loop)
+- [ ] Downloading mood shows spinner in grid
+- [ ] Failed mood shows red dot; others continue
+- [ ] `library/music/yal_{mood}.mp3` file created after YAL download
+- [ ] `getCachedTrackForMood` returns YAL file on next call (no re-download)
+- [ ] AudioPanel sub-label reads "YouTube Audio Library" when no Pixabay key

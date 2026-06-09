@@ -27,6 +27,8 @@ export default function AudioPanel({
   const [downloadingMoods,      setDownloadingMoods]      = useState({})
   const [isDownloadingAmbient,  setIsDownloadingAmbient]  = useState(false)
   const [ambientDownloadStatus, setAmbientDownloadStatus] = useState({})
+  const [isDownloadingMusic,    setIsDownloadingMusic]    = useState(false)
+  const [musicDownloadStatus,   setMusicDownloadStatus]   = useState({})
 
   const activeAudioRef = useRef(null)
   const panelRef       = useRef(null)
@@ -88,6 +90,39 @@ export default function AudioPanel({
     } finally {
       setDownloadingMoods(p => ({ ...p, [mood]: false }))
     }
+  }
+
+  // ── Download music for all moods (Pixabay → YouTube Audio Library fallback) ──
+  const MUSIC_MOODS = ['tense', 'triumphant', 'somber', 'neutral', 'dramatic', 'reflective', 'anticipatory', 'institutional']
+
+  const handleDownloadAllMusic = async () => {
+    setIsDownloadingMusic(true)
+    setMusicDownloadStatus({})
+
+    for (const mood of MUSIC_MOODS) {
+      const already = audioStatus?.musicIndex?.[mood] || (() => {
+        // also consider YAL cache readable from status if server includes it
+        return false
+      })()
+      if (already) { setMusicDownloadStatus(p => ({ ...p, [mood]: 'exists' })); continue }
+
+      setMusicDownloadStatus(p => ({ ...p, [mood]: 'downloading' }))
+      try {
+        const res  = await fetch(`${SERVER_URL}/api/audio/download-music`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mood }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Download failed')
+        setMusicDownloadStatus(p => ({ ...p, [mood]: 'done' }))
+      } catch (err) {
+        console.error(`[audio] download music ${mood} failed:`, err.message)
+        setMusicDownloadStatus(p => ({ ...p, [mood]: 'error' }))
+      }
+    }
+
+    setIsDownloadingMusic(false)
+    await fetchStatus()
   }
 
   // ── Download all missing ambient files via yt-dlp SSE ────────────────────────
@@ -204,8 +239,8 @@ export default function AudioPanel({
             {!building && (
               <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', marginTop: 6, textAlign: 'center' }}>
                 {audioStatus?.pixabayKeySet
-                  ? 'Downloads background music from Pixabay + assigns ambient & stings per scene'
-                  : 'Assigns ambient loops and stings from local library (add PIXABAY_API_KEY to .env for music download)'
+                  ? 'Downloads music from Pixabay (YouTube Audio Library fallback) and assigns ambient & stings per scene'
+                  : 'Music via YouTube Audio Library (yt-dlp) — add PIXABAY_API_KEY to .env for higher-quality tracks'
                 }
               </p>
             )}
@@ -292,6 +327,63 @@ export default function AudioPanel({
               </div>
             </div>
           )}
+
+          {/* ── Download music for all moods ── */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                Music library
+              </span>
+              <button
+                onClick={handleDownloadAllMusic}
+                disabled={isDownloadingMusic}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 4, fontSize: 10,
+                  padding: '2px 8px', borderRadius: 4,
+                  background: isDownloadingMusic ? 'rgba(255,255,255,0.04)' : 'rgba(124,58,237,0.15)',
+                  border: `1px solid ${isDownloadingMusic ? 'rgba(255,255,255,0.08)' : 'rgba(124,58,237,0.30)'}`,
+                  color: isDownloadingMusic ? 'rgba(255,255,255,0.25)' : 'rgba(167,139,250,0.90)',
+                  cursor: isDownloadingMusic ? 'not-allowed' : 'pointer',
+                }}
+                title="Download background music for all moods. Uses Pixabay if key set, falls back to YouTube Audio Library via yt-dlp."
+              >
+                {isDownloadingMusic ? <Loader2 size={9} className="animate-spin" /> : <Download size={9} />}
+                {isDownloadingMusic ? 'Downloading…' : 'Download all moods'}
+              </button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px' }}>
+              {['tense', 'triumphant', 'somber', 'neutral', 'dramatic', 'reflective', 'anticipatory', 'institutional'].map(mood => {
+                const cached   = audioStatus?.musicIndex?.[mood]
+                const dlStatus = musicDownloadStatus[mood]
+                const isActive = dlStatus === 'downloading'
+                const isDone   = dlStatus === 'done' || dlStatus === 'exists' || !!cached
+                const isError  = dlStatus === 'error'
+                return (
+                  <div key={mood} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}>
+                    {isActive
+                      ? <Loader2 size={7} className="animate-spin" style={{ color: '#a78bfa', flexShrink: 0 }} />
+                      : isError
+                        ? <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#f87171', display: 'inline-block', flexShrink: 0 }} />
+                        : dot(isDone)
+                    }
+                    <span style={{ fontSize: 10, color: isDone ? 'rgba(255,255,255,0.50)' : isError ? 'rgba(248,113,113,0.70)' : 'rgba(255,255,255,0.20)', textTransform: 'capitalize' }}>
+                      {mood}
+                    </span>
+                    {isDone && !isActive && (
+                      <span style={{ fontSize: 9, color: 'rgba(74,222,128,0.50)', marginLeft: 'auto' }}>
+                        {cached?.duration ? `${cached.duration}s` : '✓'}
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            {!audioStatus?.pixabayKeySet && (
+              <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.20)', marginTop: 6 }}>
+                Using YouTube Audio Library (yt-dlp) — add <code style={{ fontSize: 9, background: 'rgba(255,255,255,0.06)', padding: '0 3px', borderRadius: 2 }}>PIXABAY_API_KEY</code> for higher-quality tracks
+              </p>
+            )}
+          </div>
 
           {/* ── Scene assignments (after generate) ── */}
           {hasSpecs && (
