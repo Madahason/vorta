@@ -259,3 +259,8 @@
   align-items: flex-end;
   gap: 10px;
 }
+
+/* ── WizardNav scrollbar (Chrome/Safari) ────────────────────────────────────── */
+.wizard-nav-scroll::-webkit-scrollbar {
+  display: none;
+}

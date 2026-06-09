@@ -935,12 +935,13 @@ export default function VideoCreator() {
   return (
     <>
       {/* ── Wizard layout ── */}
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, overflow: 'hidden' }}>
 
         {/* Top bar: wizard nav + utility actions */}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0,
+          overflow: 'hidden', minWidth: 0,
         }}>
           <WizardNav wizard={wizard} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '0 20px', flexShrink: 0 }}>

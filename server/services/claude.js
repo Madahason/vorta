@@ -161,6 +161,20 @@ OVERLAY OUTPUT FORMAT per scene:
 - "reason" is a plain English explanation of why you added this overlay
 - Leave overlays: [] for purely atmospheric or action scenes with no named subjects, stats, or key locations
 
+STING PLACEMENT RULES
+
+Add use_sting: true when:
+- The scene marks a major narrative turning point (company collapses, product launches, shocking revelation)
+- transition_out is dip_black or dip_white
+- The scene introduces a new chapter or major time period shift
+
+Add use_sting: false when:
+- Regular B-roll or context-setting scenes
+- use_sting was true in either of the previous 2 scenes (never back-to-back)
+- The scene is one of a sequence of similar content scenes
+
+Default to false — stings must be sparse and meaningful. Maximum 1 in every 3 consecutive scenes.
+
 TRANSITIONS
 
 - dissolve: default — smooth cross-fade for continuity
@@ -329,6 +343,7 @@ Track entity introductions across all scenes — each named person or company ge
       higgsfield_prompt: finalPrompt,
       real_footage_flag: scene.shot_type === 'real_footage',
       clip_search_tags:  scene.clip_search_tags || [],
+      use_sting:         scene.use_sting === true,
     }
   })
 

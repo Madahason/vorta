@@ -1,5 +1,5 @@
-import { useMemo }                                                              from 'react'
-import { AbsoluteFill, Audio, interpolate, useVideoConfig, useCurrentFrame }   from 'remotion'
+import { useMemo }                                                                     from 'react'
+import { AbsoluteFill, Audio, Sequence, interpolate, useVideoConfig, useCurrentFrame } from 'remotion'
 import { TransitionSeries, springTiming }                                       from '@remotion/transitions'
 import { fade }                                                                 from '@remotion/transitions/fade'
 import ImageScene             from '../components/ImageScene'
@@ -170,6 +170,18 @@ export function Documentary({
               }}
             />
           )}
+
+          {/* Overlay sounds — each fires at its overlay's appearAt time */}
+          {spec?.overlay_sounds?.map((os, i) => {
+            if (!isValidUrl(os.url)) return null
+            const appearFrame = Math.max(0, Math.round((os.appear_at || 0.7) * fps))
+            const remaining   = Math.max(1, durationFrames - appearFrame)
+            return (
+              <Sequence key={`os_${i}`} from={appearFrame} durationInFrames={remaining}>
+                <Audio src={os.url} volume={os.volume || 0.30} />
+              </Sequence>
+            )
+          })}
         </AbsoluteFill>
       </TransitionSeries.Sequence>
     )

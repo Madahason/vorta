@@ -41,14 +41,15 @@ const apiKeyLoaded = !!process.env.ANTHROPIC_API_KEY;
 console.log(`ANTHROPIC_API_KEY loaded: ${apiKeyLoaded}`);
 
 // Routes (stubs — wired in Phase 1)
-app.use('/api/settings',   require('./routes/settings'));
-app.use('/api/analyze',    require('./routes/analyze'));
-app.use('/api/generate',   require('./routes/generate'));
-app.use('/api/motion',     require('./routes/motion'));
-app.use('/api/library',    require('./routes/library'));
-app.use('/api/audio',      require('./routes/audio'));
-app.use('/api/voiceover',  require('./routes/voiceover'));
-app.use('/api/render',     require('./routes/render'));
+app.use('/api/settings',      require('./routes/settings'));
+app.use('/api/analyze',       require('./routes/analyze'));
+app.use('/api/generate',      require('./routes/generate'));
+app.use('/api/motion',        require('./routes/motion'));
+app.use('/api/library',       require('./routes/library'));
+app.use('/api/audio',         require('./routes/audio'));
+app.use('/api/voiceover',     require('./routes/voiceover'));
+app.use('/api/render',        require('./routes/render'));
+app.use('/api/sound-library', require('./routes/soundLibrary'));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', anthropic_key: apiKeyLoaded, deps: DEPS });

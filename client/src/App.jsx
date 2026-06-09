@@ -77,7 +77,7 @@ export default function App() {
     <>
       <div className="flex h-screen bg-[#0f0f0f] text-white overflow-hidden">
         <Sidebar activePage={activePage} onNavigate={setActivePage} />
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden">
           {renderPage()}
         </main>
       </div>
