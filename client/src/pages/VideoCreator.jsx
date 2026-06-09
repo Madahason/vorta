@@ -211,7 +211,11 @@ export default function VideoCreator() {
   useEffect(() => { lsWrite(LS.projectId,     projectId)     }, [projectId])
   useEffect(() => { lsWrite(LS.statuses,      sceneStatuses) }, [sceneStatuses])
   useEffect(() => { lsWrite(LS.selectedClips, selectedClips) }, [selectedClips])
-  useEffect(() => { if (audioSpecs.length > 0) lsWrite(LS.audioSpecs, audioSpecs) }, [audioSpecs])
+  useEffect(() => {
+    if (audioSpecs.length > 0) {
+      try { localStorage.setItem(LS.audioSpecs, JSON.stringify(audioSpecs)) } catch { /* quota */ }
+    }
+  }, [audioSpecs])
   useEffect(() => {
     const toSave = {}
     Object.entries(clipMatches).forEach(([sid, v]) => {
@@ -385,42 +389,56 @@ export default function VideoCreator() {
     setResetKey(k => k + 1)
   }
 
+  // ─── Apply audio specs — single source of truth for persisting specs ──────
+  const handleApplyAudioSpecs = (specs) => {
+    if (!specs?.length) return
+    setAudioSpecs(specs)
+    try {
+      const json = JSON.stringify(specs)
+      localStorage.setItem(LS.audioSpecs, json)
+      const verify = JSON.parse(localStorage.getItem(LS.audioSpecs) || '[]')
+      console.log('[VideoCreator] audioSpecs saved to localStorage — count:', verify.length,
+        'first scene_id:', verify[0]?.scene_id)
+    } catch (err) {
+      console.error('[VideoCreator] localStorage save FAILED:', err)
+    }
+  }
+
   // ─── Build audio specs (music + ambient + stings per scene) ──────────────
   const handleBuildAudioSpecs = async () => {
     if (!scenes.length) return
 
-    // Pre-download missing ambient + stings so build-specs doesn't time out waiting
+    // Pre-download missing stings so build-specs doesn't time out waiting
     try {
       const statusRes = await fetch('/api/audio/status')
       const status    = await statusRes.json()
-      const needsAssets = (status.ambientAvailable < status.ambientTotal) ||
-                          (status.stingsAvailable  < status.stingsTotal)
-      if (needsAssets) {
-        console.log('[audio] downloading missing assets before building specs…')
-        // Fire JSON endpoints (not SSE) for simple awaitable pre-download
+      if (status.stingsAvailable < status.stingsTotal) {
+        console.log('[audio] downloading missing stings before building specs…')
         await Promise.allSettled([
           fetch('/api/audio/download-stings', { method: 'POST' }),
         ])
-        // Ambient SSE can't be awaited cleanly here; build-specs auto-downloads per scene
       }
     } catch { /* non-fatal — build-specs handles missing files internally */ }
 
+    console.log('[VideoCreator] build-specs request — scenes:', scenes.length, 'projectId:', projectId)
     const res  = await fetch('/api/audio/build-specs', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ scenes, projectId }),
     })
     const data = await res.json()
+    console.log('[VideoCreator] build-specs response — success:', data.success, 'specs:', data.specs?.length, 'error:', data.error)
     if (!res.ok) throw new Error(data.error || 'Build-specs failed')
-    if (data.success && data.specs) {
-      setAudioSpecs(data.specs)
-      lsWrite(LS.audioSpecs, data.specs)
+    if (data.success && data.specs?.length) {
+      handleApplyAudioSpecs(data.specs)
       console.log('[audio] specs ready:', {
         total:         data.specs.length,
         withMusic:     data.specs.filter(s => s.music).length,
         withAmbient:   data.specs.filter(s => s.ambient).length,
         withNarration: data.specs.filter(s => s.narration).length,
       })
+    } else {
+      console.warn('[VideoCreator] build-specs returned no specs — data:', JSON.stringify(data).slice(0, 200))
     }
   }
 
@@ -1034,6 +1052,7 @@ export default function VideoCreator() {
               projectId={projectId}
               audioSpecs={audioSpecs}
               onBuildSpecs={handleBuildAudioSpecs}
+              onApplySpecs={handleApplyAudioSpecs}
               audioVolumes={audioVolumes}
               onVolumesChange={setAudioVolumes}
             />

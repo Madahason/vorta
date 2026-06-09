@@ -22,6 +22,7 @@ export default function AudioPanel({
   projectId,
   audioSpecs,
   onBuildSpecs,
+  onApplySpecs,
   audioVolumes,
   onVolumesChange,
 }) {
@@ -59,10 +60,13 @@ export default function AudioPanel({
     if (!scenes?.length) return
     setBuilding(true)
     setBuildError(null)
+    console.log('[AudioPanel] Generate clicked — scenes:', scenes?.length)
     try {
       await onBuildSpecs?.()
+      console.log('[AudioPanel] onBuildSpecs resolved — audioSpecs prop after build:', audioSpecs?.length)
       await fetchStatus()
     } catch (err) {
+      console.error('[AudioPanel] Generate failed:', err.message)
       setBuildError(err.message)
     } finally {
       setBuilding(false)
@@ -241,7 +245,7 @@ export default function AudioPanel({
                 borderRadius: 8,
               }}>
                 <div style={{ color: '#4ade80', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-                  ✓ Audio plan ready — {audioSpecs?.length} scenes
+                  ✓ Audio plan ready — {audioSpecs?.length} scenes · saved to video
                 </div>
                 <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                   <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12 }}>🎵 Music: {musicCount} scenes</span>
