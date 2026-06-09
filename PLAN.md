@@ -1251,10 +1251,17 @@ AudioPanel → POST /api/audio/build-specs[?download=1]
 **Volume levels:**
 | Layer | Volume | Notes |
 |-------|--------|-------|
-| Narration (`scene.audio_path`) | 100% | Per-scene ElevenLabs audio |
-| Background music | 12% | Loops for full scene duration |
-| Ambient sound | 6% | Barely audible texture, loops |
-| Transition sting | 45% | Plays once at scene boundary (skipped on scene 1) |
+| Narration (`spec.narration.url` / `scene.audio_path`) | 100% | Per-scene ElevenLabs audio inside Series.Sequence |
+| Background music | 12% | Single continuous global track (most-common URL across scenes), loop |
+| Ambient sound | 6% | Single continuous global track (most-common URL across scenes), loop |
+| Transition sting | removed | Removed from composition — kept null in spec data for compat |
+
+**Audio tag architecture (updated):**
+- Music and ambient render as two global `<Audio>` tags outside `<Series>` — they never remount between scenes
+- Per-scene narration adds 1 tag per scene inside the sequence
+- Total tags = `scenes.length + 2` — resolves the `Html5Audio limit 5` error for any video length
+- `numberOfSharedAudioTags={256}` set on `<Player>` in `VideoPlayer.jsx` as belt-and-suspenders headroom
+- `mostCommon(urls)` picks the most-used music/ambient URL when scenes have different moods
 
 **Files added:**
 - `server/config/musicMoods.js` — `moodMap` (9 moods: tense/triumphant/somber/neutral/dramatic/reflective/anticipatory/institutional/intimate) each with `musicQuery`, `musicTags`, `ambientCategory`, `transitionSting`. `categoryAmbientMap` mapping 11 categories to ambient keys.

@@ -28,6 +28,13 @@ export function computeLayout(scenes) {
 // Only render Audio when the src is a routable URL (not a bare filesystem path)
 const isValidUrl = (src) => !!src && (src.startsWith('/') || src.startsWith('http'))
 
+// Return the most frequently occurring value in an array (picks one music/ambient URL for the whole video)
+function mostCommon(arr) {
+  if (!arr.length) return null
+  const freq = arr.reduce((map, val) => { map[val] = (map[val] || 0) + 1; return map }, {})
+  return Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0]
+}
+
 // ── SceneRenderer — per-scene dispatch ───────────────────────────────────────
 function SceneRenderer({ scene, imagePath, selectedClip, globalSettings }) {
   if (!scene) return <PlaceholderScene scene={{ scene_id: 'unknown' }} />
@@ -85,7 +92,20 @@ export function Documentary({
     if (validSceneIds.has(spec.scene_id)) audioSpecMap[spec.scene_id] = spec
   })
 
-  console.log('[Documentary] scenes:', scenes.length, 'audioSpecs valid:', Object.keys(audioSpecMap).length, '/', audioSpecs.length)
+  // Derive a single music and ambient URL to play continuously under the whole video.
+  // Music and ambient loop — they don't need to remount per scene. Using one global
+  // track per layer reduces audio tags from 4×N down to N+2 (narration per scene + 2 global).
+  const allSpecs      = Object.values(audioSpecMap)
+  const musicUrls     = allSpecs.map(s => s.music?.url).filter(Boolean)
+  const ambientUrls   = allSpecs.map(s => s.ambient?.url).filter(Boolean)
+  const primaryMusic  = mostCommon(musicUrls)
+  const primaryAmbient = mostCommon(ambientUrls)
+  const musicVolume   = allSpecs.find(s => s.music?.volume)?.music?.volume  || 0.12
+  const ambientVolume = allSpecs.find(s => s.ambient?.volume)?.ambient?.volume || 0.06
+
+  console.log('[Documentary] scenes:', scenes.length,
+    'audioSpecs valid:', allSpecs.length, '/', audioSpecs.length,
+    'music:', !!primaryMusic, 'ambient:', !!primaryAmbient)
 
   if (!scenes.length) {
     return (
@@ -105,16 +125,24 @@ export function Documentary({
       {/* Global uploaded narration track (from ExportPanel audio upload) */}
       {audio?.path && <NarrationTrack audio={audio} />}
 
+      {/* Continuous background music — single track under the entire video.
+          Avoids remounting an Audio tag on every scene transition. */}
+      {isValidUrl(primaryMusic) && (
+        <Audio src={primaryMusic} volume={musicVolume} loop startFrom={0} />
+      )}
+
+      {/* Continuous ambient sound — single looping track under the entire video. */}
+      {isValidUrl(primaryAmbient) && (
+        <Audio src={primaryAmbient} volume={ambientVolume} loop startFrom={0} />
+      )}
+
+      {/* Scene sequences — visual layer + per-scene narration only.
+          Total audio tags = scenes.length + 2 (music + ambient), well within any limit. */}
       <Series>
-        {scenes.map((scene, index) => {
+        {scenes.map((scene) => {
           const durationFrames = Math.max(Math.round((scene.duration_seconds || 5) * fps), 30)
           const spec           = audioSpecMap[scene.scene_id] || null
-
-          // Normalise audio src — only render Audio when the URL is routable
-          const narrationUrl = spec?.narration?.url || scene.audio_path || null
-          const musicUrl     = spec?.music?.url     || null
-          const ambientUrl   = spec?.ambient?.url   || null
-          const stingUrl     = spec?.sting?.url     || null
+          const narrationUrl   = spec?.narration?.url || scene.audio_path || null
 
           return (
             <Series.Sequence key={scene.scene_id} durationInFrames={durationFrames}>
@@ -129,9 +157,7 @@ export function Documentary({
                   />
                 </ErrorBoundaryScene>
 
-                {/* ── Audio layers — outside error boundary ── */}
-
-                {/* Layer 1: Per-scene ElevenLabs narration */}
+                {/* Per-scene narration — fades out in final 9 frames */}
                 {isValidUrl(narrationUrl) && (
                   <Audio
                     src={narrationUrl}
@@ -144,37 +170,6 @@ export function Documentary({
                       }
                       return 1.0
                     }}
-                  />
-                )}
-
-                {/* Layer 2: Background music (12% volume, cross-fade) */}
-                {isValidUrl(musicUrl) && (
-                  <Audio
-                    src={musicUrl}
-                    volume={(frame) => {
-                      const fade    = 15
-                      const fadeIn  = Math.min(frame / Math.max(fade, 1), 1)
-                      const fadeOut = Math.min((durationFrames - frame) / Math.max(fade, 1), 1)
-                      return (spec.music.volume || 0.12) * Math.min(fadeIn, fadeOut)
-                    }}
-                    loop
-                  />
-                )}
-
-                {/* Layer 3: Ambient sound (6%, looping) */}
-                {isValidUrl(ambientUrl) && (
-                  <Audio
-                    src={ambientUrl}
-                    volume={spec.ambient.volume || 0.06}
-                    loop
-                  />
-                )}
-
-                {/* Layer 4: Transition sting (skip scene 0 — no incoming transition) */}
-                {isValidUrl(stingUrl) && index > 0 && (
-                  <Audio
-                    src={stingUrl}
-                    volume={spec.sting.volume || 0.45}
                   />
                 )}
               </AbsoluteFill>

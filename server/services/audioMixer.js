@@ -1,16 +1,12 @@
 const path = require('path')
 const fs   = require('fs')
 
-const transitionStings = require('../config/transitionStings')
-
-const STINGS_DIR  = path.resolve(__dirname, '../../library/stings')
-const MUSIC_DIR   = path.resolve(__dirname, '../../library/music')
+const MUSIC_DIR = path.resolve(__dirname, '../../library/music')
 
 const VOLUME_LEVELS = {
   narration: 1.0,
   music:     0.12,
   ambient:   0.06,
-  sting:     0.45,
 }
 
 async function buildSceneAudioSpec(scene) {
@@ -27,7 +23,6 @@ async function buildSceneAudioSpec(scene) {
     narration: scene.audio_path ? { path: scene.audio_path, url: scene.audio_path, volume: VOLUME_LEVELS.narration } : null,
     music:     null,
     ambient:   null,
-    sting:     null,
   }
 
   // Music — ElevenLabs AI, cached per mood
@@ -48,25 +43,8 @@ async function buildSceneAudioSpec(scene) {
     console.warn(`[mixer] ambient failed for scene ${scene.scene_id}:`, err.message)
   }
 
-  // Sting — Freesound CC0, from pre-downloaded cache
-  try {
-    const stingKey  = moodCfg.transitionSting || 'neutral_sting'
-    const sting     = transitionStings[stingKey]
-    if (sting) {
-      const stingPath = path.join(STINGS_DIR, sting.filename)
-      if (fs.existsSync(stingPath)) {
-        spec.sting = {
-          path:     stingPath,
-          url:      `/library/stings/${sting.filename}`,
-          volume:   VOLUME_LEVELS.sting,
-          filename: sting.filename,
-          duration: sting.duration,
-        }
-      }
-    }
-  } catch (err) {
-    console.warn(`[mixer] sting failed for scene ${scene.scene_id}:`, err.message)
-  }
+  // Stings removed — composition now uses continuous global music/ambient tracks
+  // rather than per-scene audio. Sting field kept null for backward compat.
 
   return spec
 }
@@ -96,7 +74,6 @@ function buildProjectAudioSpecsCached(scenes) {
       narration: scene.audio_path ? { path: scene.audio_path, url: scene.audio_path, volume: VOLUME_LEVELS.narration } : null,
       music:     mExists ? { path: mFile, url: entry.url, volume: VOLUME_LEVELS.music, loop: true, filename: path.basename(mFile) } : null,
       ambient:   null,
-      sting:     null,
     }
   })
 }
