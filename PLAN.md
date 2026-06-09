@@ -1799,3 +1799,64 @@ FREESOUND_API_KEY=your_freesound_api_key_here
 - [ ] Ambient SSE stream uses Freesound API when key set; falls back to yt-dlp when key missing
 - [ ] `pixabayMusic.js` is gone — no 404 or require error on server start
 - [ ] AudioPanel has no Pixabay text anywhere
+
+---
+
+## Session 10 — Narration Sync, Crossfade Transitions, 6-Stage Wizard UI
+**Commit:** `feature: narration sync, crossfade transitions, 6-stage wizard UI`
+**Date:** 2026-06-09
+
+### Fix 1 — Narration Duration Sync
+**Problem:** Scene durations were estimated from word counts. When ElevenLabs generated audio at a different pace, the video cut off narration mid-sentence.
+
+**Solution:**
+- `server/services/elevenlabs.js`: silence padding changed from 300ms/300ms to **100ms start / 600ms end** (`adelay=100|100,apad=pad_dur=0.6`) giving a more natural tail buffer; codec explicitly set to `libmp3lame` for correct MP3 output
+- `server/routes/voiceover.js`: after saving each audio file, `getAudioDuration()` (ffprobe) measures the real length; `scene_done` SSE event now includes both `audio_duration` (raw) and `scene_duration` (`audioDuration + 0.8` tail buffer)
+- `POST /api/voiceover/sync-timings` endpoint: re-reads all audio files from disk and returns updated scenes with measured `audio_duration` and `duration_seconds`; authoritative source of truth
+- `VoiceoverPanel.jsx`: `scene_done` handler reads `audio_duration` + `scene_duration` from event; `finally` block calls `sync-timings` after every generation run and propagates updated scenes via `onScenesChange`
+- `VideoCreator.jsx` `handleAudioGenerated`: uses `sceneDuration` from event when available; falls back to `audioDuration + 0.8`
+
+**Result:** Scene durations are always derived from actual audio length, not estimates. The sync-timings call after "Generate All" guarantees consistency even if SSE events race.
+
+### Fix 2 — Crossfade Transitions
+**Problem:** Remotion used hard cuts between scenes, which looked abrupt.
+
+**Solution:**
+- Installed `@remotion/transitions@^4.0.474` in `remotion/`
+- Rewrote `remotion/src/compositions/Documentary.jsx` to use `TransitionSeries` with `fade()` presentation (`springTiming({ durationInFrames: 12, config: { damping: 200 } })`)
+- Used `flatMap` to interleave `TransitionSeries.Sequence` and `TransitionSeries.Transition` children (flat array — `TransitionSeries` requires no wrapping fragments)
+- `calculateDocumentaryDuration` deducts `(n-1) * 12` frames from total so `calculateMetadata` reports the correct length
+- `VideoPlayer.jsx` `totalFrames` useMemo also deducts the same overlap so the player scrubber matches
+
+**Key implementation detail:** `TRANSITION_FRAMES = 12` (0.4s at 30fps). Total duration = sum(sceneDurations) − (n−1)×12 frames.
+
+### Fix 3 — 6-Stage Wizard UI
+**Problem:** VideoCreator.jsx was a single page with all panels collapsed/expanded ad hoc. Users had no clear sense of progress or flow.
+
+**Solution — files created:**
+- `client/src/hooks/useWizardState.js`: manages 6 steps (`script/scenes/visuals/voice/audio/export`); localStorage persisted (`vorta_wizard_step`, `vorta_wizard_completed`); `goTo` gated by `isAccessible` (only completed or prior steps); `goNext` marks current step complete then advances; `resetWizard` clears all state
+- `client/src/components/video-creator/WizardNav.jsx`: horizontal step bar with numbered circles (✓ when complete), blue current, dimmed/locked when inaccessible; connector lines colored by completion
+- `client/src/pages/wizard/ScriptStep.jsx`: script input + "Use existing scenes →" shortcut
+- `client/src/pages/wizard/ScenesStep.jsx`: SceneGrid + overlay review banner + Back/Next
+- `client/src/pages/wizard/VisualsStep.jsx`: Generate All button + progress + SceneGrid + Back/Next
+- `client/src/pages/wizard/VoiceStep.jsx`: VoiceoverPanel (`isOpen` always true) + Back/Next
+- `client/src/pages/wizard/AudioStep.jsx`: AudioPanel + Back/Next
+- `client/src/pages/wizard/ExportStep.jsx`: ExportPanel + Back only
+
+**VideoCreator.jsx changes:**
+- Added `const wizard = useWizardState()` + imported all step components
+- `handleAnalyze` success → `wizard.markComplete('script'); wizard.goNext()`
+- `handleClearSession` → `wizard.resetWizard()`
+- Replaced entire return statement with wizard layout: `WizardNav` + sticky 240px mini-player (on all steps except script when scenes exist) + `renderStep()` switch + global modals unchanged
+- Removed now-unused direct imports of `ScriptInput`, `SceneGrid`, `VoiceoverPanel`, `AudioPanel`, `ExportPanel` (all moved into step files)
+
+**Testing checklist:**
+- [ ] WizardNav shows 6 steps at top; completed steps show green ✓
+- [ ] Analyze → auto-advances to Scenes step with green ✓ on Script
+- [ ] Back/Next buttons on each step; "Use existing scenes →" on Script step when scenes loaded
+- [ ] Mini-player bar visible on steps 2–6 when scenes exist
+- [ ] Generate voiceovers → terminal shows real `audio_duration` + `scene_duration` in scene_done event
+- [ ] "Sync timings" button → `duration_seconds` updated to match actual audio
+- [ ] Remotion player → scrub between scenes → 0.4s fade crossfade visible
+- [ ] Narration plays to natural end before scene changes (600ms tail buffer)
+- [ ] Clear session → wizard resets to step 1
