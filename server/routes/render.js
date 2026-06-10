@@ -6,6 +6,39 @@ const { spawn } = require('child_process');
 // In-memory render job store — keyed by projectId
 const renderJobs = new Map();
 
+// ── path helpers ───────────────────────────────────────────────────────────────
+
+const PROJECT_ROOT  = path.resolve(__dirname, '../..');
+const SERVER_PORT   = process.env.PORT || 3001;
+
+// Convert a relative URL like /projects/id/audio/scene_001.mp3 to a full HTTP
+// URL pointing at the Express server.
+//
+// WHY HTTP instead of file:// or absolute path:
+// Remotion CLI spawns headless Chrome which resolves relative URLs like
+// /projects/... against its own bundle server (port 3000), not Express (port
+// 3001) → 404.  Absolute filesystem paths get converted to file:///... which
+// Remotion refuses ("Can only download URLs starting with http:// or https://").
+// Full HTTP URLs with port 3001 are the only form that reliably works.
+function toHttpUrl(url) {
+  if (!url) return null;
+  if (/^https?:\/\//.test(url)) return url;  // already absolute HTTP — return as-is
+  const clean = url.startsWith('/') ? url : `/${url}`;
+  return `http://localhost:${SERVER_PORT}${clean}`;
+}
+
+function absolutifyAudioSpecs(specs) {
+  if (!specs?.length) return specs;
+  return specs.map(spec => ({
+    ...spec,
+    narration: spec.narration ? { ...spec.narration, url: toHttpUrl(spec.narration.url) } : null,
+    music:     spec.music     ? { ...spec.music,     url: toHttpUrl(spec.music.url)     } : null,
+    ambient:   spec.ambient   ? { ...spec.ambient,   url: toHttpUrl(spec.ambient.url)   } : null,
+    sting:     spec.sting     ? { ...spec.sting,     url: toHttpUrl(spec.sting.url)     } : null,
+    overlay_sounds: (spec.overlay_sounds || []).map(os => ({ ...os, url: toHttpUrl(os.url) })),
+  }));
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────────
 
 const q = (p) => `"${p}"`;  // quote a path for shell command
@@ -22,7 +55,6 @@ function broadcast(job, data) {
 
 // Parse Remotion progress lines — handles "X/Y" frame counts and "N%" patterns
 function parseProgress(line, job) {
-  // Strip ANSI escape codes
   const clean = line.replace(/\x1b\[[0-9;]*m/g, '').replace(/[\r\n]/g, '');
   if (!clean.trim()) return false;
 
@@ -30,8 +62,8 @@ function parseProgress(line, job) {
 
   const frameMatch = clean.match(/(\d+)\s*\/\s*(\d+)/);
   if (frameMatch) {
-    const frame      = parseInt(frameMatch[1]);
-    const total      = parseInt(frameMatch[2]);
+    const frame = parseInt(frameMatch[1]);
+    const total = parseInt(frameMatch[2]);
     if (total > 0 && frame <= total) {
       job.progress.frame       = frame;
       job.progress.totalFrames = total;
@@ -68,72 +100,54 @@ router.post('/', async (req, res) => {
     try { existing.process.kill(); } catch {}
   }
 
-  const SERVER_PORT = process.env.PORT || 3001;
+  // ── Build render props with full HTTP URLs ────────────────────────────────
+  // All asset URLs in props must be full http://localhost:PORT/... URLs.
+  // Remotion CLI's headless Chrome resolves relative URLs (/projects/...) against
+  // its own bundle server (port 3000), not the Express server (port 3001).
 
-  // Transform image_path from /projects/... URL to full HTTP URL so Remotion's
-  // headless Chrome can load images from the running Express server
-  const absoluteScenes = scenes.map(scene => ({
+  // Scenes: convert both image_path and audio_path to full HTTP URLs
+  const renderScenes = scenes.map(scene => ({
     ...scene,
-    image_path: scene.image_path
-      ? `http://localhost:${SERVER_PORT}${scene.image_path.startsWith('/') ? '' : '/'}${scene.image_path}`
-      : null,
+    image_path: toHttpUrl(scene.image_path),
+    audio_path: toHttpUrl(scene.audio_path),
   }));
 
-  // Build imagePaths map expected by Documentary composition
+  // imagePaths map for Documentary composition (keyed by scene_id)
   const imagePaths = {};
-  absoluteScenes.forEach(s => {
+  renderScenes.forEach(s => {
     if (s.image_path) imagePaths[s.scene_id] = s.image_path;
   });
 
-  // Transform audio path to HTTP URL if provided
-  const audioProps = audio?.path
-    ? {
-        ...audio,
-        path: `http://localhost:${SERVER_PORT}${audio.path.startsWith('/') ? '' : '/'}${audio.path}`,
-      }
-    : null;
+  // Clips: convert file URLs to full HTTP URLs
+  const renderClips = Object.fromEntries(
+    Object.entries(selectedClips || {}).map(([sceneId, clip]) => [
+      sceneId,
+      clip?.file ? { ...clip, file: toHttpUrl(clip.file) } : clip,
+    ])
+  );
 
-  // Build audio specs for background music / ambient / stings
-  let audioSpecs = []
+  // Uploaded narration audio (ExportPanel upload flow): convert to HTTP URL
+  const audioProps = audio?.path ? { ...audio, path: toHttpUrl(audio.path) } : null;
+
+  // Background music / ambient / stings from cached index
+  let audioSpecs = [];
   try {
-    const { buildProjectAudioSpecsCached } = require('../services/audioMixer')
-    audioSpecs = buildProjectAudioSpecsCached(absoluteScenes)
-    // Rewrite local file paths to HTTP URLs so Remotion headless Chrome can fetch them
-    audioSpecs = audioSpecs.map(spec => ({
-      ...spec,
-      music: spec.music ? {
-        ...spec.music,
-        url: spec.music.url
-          ? `http://localhost:${SERVER_PORT}${spec.music.url}`
-          : null,
-      } : null,
-      ambient: spec.ambient ? {
-        ...spec.ambient,
-        url: spec.ambient.url
-          ? `http://localhost:${SERVER_PORT}${spec.ambient.url}`
-          : null,
-      } : null,
-      sting: spec.sting ? {
-        ...spec.sting,
-        url: spec.sting.url
-          ? `http://localhost:${SERVER_PORT}${spec.sting.url}`
-          : null,
-      } : null,
-    }))
+    const { buildProjectAudioSpecsCached } = require('../services/audioMixer');
+    audioSpecs = absolutifyAudioSpecs(buildProjectAudioSpecsCached(renderScenes));
   } catch (err) {
-    console.warn('[render] audioSpecs build failed (non-fatal):', err.message)
+    console.warn('[render] audioSpecs build failed (non-fatal):', err.message);
   }
 
   const propsData = {
-    scenes:        absoluteScenes,
+    scenes:        renderScenes,
     imagePaths,
-    selectedClips: selectedClips || {},
+    selectedClips: renderClips,
     audio:         audioProps,
     audioSpecs,
   };
 
   // Write project files
-  const projectDir = path.resolve(__dirname, `../../projects/${projectId}`);
+  const projectDir = path.resolve(PROJECT_ROOT, `projects/${projectId}`);
   const outputDir  = path.join(projectDir, 'output');
   const propsPath  = path.join(projectDir, 'scenes.json');
   const outputPath = path.join(outputDir, 'final.mp4');
@@ -145,13 +159,12 @@ router.post('/', async (req, res) => {
     return res.status(500).json({ error: 'Failed to write project files', details: err.message });
   }
 
-  const remotionDir  = path.resolve(__dirname, '../../remotion');
+  const remotionDir = path.resolve(PROJECT_ROOT, 'remotion');
 
   // Load render settings from defaults.json
   let renderDefaults = {};
   try { renderDefaults = require('../config/defaults.json').render || {}; } catch {}
   const concurrency = Math.max(1, parseInt(renderDefaults.concurrency) || 1);
-  const fps         = [24, 30, 60].includes(parseInt(renderDefaults.fps)) ? parseInt(renderDefaults.fps) : 30;
 
   const cmd = `npx remotion render src/index.jsx Documentary ${q(outputPath)} --props ${q(propsPath)} --overwrite --concurrency=${concurrency}`;
 
@@ -166,18 +179,17 @@ router.post('/', async (req, res) => {
   });
 
   const job = {
-    process:  proc,
-    progress: { percent: 0, frame: 0, totalFrames: 0 },
-    status:   'rendering',
+    process:    proc,
+    progress:   { percent: 0, frame: 0, totalFrames: 0 },
+    status:     'rendering',
     outputPath,
-    stderr:   '',
+    stderr:     '',
     sseClients: new Set(),
   };
   renderJobs.set(projectId, job);
 
   const handleChunk = (chunk) => {
-    const text  = chunk.toString();
-    const lines = text.split(/\r?\n/);
+    const lines = chunk.toString().split(/\r?\n/);
     lines.forEach(line => {
       if (parseProgress(line, job)) {
         broadcast(job, {
@@ -258,7 +270,6 @@ router.get('/progress/:projectId', (req, res) => {
     return;
   }
 
-  // Send current snapshot immediately so the client doesn't wait for next event
   sendSSE(res, {
     type:        'progress',
     percent:     job.progress.percent,

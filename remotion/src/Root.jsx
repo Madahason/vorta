@@ -8,11 +8,11 @@ import { Documentary, calculateDocumentaryDuration } from './compositions/Docume
 
 // Load all fonts once at module level — prevents the "too many requests" warning
 // that occurs when overlay components each call loadFont() for the same family.
-loadInter()
-loadMontserrat()
-loadPlayfair()
-loadDMSans()
-loadBebas()
+loadInter(     undefined, { ignoreTooManyRequestsWarning: true })
+loadMontserrat(undefined, { ignoreTooManyRequestsWarning: true })
+loadPlayfair(  undefined, { ignoreTooManyRequestsWarning: true })
+loadDMSans(    undefined, { ignoreTooManyRequestsWarning: true })
+loadBebas(     undefined, { ignoreTooManyRequestsWarning: true })
 import AnimatedCounter from './components/AnimatedCounter'
 import TimelineBar     from './components/TimelineBar'
 import ComparisonChart from './components/ComparisonChart'

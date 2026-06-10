@@ -29,7 +29,8 @@ export function computeLayout(scenes) {
   return { startFrames, totalFrames: cursor }
 }
 
-// Only render Audio when src is a routable URL (not a bare filesystem path)
+// Accept relative URLs (/...) and HTTP URLs — Windows absolute paths are not
+// supported by Remotion headless Chrome; render.js always converts to HTTP URLs.
 const isValidUrl = (src) => !!src && (src.startsWith('/') || src.startsWith('http'))
 
 // Return most frequently occurring value in array (picks one music/ambient URL for whole video)
