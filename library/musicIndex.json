@@ -1,0 +1,20 @@
+{
+  "tense": {
+    "id": 332246,
+    "name": "Drone - 15.12.2015",
+    "filename": "tense_332246.mp3",
+    "source": "freesound"
+  },
+  "somber": {
+    "id": 770181,
+    "name": "Small Heater (box of me).wav",
+    "filename": "somber_770181.mp3",
+    "source": "freesound"
+  },
+  "anticipatory": {
+    "id": 271187,
+    "name": "Glissando Tremolo Vibes.wav",
+    "filename": "anticipatory_271187.mp3",
+    "source": "freesound"
+  }
+}

@@ -1,6 +1,18 @@
 const { ElevenLabsClient } = require('@elevenlabs/elevenlabs-js')
+const { execSync } = require('child_process')
 const fs   = require('fs')
 const path = require('path')
+
+function getAudioDuration(filePath) {
+  try {
+    const out = execSync(
+      `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${filePath}"`,
+      { timeout: 10000 }
+    ).toString().trim()
+    const d = parseFloat(out)
+    return isNaN(d) ? null : d
+  } catch { return null }
+}
 
 const MUSIC_DIR   = path.resolve(__dirname, '../../library/music')
 const AMBIENT_DIR = path.resolve(__dirname, '../../library/ambient')
@@ -34,14 +46,15 @@ function getCached(indexPath, dir, key) {
 }
 
 const MUSIC_PROMPTS = {
-  tense:         'Dark cinematic underscore, low strings, tension building, no melody, documentary background music, suitable for narration, 60 seconds',
-  triumphant:    'Epic orchestral cinematic music, strings and brass, triumphant feeling, documentary background, suitable for narration overlay, 60 seconds',
-  somber:        'Melancholic piano and strings, slow tempo, emotional depth, cinematic documentary underscore, no vocals, 60 seconds',
-  neutral:       'Subtle cinematic documentary background music, ambient orchestral, neutral mood, suitable for narration, unobtrusive, 60 seconds',
-  dramatic:      'Intense cinematic dramatic orchestral music, documentary background, building tension, no vocals, 60 seconds',
-  reflective:    'Gentle reflective piano ambient music, thoughtful mood, cinematic documentary underscore, slow and spacious, 60 seconds',
-  anticipatory:  'Suspenseful building cinematic music, rising tension, documentary underscore, orchestral ambient, 60 seconds',
-  institutional: 'Serious corporate cinematic documentary background music, neutral orchestral, professional tone, 60 seconds',
+  tense:         'Dark cinematic underscore, low strings, tension building, no melody, documentary background music, suitable for narration overlay, 60 seconds duration, loops cleanly',
+  triumphant:    'Epic orchestral cinematic music, strings and brass, triumphant feeling, documentary background, suitable for narration overlay, 60 seconds duration, loops cleanly',
+  somber:        'Melancholic piano and strings, slow tempo, emotional depth, cinematic documentary underscore, no vocals, 60 seconds duration, loops cleanly',
+  neutral:       'Subtle cinematic documentary background music, ambient orchestral, neutral mood, suitable for narration, unobtrusive, 60 seconds duration, loops cleanly',
+  dramatic:      'Intense cinematic dramatic orchestral music, documentary background, building tension, no vocals, 60 seconds duration, loops cleanly',
+  reflective:    'Gentle reflective piano ambient music, thoughtful mood, cinematic documentary underscore, slow and spacious, 60 seconds duration, loops cleanly',
+  anticipatory:  'Suspenseful building cinematic music, rising tension, documentary underscore, orchestral ambient, 60 seconds duration, loops cleanly',
+  institutional: 'Serious corporate cinematic documentary background music, neutral orchestral, professional tone, 60 seconds duration, loops cleanly',
+  intimate:      'Quiet intimate piano solo, close mic, subtle room tone, cinematic documentary underscore, no vocals, 60 seconds duration, loops cleanly',
 }
 
 async function generateMusic(mood, customPrompt = null) {
@@ -61,9 +74,17 @@ async function generateMusic(mood, customPrompt = null) {
   if (buffer.length < 10000) throw new Error(`Generated music too small: ${buffer.length} bytes`)
   fs.writeFileSync(outPath, buffer)
 
+  // Validate actual audio duration — ElevenLabs sometimes ignores duration_seconds
+  // and returns a 1-2 second clip. Reject and delete if under 10 seconds.
+  const actualDuration = getAudioDuration(outPath)
+  console.log(`[elevenlabs-music] generated: ${filename} (${Math.round(buffer.length / 1024)} KB, ${actualDuration?.toFixed(1) ?? '?'}s)`)
+  if (actualDuration !== null && actualDuration < 10) {
+    fs.unlinkSync(outPath)
+    throw new Error(`Generated music too short: ${actualDuration.toFixed(1)}s (expected ≥10s) for mood: ${mood}`)
+  }
+
   const result = { path: outPath, url: `/library/music/${filename}` }
   saveIndex(MUSIC_INDEX_PATH, cacheKey, { filename, url: result.url, mood, prompt })
-  console.log(`[elevenlabs-music] generated: ${filename} (${Math.round(buffer.length / 1024)} KB)`)
   return result
 }
 

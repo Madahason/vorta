@@ -38,11 +38,9 @@ export function VideoPlayer({ scenes, imagePaths, selectedClips, globalSettings,
   const totalFrames = useMemo(() => {
     if (!scenes?.length) return 30
     const TRANSITION_FRAMES = 12
-    const base      = scenes.reduce((sum, s) => sum + Math.round((s.duration_seconds || 5) * fps), 0)
-    const deduction = Math.max(0, scenes.length - 1) * TRANSITION_FRAMES
-    const t = Math.max(base - deduction, 30)
-    console.log('[VideoPlayer] scenes:', scenes?.length, 'totalFrames:', t, '(incl. crossfade deduction)')
-    return t
+    const raw     = scenes.reduce((sum, s) => sum + Math.max(Math.round((s.duration_seconds || 5) * fps), 30), 0)
+    const overlap = Math.max(scenes.length - 1, 0) * TRANSITION_FRAMES
+    return Math.max(raw - overlap, 30)
   }, [scenes, fps])
 
   if (!scenes?.length) return null
@@ -66,7 +64,7 @@ export function VideoPlayer({ scenes, imagePaths, selectedClips, globalSettings,
       clickToPlay={!autoPlay}
       autoPlay={autoPlay}
       doubleClickToFullscreen
-      numberOfSharedAudioTags={10}
+      numberOfSharedAudioTags={20}
       {...(initialFrame !== undefined ? { initialFrame } : {})}
     />
   )

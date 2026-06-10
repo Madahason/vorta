@@ -10,12 +10,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@remotion/player": "^4.0.472",
+    "@remotion/player": "4.0.474",
+    "@remotion/transitions": "4.0.474",
     "lucide-react": "^1.17.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-moveable": "^0.56.0",
-    "remotion": "^4.0.472"
+    "remotion": "4.0.474"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
