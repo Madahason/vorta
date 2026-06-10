@@ -1234,18 +1234,34 @@ VoiceoverPanel → POST /api/voiceover/generate (SSE)
 - 300ms silence padding added to start and end of every audio file (non-fatal if ffmpeg unavailable)
 - Future Claude analyses will produce TTS-safe excerpts (complete thoughts, proper punctuation, 15-60 words)
 
-### Fix 11 — Background music and sound effects system ✅ Complete
+### Fix 11 — Background music and sound effects system ✅ Complete (ElevenLabs rewrite)
 
-**Goal:** Add three-layer documentary audio architecture (background music + ambient loops + transition stings) rendered in Remotion alongside per-scene narration.
+**Goal:** Add four-layer documentary audio architecture (background music + ambient loops + transition stings + overlay sounds) rendered in Remotion alongside per-scene narration.
+
+> **Note:** The original implementation used Pixabay (music), Freesound (ambient/stings), and Free Music Archive as fallback. All third-party audio sources were subsequently replaced by ElevenLabs APIs. See Fixes 1, 2, 5, and 6 (marked superseded below) for the intermediate history.
+
+**Current audio sources (all ElevenLabs):**
+| Layer | Service file | API |
+|-------|-------------|-----|
+| Background music | `elevenLabsAudio.js` | ElevenLabs Music API |
+| Ambient loops | `elevenLabsSound.js` | ElevenLabs Sound Effects API |
+| Transition stings | `elevenLabsSound.js` | ElevenLabs Sound Effects API |
+| Overlay sounds | `elevenLabsSound.js` | ElevenLabs Sound Effects API |
+| Narration | `elevenlabs.js` | ElevenLabs TTS |
 
 **Architecture:**
 ```
-AudioPanel → POST /api/audio/build-specs[?download=1]
+AudioPanel → POST /api/audio/build-specs
 → server/services/audioMixer.js → buildProjectAudioSpecs / buildProjectAudioSpecsCached
-→ server/services/pixabayMusic.js → Pixabay Music API → library/music/
-→ server/services/ambientLibrary.js → library/ambient/ (user-supplied Freesound CC0 files)
-→ server/config/transitionStings.js → library/stings/ (user-supplied sting files)
+→ server/services/elevenLabsAudio.js → ElevenLabs Music API → library/music/
+→ server/services/elevenLabsSound.js → ElevenLabs Sound Effects API → library/ambient/ + library/stings/ + library/overlay-sounds/
+→ server/services/soundLibrary.js → library/soundIndex.json (persistent cache index)
 → audioSpecs[] passed to VideoPlayer → Documentary.jsx → 4 audio layers per scene
+
+Sound pre-generation (one-time SSE):
+POST /api/audio/prewarm → generateAllStings() (6) + generateAllAmbient() (12) + generateAllOverlaySounds() (11)
+→ All 29 sounds indexed in library/soundIndex.json
+→ Subsequent renders served from cache — no re-generation
 ```
 
 **Volume levels:**
@@ -1263,61 +1279,58 @@ AudioPanel → POST /api/audio/build-specs[?download=1]
 - `numberOfSharedAudioTags={256}` set on `<Player>` in `VideoPlayer.jsx` as belt-and-suspenders headroom
 - `mostCommon(urls)` picks the most-used music/ambient URL when scenes have different moods
 
-**Files added:**
-- `server/config/musicMoods.js` — `moodMap` (9 moods: tense/triumphant/somber/neutral/dramatic/reflective/anticipatory/institutional/intimate) each with `musicQuery`, `musicTags`, `ambientCategory`, `transitionSting`. `categoryAmbientMap` mapping 11 categories to ambient keys.
-- `server/config/transitionStings.js` — 6 stings: `low_drone`, `rise_sting`, `neutral_sting`, `impact_sting`, `soft_fade`, `whoosh`. Files go in `library/stings/`.
-- `server/services/pixabayMusic.js` — `searchMusic(query, mood)`, `downloadTrack(track)`, `getMusicForMood(mood, query)` (cache-first), `getCachedTrackForMood(mood)` (sync, no API). Uses native `fetch` (Node 18+). Downloads to `library/music/`, indexes in `library/musicIndex.json`.
-- `server/services/ambientLibrary.js` — 13 ambient categories, each with `filename`, `description`, `freesoundQuery`, CC0 Freesound search URL. `getAmbientForCategory`, `getAmbientForMood`, `listAmbientFiles`.
-- `server/services/audioMixer.js` — `VOLUME_LEVELS` constant, `buildProjectAudioSpecs` (async, downloads unique moods via `Promise.allSettled`), `buildProjectAudioSpecsCached` (sync, local cache only).
-- `server/routes/audio.js` — rewritten to add: `GET /status` (Pixabay key, cached tracks, ambient/sting availability), `POST /build-specs[?download=1]`, `POST /search-music`, `POST /download-music`, `GET /ambient-list`. Keeps existing `POST /upload` and `GET /info`.
-- `client/src/components/video-creator/AudioPanel.jsx` (NEW) — collapsible panel with: Pixabay connection status, Build Music Plan button (cached or download from Pixabay), per-mood download buttons, per-scene music assignment list, global volume sliders (music/ambient/sting), ambient availability grid (13 categories), sting list with preview buttons, ambient download guide modal (Freesound links per file).
-- `remotion/src/compositions/Documentary.jsx` — added `audioSpecs` prop + `audioSpecMap` lookup. Four audio layers per scene: narration (existing with 300ms fade-out), background music (12%, cross-fade 15 frames, loop), ambient (6%, loop), sting (45%, index > 0 only).
-- `client/src/components/video-creator/VideoPlayer.jsx` — added `audioSpecs` prop, passed into `inputProps`.
-- `client/src/pages/VideoCreator.jsx` — imported `AudioPanel`, added `audioSpecs` and `audioVolumes` state, rendered `<AudioPanel>` between VoiceoverPanel and ExportPanel, passed `audioSpecs` to all VideoPlayer instances.
-- `client/src/components/video-creator/ExportPanel.jsx` — added `audioSpecs` prop, 3 new checklist rows: Background music, Ambient sound, Transition stings.
+**Current service files:**
+- `server/services/elevenlabs.js` — ElevenLabs TTS: `getVoices()`, `generateAudio()`, `getAudioDuration()` (ffprobe). Generates per-scene narration to `projects/{id}/audio/scene_{id}.mp3`.
+- `server/services/elevenLabsAudio.js` — ElevenLabs Music API: `generateMusicForMood(mood)`, cache-first lookup, saves to `library/music/`.
+- `server/services/elevenLabsSound.js` — ElevenLabs Sound Effects API: `generateAllStings()` (6 stings), `generateAllAmbient()` (12 ambient loops), `generateAllOverlaySounds()` (11 overlay sounds). All indexed via `soundLibrary.js`.
+- `server/services/soundLibrary.js` — Persistent sound index (`library/soundIndex.json`): `addToLibrary(entry)`, `searchLibrary(type, category)`, `searchLibraryByType(type)`, `incrementUsage(id)`, `removeFromLibrary(id)`, `getLibraryStats()`. Exports directory constants: `STINGS_DIR`, `AMBIENT_DIR`, `OVERLAY_DIR`, `MUSIC_DIR`.
+- `server/services/audioMixer.js` — `VOLUME_LEVELS` constant, `buildProjectAudioSpecs` (async, calls `getSting()` only for `scene.use_sting === true`), `buildProjectAudioSpecsCached` (sync, local cache only).
+- `server/config/musicMoods.js` — `moodMap` (9 moods: tense/triumphant/somber/neutral/dramatic/reflective/anticipatory/institutional/intimate) each with `ambientCategory`. `categoryAmbientMap` mapping 11 categories to ambient keys.
+- `server/routes/audio.js` — `GET /status` (ElevenLabs connection, library stats), `POST /build-specs`, `POST /prewarm` (SSE — generates all 29 sounds sequentially).
+- `client/src/components/video-creator/AudioPanel.jsx` — collapsible panel: ElevenLabs connection status, Prewarm Library button with SSE progress, per-scene audio assignment, global volume sliders (music/ambient), library stats.
+- `remotion/src/compositions/Documentary.jsx` — `audioSpecs` prop + `audioSpecMap` lookup. Audio layers: narration (100%, per-scene), background music (12%, global loop), ambient (6%, global loop), sting (45%, only when `use_sting: true`).
+- `client/src/components/video-creator/VideoPlayer.jsx` — `audioSpecs` prop, passed into `inputProps`.
+- `client/src/pages/VideoCreator.jsx` — `audioSpecs` and `audioVolumes` state, `<AudioPanel>` between VoiceoverPanel and ExportPanel.
+- `client/src/components/video-creator/ExportPanel.jsx` — `audioSpecs` prop, checklist rows: Background music, Ambient sound, Stings.
 
-**Directory structure:**
+**Sound library directory structure:**
 ```
 library/
-  music/           ← Pixabay tracks auto-downloaded (MP3)
-  musicIndex.json  ← mood → { filename, duration, title, source }
-  ambient/         ← User supplies Freesound CC0 files (13 expected filenames)
-  stings/          ← User supplies sting files (6 expected filenames)
+  soundIndex.json       ← persistent index of all ElevenLabs-generated sounds
+  music/                ← background music per mood (ElevenLabs Music API)
+  ambient/              ← ambient loops per category (ElevenLabs Sound Effects API, 12 loops)
+  stings/               ← transition stings (ElevenLabs Sound Effects API, 6 stings)
+  overlay-sounds/       ← overlay entry/active sounds (ElevenLabs Sound Effects API, 11 sounds)
 ```
 
-**Ambient files (user must supply from Freesound.org CC0):**
-All 13 expected at `library/ambient/`: `trading_floor.mp3`, `office_ambient.mp3`, `city_traffic.mp3`, `data_center_hum.mp3`, `courtroom_silence.mp3`, `factory_floor.mp3`, `crowd_murmur.mp3`, `government_hall.mp3`, `tension_drone.mp3`, `soft_ambient.mp3`, `press_room.mp3`, `airport_ambient.mp3`, `industrial_hum.mp3`. The AudioPanel download guide shows per-file Freesound search URLs.
+**ElevenLabs audio APIs:**
+- `ELEVENLABS_API_KEY` in `.env` — same key used for TTS narration, no additional key required
+- Music: ElevenLabs Music API generates mood-appropriate background tracks on first use; cached to `library/music/`
+- Sound effects: ElevenLabs Sound Effects API generates ambient loops, stings, and overlay sounds; indexed in `library/soundIndex.json`
+- Pre-warm via `POST /api/audio/prewarm` (SSE): generates all 29 sounds once and caches them — subsequent renders read from disk
 
-**Sting files (user must supply):**
-All 6 expected at `library/stings/`: `sting_low_drone.mp3`, `sting_rise.mp3`, `sting_neutral.mp3`, `sting_impact.mp3`, `sting_soft_fade.mp3`, `sting_whoosh.mp3`.
-
-**Pixabay Music API:**
-- Endpoint: `https://pixabay.com/api/music/`
-- `PIXABAY_API_KEY` in `.env` — free key available at pixabay.com/api/docs/
-- Music is free to use commercially, no attribution required under Pixabay license
-- `previewURL` field is the full downloadable track URL
-- Native `fetch` (Node 18+) used for both API calls and binary downloads — no extra library
+**`use_sting` field:**
+- Claude adds `use_sting: true` to max 1-in-3 scenes at narrative turning points during script analysis
+- `audioMixer` calls `getSting()` only when `scene.use_sting !== false`
+- All other scenes skip the sting layer entirely
 
 **Key implementation details:**
-- `buildProjectAudioSpecs` deduplicates moods before downloading: N scenes with the same mood = 1 Pixabay download
-- `buildProjectAudioSpecsCached` is instant — uses only what's already in `library/musicIndex.json`
-- `GET /library` static route in Express already covers `library/music/`, `library/ambient/`, `library/stings/` — no additional static registrations needed
-- Ambient/sting files are never auto-downloaded — users source them and place them manually; `AudioPanel` shows download guide
+- `buildProjectAudioSpecs` deduplicates moods before generating: N scenes with the same mood = 1 ElevenLabs call
+- `buildProjectAudioSpecsCached` is instant — uses only what's already cached in `library/soundIndex.json`
+- `GET /library` static route in Express covers `library/music/`, `library/ambient/`, `library/stings/`, `library/overlay-sounds/` — no additional static registrations needed
+- All sounds are generated once by `prewarmSoundLibrary()` and served from cache on all subsequent renders
 - Remotion `loop` prop on `<Audio>` handles music/ambient looping in the browser Player preview
 
 **Testing checklist:**
-- [ ] `PIXABAY_API_KEY` in `.env` — AudioPanel shows "Pixabay API connected" status
-- [ ] "Build Music Plan (cached)" builds specs instantly using cached tracks
-- [ ] "Download from Pixabay" fetches tracks for each unique mood in the project
-- [ ] Per-mood download button downloads and caches a single mood track
-- [ ] Volume sliders (music/ambient/sting) update in real time
-- [ ] Ambient availability grid shows correct file presence
-- [ ] Sting preview buttons play the sting file
-- [ ] Download guide modal opens with Freesound links for all 13 ambient categories
-- [ ] Placing an ambient file in `library/ambient/` causes it to show as available on next status poll
-- [ ] `audioSpecs` passed to VideoPlayer — music audible in browser Player preview when a track is cached
+- [ ] `ELEVENLABS_API_KEY` in `.env` — AudioPanel shows ElevenLabs connected status
+- [ ] "Prewarm Library" SSE streams progress for all 29 sound generations
+- [ ] `library/soundIndex.json` populated after prewarm with stings, ambient, and overlay entries
+- [ ] "Build Music Plan (cached)" builds specs instantly using cached sounds
+- [ ] Volume sliders (music/ambient) update in real time
+- [ ] `audioSpecs` passed to VideoPlayer — music audible in browser Player preview when library is primed
 - [ ] ExportPanel checklist shows correct music/ambient/sting counts
 - [ ] Rendered MP4 contains background music at correct volume relative to narration
+- [ ] Scenes with `use_sting: true` include sting audio; others do not
 
 ---
 
@@ -1582,7 +1595,9 @@ Script analysis → Claude generates overlays[] per scene (status: "suggested")
 
 ---
 
-### Fix 1 — Background music: Pixabay download ✅ Complete
+### Fix 1 — Background music: Pixabay download ~~✅ Complete~~ ⚠️ SUPERSEDED
+
+> Superseded by the ElevenLabs Music API rewrite. `pixabayMusic.js` is deleted. Background music is now generated by `elevenLabsAudio.js`.
 
 **Problem:** Pixabay queries returned 0 results; corrupted cached files were silently returned; audioSpecs not wired into render.
 
@@ -1594,7 +1609,9 @@ Script analysis → Claude generates overlays[] per scene (status: "suggested")
 
 ---
 
-### Fix 2 — Ambient sound system ✅ Complete
+### Fix 2 — Ambient sound system ~~✅ Complete~~ ⚠️ SUPERSEDED
+
+> Superseded by the ElevenLabs Sound Effects API rewrite. `ambientLibrary.js` and `freesoundService.js` are deleted. Ambient loops are now generated by `elevenLabsSound.js` and indexed in `library/soundIndex.json`.
 
 **Problem:** Ambient files had to be manually downloaded from Freesound; no automated selection per scene.
 
@@ -1617,188 +1634,69 @@ Script analysis → Claude generates overlays[] per scene (status: "suggested")
 
 ---
 
-### Fix 4 — Audio system resilience ✅ Complete
+## Audio System (Current)
 
-**Problem:** Three audio system failures found during testing: ElevenLabs Generate All button stayed greyed, Pixabay returned HTML instead of JSON, and Claude generated mood names not in `moodMap`.
+All audio is generated by ElevenLabs. No external music or sound APIs beyond ElevenLabs.
 
-**Changes:**
+### Services
+| File | Purpose |
+|------|---------|
+| `server/services/elevenlabs.js` | TTS narration generation |
+| `server/services/elevenLabsAudio.js` | Music generation per mood |
+| `server/services/elevenLabsSound.js` | Stings, ambient, overlay sounds |
+| `server/services/audioMixer.js` | Builds per-scene audio specs |
+| `server/services/soundLibrary.js` | Persistent sound index (soundIndex.json) |
+| `server/services/ambientSelector.js` | Claude selects ambient category per scene |
 
-**ElevenLabs SDK resilience (`server/routes/voiceover.js`):**
-- Status endpoint now tries two SDK shapes: `client.user.getSubscription()` then `client.user.subscription.get()` with `typeof` guards
-- Falls back to `voices.getAll()` ping if subscription call throws entirely
-- Normalizes field names: `characterCount ?? character_count`, `characterLimit ?? character_limit`
+### Deleted services (no longer exist)
+- `pixabayMusic.js` — removed
+- `freeMusicArchive.js` — removed
+- `freesoundService.js` — removed
+- `youtubeAudioLibrary.js` — removed
 
-**Pixabay HTML fix (`server/services/pixabayMusic.js`):**
-- Replaced `node-fetch` / native `fetch` with Node's built-in `https` module (`httpGetJson`, `httpGetToFile`)
-- Checks both `content-type` header and `body.trimStart().startsWith('{')` before `JSON.parse`
-- Logs first 200 chars of non-JSON response for debugging
+### Sound library directories
+- `library/music/` — background music per mood (cached)
+- `library/ambient/` — ambient loops per category (cached)
+- `library/stings/` — transition stings (cached)
+- `library/overlay-sounds/` — overlay entry sounds (cached)
+- `library/soundIndex.json` — indexes all generated sounds
 
-**Mood alias system:**
-- `server/config/musicMoods.js` — added 14 mood aliases: `confrontational`, `ominous`, `gravity`, `urgent`, `suspenseful`, `restrictive`, `revelatory`, `revelation`, `hopeful`, `melancholic`, `inspirational`, `celebratory`, `analytical`, `comparative`
-- `server/services/audioMixer.js` — added `getMoodConfig(mood)` with fuzzy keyword fallback (tense/triumph/somber/dramatic word lists)
-- `server/routes/audio.js` — same fuzzy fallback inline in `POST /build-specs`
-- `server/services/claude.js` — restricted mood field in system prompt to 9 canonical values with mapping guide; unknown moods forbidden
-
----
-
-### Fix 5 — YouTube Audio Library music fallback ✅ Complete
-
-**Problem:** Pixabay is the only music source; when `PIXABAY_API_KEY` is missing or Pixabay fails, the audio system has no music.
-
-**Architecture — two-tier fallback:**
-```
-getMusicForMood(mood)
-  → Tier 1: Pixabay (if PIXABAY_API_KEY set)
-      → cache hit: return library/music/{mood}_{id}.mp3
-      → miss: searchMusic → downloadTrack → save
-  → Tier 2: YouTube Audio Library via yt-dlp
-      → cache hit: return library/music/yal_{mood}.mp3
-      → miss: searchYouTubeAudioLibrary → downloadYouTubeAudioTrack → save
-  → throws if both fail
-```
-
-**Files added/changed:**
-
-- `server/services/youtubeAudioLibrary.js` (NEW):
-  - Own `execAsync = promisify(exec)` — does NOT reuse clipDownloader's
-  - `MOOD_QUERIES` map with cinematic search strings for 22 moods
-  - `searchYouTubeAudioLibrary(mood, maxResults=5)` — `yt-dlp ytsearch5:...` with `--print id|||title|||duration|||url --no-download`
-  - `downloadYouTubeAudioTrack(track, outputPath)` — `yt-dlp --extract-audio --audio-format mp3 --audio-quality 128K`; renames file if yt-dlp wrote a different extension; validates size > 10 KB
-  - `getMusicFromYouTubeAudioLibrary(mood)` — cache check at `yal_{mood}.mp3`, search, pick longest, download
-  - Exports: `getMusicFromYouTubeAudioLibrary`, `searchYouTubeAudioLibrary`
-
-- `server/services/pixabayMusic.js` — rewritten:
-  - `httpGetJson(url)` — native `https`/`http` with redirect handling, returns `{ statusCode, headers, body }`
-  - `httpGetToFile(url, dest)` — pipes response directly to `fs.createWriteStream`; handles redirects; cleans up on error
-  - `getMoodConfig(mood)` — same fuzzy fallback as `audioMixer.js`
-  - `getCachedTrackForMood(mood)` — now checks both `musicIndex.json` (Pixabay) AND `yal_{mood}.mp3` (YAL) on disk
-  - `getMusicForMood(mood, query)` — two-tier: Pixabay first → `getMusicFromYouTubeAudioLibrary` fallback
-
-- `client/src/components/video-creator/AudioPanel.jsx`:
-  - Added `isDownloadingMusic`, `musicDownloadStatus` states
-  - `MUSIC_MOODS = ['tense','triumphant','somber','neutral','dramatic','reflective','anticipatory','institutional']`
-  - `handleDownloadAllMusic()` — sequential loop, skips already-cached, POSTs `/api/audio/download-music` per mood, updates status grid
-  - New "Music library" section: 2-column grid showing all 8 moods with status dots (spinner / error / cached / empty)
-  - "Download all moods" button triggers `handleDownloadAllMusic`; YAL fallback note shown when no Pixabay key
-  - Generate button sub-label updated to mention YouTube Audio Library fallback
-
-**Cache file naming:**
-- Pixabay: `library/music/{mood}_{track_id}.mp3` (unchanged, backward compatible)
-- YAL: `library/music/yal_{mood}.mp3`
-- `getCachedTrackForMood` checks both — whichever exists first is returned
-
-**Testing checklist:**
-- [ ] No `PIXABAY_API_KEY` → "Download all moods" uses yt-dlp YAL fallback
-- [ ] `PIXABAY_API_KEY` set → Tier 1 (Pixabay) runs first; YAL only if Pixabay fails
-- [ ] Already-cached mood shows ✓ in grid immediately (skipped in download loop)
-- [ ] Downloading mood shows spinner in grid
-- [ ] Failed mood shows red dot; others continue
-- [ ] `library/music/yal_{mood}.mp3` file created after YAL download
-- [ ] `getCachedTrackForMood` returns YAL file on next call (no re-download)
-- [ ] AudioPanel sub-label reads "YouTube Audio Library" when no Pixabay key
+### Environment variables required
+- `ANTHROPIC_API_KEY`
+- `ELEVENLABS_API_KEY`
+- *(No Pixabay, Freesound, or FMA keys needed)*
 
 ---
 
-### Fix 6 — Replace Pixabay with Free Music Archive + Freesound ✅ Complete
+## Session 11 — Smoke Test Fixes
+**Commit:** `fix: Remotion version pin 4.0.474, crossfade duration, short music validation`
+**Date:** 2026-06-10
 
-**Goal:** Remove Pixabay entirely. Replace with Free Music Archive (no key needed) for background music and Freesound API for ambient/stings.
+### Fix 1 — Remotion Version Mismatch (BLOCKER — render was broken)
+**Problem:** `@remotion/transitions` was pinned to `^4.0.474` in `remotion/package.json` while `remotion` and `@remotion/cli` resolved to `4.0.472`. Remotion's own multiple-versions guard throws a `TypeError` before module exports complete, causing React error #130 and crashing every render at frame 0.
 
-**Source map:**
-| Layer | Old source | New source | Key required? |
-|-------|------------|-----------|---------------|
-| Background music | Pixabay (key required) | Free Music Archive | No (public API) |
-| Ambient loops | Manual / yt-dlp fallback | Freesound API → yt-dlp fallback | Yes (`FREESOUND_API_KEY`) |
-| Transition stings | Manual only | Freesound API auto-download | Yes (`FREESOUND_API_KEY`) |
+**Solution:**
+- Pinned all `@remotion/*` packages to exact `4.0.474` in `remotion/package.json` (no `^`)
+- Pinned `remotion`, `@remotion/player`, `@remotion/transitions` to `4.0.474` in `client/package.json`
+- Verified with `node -e "require('remotion'); require('@remotion/transitions')"` — no version throw
+- Test render: 2-scene MP4 produced, 168 frames, 5.65s — matches expected duration
 
-**Architecture — music:**
-```
-getMusicForMood(mood)
-  → normaliseMood() (fuzzy alias resolution)
-  → cache check: musicIndex.json (FMA) + yal_{mood}.mp3 (YAL)
-  → Tier 1: Free Music Archive API (freemusicarchive.org/api/get/tracks.json)
-  → Tier 2: YouTube Audio Library via yt-dlp
-  → throws if both fail
-```
+### Fix 2 — calculateMetadata Crossfade Duration
+**Problem:** `Root.jsx` `calculateMetadata` summed raw scene frames without subtracting `(n−1) × 12` crossfade overlap. Rendered video was longer than the in-browser preview by `(n−1) × 0.4s`.
 
-**Architecture — ambient/stings:**
-```
-downloadAmbientFile(key) in ambientLibrary.js
-  → Tier 1: freesoundService.downloadAmbientFile(key) via Freesound API
-  → Tier 2: yt-dlp on freesound.org search page
+**Solution:**
+- `Root.jsx` `calculateMetadata` now calls `calculateDocumentaryDuration(scenes)` (the correct function already defined in `Documentary.jsx`)
+- `VideoPlayer.jsx` `totalFrames` useMemo updated to apply per-scene `Math.max(..., 30)` minimum matching `Documentary.jsx`
 
-downloadSting(key) in freesoundService.js
-  → Freesound API search (STING_QUERIES per key)
-  → downloads preview-hq-mp3 to library/stings/
-```
+### Fix 3 — Short ElevenLabs Music Files (1–3s instead of 60s)
+**Problem:** All 7 ElevenLabs-generated music files were 1–3 seconds long (17–49 KB). ElevenLabs' Sound Effects API ignored the `duration_seconds: 60` parameter and returned very short clips. The 10 KB buffer-size check passed but files were useless as background music.
 
-**Files added:**
-- `server/services/freeMusicArchive.js` (replaces `pixabayMusic.js`):
-  - `fetchJSON(url)` / `httpGetToFile(url, dest)` — native https/http, redirect-safe
-  - `MOOD_TO_TAGS` — 10 moods → FMA tag arrays
-  - `searchFMA(mood, limit)` — `freemusicarchive.org/api/get/tracks.json?api_key=FreePublicApiKey`; filters tracks > 60s; returns `{ id, title, artist, duration, downloadUrl, mood, source }`
-  - `downloadFMATrack(track, outputPath)` — streams via `httpGetToFile`; validates size
-  - `normaliseMood(mood)` — canonical mood resolution with fuzzy keyword fallback
-  - `getCachedTrackForMood(mood)` — checks `musicIndex.json` + `yal_{mood}.mp3` on disk
-  - `getMusicForMood(mood)` — two-tier: FMA → YAL; exports `loadMusicIndex`, `getCachedTrackForMood`
-  - Cache filename: `{mood}_fma_{id}.mp3`
-
-- `server/services/freesoundService.js` (NEW):
-  - `fetchJSON(url)` / `downloadFile(url, dest)` — Freesound API calls with `Authorization: Token {key}`
-  - `AMBIENT_QUERIES` — 13 ambient keys → `{ query, duration_min, duration_max }`
-  - `STING_QUERIES` — 6 sting keys → `{ query, duration_min, duration_max }`
-  - `searchFreesound({ query, duration_min, duration_max, filter, limit })` — CC0 filter by default
-  - `downloadFreesound(sound, outputPath)` — downloads `preview-hq-mp3`
-  - `downloadAmbientFile(key)` — derives filename as `${key}.mp3` (no circular dep with ambientLibrary)
-  - `downloadSting(key)` — looks up filename from `transitionStings[key]`
-  - No circular dependency: does NOT import `ambientLibrary.js`
-
-**Files modified:**
-- `server/services/pixabayMusic.js` — **deleted**
-- `server/services/audioMixer.js` — import updated from `pixabayMusic` → `freeMusicArchive`
-- `server/services/ambientLibrary.js` — `downloadAmbientFile` now tries Freesound API (tier 1) then falls back to existing yt-dlp logic (tier 2)
-- `server/routes/audio.js` — rewritten: import from `freeMusicArchive` and `freesoundService`; status endpoint uses `fmaConnected: true` + `freesoundConnected: !!FREESOUND_API_KEY`; removed `GET /test-pixabay`; `POST /search-music` calls `searchFMA(mood)`; `POST /download-stings` SSE endpoint added; `POST /build-specs` always passes `?download=1` (FMA needs no key)
-- `client/src/components/video-creator/AudioPanel.jsx`:
-  - `isDownloadingStings` / `stingDownloadStatus` states added
-  - `handleDownloadAllStings()` — SSE loop via `GET /api/audio/download-stings`
-  - `handleGenerate` — `download` flag removed (always true, FMA is free)
-  - Pixabay warning replaced with Freesound key missing warning
-  - Per-mood tracks section always visible (not gated on Pixabay key)
-  - Music library footer updated (FMA note, no Pixabay mention)
-  - Stings section: "Auto-download missing" button appears when `freesoundKeySet`
-  - Stings footer: context-aware message (auto-download vs manual instructions)
-  - Download guide modal: Freesound key status shown; auto-download hint when key set
-- `.env` — `PIXABAY_API_KEY` removed (commented out with note); `FREESOUND_API_KEY` added with comment
-
-**Environment:**
-```
-# Removed:
-PIXABAY_API_KEY   (no longer used)
-
-# Added:
-FREESOUND_API_KEY=your_freesound_api_key_here
-# Get free key at: https://freesound.org/apiv2/apply/
-# Used for: ambient loops auto-download + transition stings auto-download
-
-# FMA (Free Music Archive) — no key needed
-# Used for: background music per mood (freemusicarchive.org)
-```
-
-**FMA public API:**
-- Endpoint: `https://freemusicarchive.org/api/get/tracks.json?api_key=FreePublicApiKey`
-- `FreePublicApiKey` is the documented public demo key — no registration needed
-- Tracks must have `track_file` set and `track_duration_in_seconds > 60` to be usable
-- Cache filename: `{mood}_fma_{track_id}.mp3`
-
-**Testing checklist:**
-- [ ] No `FREESOUND_API_KEY` → ambient and sting auto-download buttons hidden; Freesound warning banner shows
-- [ ] `FREESOUND_API_KEY` set → ambient "Auto-download missing" and sting "Auto-download missing" buttons appear
-- [ ] "Download all moods" → FMA search returns tracks; `{mood}_fma_{id}.mp3` files appear in `library/music/`
-- [ ] FMA returns 0 results → falls back to YouTube Audio Library; `yal_{mood}.mp3` created
-- [ ] `GET /api/audio/status` → `fmaConnected: true`, `freesoundConnected: true/false` based on key
-- [ ] Stings SSE stream downloads 6 sting files; status grid updates in real time
-- [ ] Ambient SSE stream uses Freesound API when key set; falls back to yt-dlp when key missing
-- [ ] `pixabayMusic.js` is gone — no 404 or require error on server start
-- [ ] AudioPanel has no Pixabay text anywhere
+**Solution:**
+- `elevenLabsAudio.js`: added inline `getAudioDuration()` using ffprobe; after writing each music file, measures actual duration; throws and deletes the file if `< 10s`
+- Updated all `MUSIC_PROMPTS` to include `"60 seconds duration, loops cleanly"` in every entry
+- Added `intimate` mood to the prompts map
+- Deleted all 7 bad cached files and cleared their 7 entries from `library/musicIndex.json`
+- On next "Build Music Plan" call, missing moods regenerate with duration validation
 
 ---
 
