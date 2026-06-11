@@ -46,40 +46,45 @@ async function buildClipStrategy(scene) {
     }
   }
 
-  const prompt = `You are a documentary researcher finding real video footage.
+  const prompt = `You are a documentary researcher finding EXACT footage of a specific subject.
 
-Scene to find footage for:
-Script excerpt: "${excerpt}"
+Scene context:
+Script: "${excerpt}"
 Subject anchors: ${JSON.stringify(scene.subject_anchors || [])}
 Mood: ${mood}
+Known reliable channels: ${JSON.stringify(knownSources)}
 
-Known reliable channels found: ${JSON.stringify(knownSources)}
+CRITICAL RULES for search queries:
+1. Every query MUST contain the exact subject name (e.g. "Netflix", "Reed Hastings", "iPhone")
+2. NEVER write generic queries like "documentary footage interview speech" without the subject name
+3. Queries must be specific enough that ONLY videos about this exact subject would match
+4. If the subject is a company, search for: "[Company name] [specific event/person/year]"
+5. If the subject is a person, search for: "[Full name] [speech/interview/keynote/testimony]"
 
-Your task: Return a JSON search strategy to find the EXACT subject in this scene.
+BAD query (too generic): "streaming service documentary footage"
+GOOD query: "Netflix Reed Hastings interview 2019"
 
-Rules:
-1. Primary sources should be official channels or known interview programs
-2. Search queries must be specific enough to find the actual subject — not commentary or reactions
-3. Avoid terms list must filter out reaction videos, compilations, and unrelated content
-4. Provide a timestamp hint — where in a typical video of this type would the subject appear
-   e.g. "conference keynote: subject usually appears at 2-5 minutes after intro"
-   e.g. "interview: subject starts speaking immediately, use 0:30"
-   e.g. "earnings call: CEO speaks after 5-10 minute intro, use 8:00"
-5. If no reliable source exists for this specific subject, set strategy to "general_search"
+BAD query: "tech company announcement speech"
+GOOD query: "Netflix earnings call Q3 2022 Reed Hastings"
+
+For the timestamp hint:
+- Company earnings calls: executives speak around 8-12 minutes in (use 480)
+- Conference keynotes: presenter appears 2-5 minutes in after intro (use 150)
+- News interviews: subject speaks immediately (use 30)
+- Senate/congressional hearings: CEO testimony starts 30-60 minutes in (use 1800)
+- Product launches: demo starts 10-20 minutes in (use 720)
+- Documentary films: use 120 seconds as default
 
 Return ONLY valid JSON, no explanation:
 {
   "strategy": "channel_specific" | "general_search",
-  "subject": "exact subject name",
+  "subject": "exact subject name from anchors",
   "primary_queries": [
-    { "query": "specific search query", "channel_filter": "channel name or null" }
+    { "query": "MUST contain subject name", "channel_filter": "channel name or null" }
   ],
-  "fallback_query": "broader fallback search query",
-  "avoid_terms": ["reaction", "commentary", "compilation", "review", "shorts"],
-  "timestamp_hint": {
-    "start_seconds": 30,
-    "reasoning": "brief explanation of why this timestamp"
-  },
+  "fallback_query": "subject name + broader terms",
+  "avoid_terms": ["reaction", "commentary", "compilation", "review", "shorts", "top 10"],
+  "timestamp_hint": { "start_seconds": 30, "reasoning": "why this timestamp" },
   "min_video_duration": 120,
   "confidence": 0.0
 }`;
@@ -104,11 +109,12 @@ Return ONLY valid JSON, no explanation:
     return strategy;
   } catch (err) {
     console.warn('[clipIntelligence] Claude strategy failed:', err.message);
+    const primarySubject = anchors[0] || excerpt.slice(0, 30);
     return {
       strategy: 'general_search',
-      subject: anchors[0] || excerpt.slice(0, 30),
-      primary_queries: [{ query: `${anchors.slice(0, 2).join(' ')} documentary footage interview`, channel_filter: null }],
-      fallback_query: anchors.slice(0, 3).join(' ') + ' footage',
+      subject: primarySubject,
+      primary_queries: [{ query: `${primarySubject} interview speech`, channel_filter: null }],
+      fallback_query: `${primarySubject} documentary`,
       avoid_terms: ['reaction', 'commentary', 'compilation', 'review', 'shorts'],
       timestamp_hint: { start_seconds: 30, reasoning: 'default skip intro' },
       min_video_duration: 60,

@@ -4,6 +4,7 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
 const { buildClipStrategy } = require('./clipIntelligence');
+const { callClaude } = require('./claude');
 const clipStore = require('./clipStore');
 
 const LIBRARY_CLIPS_DIR  = path.resolve(__dirname, '../../library/clips');
@@ -32,12 +33,12 @@ async function searchYouTube(query, options = {}) {
         const [id, title, duration, url, channel] = line.split('|||');
         return {
           id,
-          title:   title || '',
+          title:    title || '',
           duration: parseInt(duration) || 0,
-          url:     url || `https://www.youtube.com/watch?v=${id}`,
-          channel: channel || '',
-          source:  'youtube_fair_use',
-          license: 'fair_use',
+          url:      url || `https://www.youtube.com/watch?v=${id}`,
+          channel:  channel || '',
+          source:   'youtube_fair_use',
+          license:  'fair_use',
         };
       })
       .filter(r => r.duration >= minDuration)
@@ -97,32 +98,97 @@ async function searchArchive(query, options = {}) {
   }
 }
 
-function scoreResult(result, subjectAnchors) {
-  let score = 0;
-  const tl  = result.title.toLowerCase();
-  const cl  = result.channel.toLowerCase();
+// Hard gate: subject anchor must appear in title or channel — no exceptions.
+// Returns -999 (immediate reject) if nothing matches.
+function scoreResult(result, subjectAnchors, strategy) {
+  const titleLower   = result.title.toLowerCase();
+  const channelLower = result.channel.toLowerCase();
 
+  const subjectMatch = (subjectAnchors || []).some(anchor => {
+    const words = anchor.toLowerCase().split(' ').filter(w => w.length > 3);
+    return words.some(w => titleLower.includes(w) || channelLower.includes(w));
+  });
+
+  if (!subjectMatch) {
+    console.log(`[scorer] REJECTED (no subject match): "${result.title}" | anchors: ${subjectAnchors?.join(', ')}`);
+    return -999;
+  }
+
+  let score = 0;
+
+  // Full anchor phrase match — strong signal
   for (const anchor of (subjectAnchors || [])) {
-    const al = anchor.toLowerCase();
-    if (tl.includes(al)) score += 3;
-    if (cl.includes(al)) score += 2;
+    const a = anchor.toLowerCase();
+    if (titleLower.includes(a))   score += 5;
+    if (channelLower.includes(a)) score += 3;
+  }
+
+  // Individual word matches
+  for (const anchor of (subjectAnchors || [])) {
+    const words = anchor.toLowerCase().split(' ').filter(w => w.length > 3);
+    for (const word of words) {
+      if (titleLower.includes(word))   score += 1;
+      if (channelLower.includes(word)) score += 1;
+    }
   }
 
   if (result.license === 'public_domain')    score += 2;
   if (result.license === 'creative_commons') score += 1;
 
-  const authSources = ['official', 'ted', 'google', 'apple', 'microsoft',
-    'c-span', 'cspan', 'bloomberg', 'reuters', 'bbc', 'pbs'];
-  if (authSources.some(s => cl.includes(s))) score += 3;
-
-  if (result.duration > 300)  score += 1;
-  if (result.duration > 1800) score += 1;
+  const authSources = ['ted', 'c-span', 'cspan', 'bloomberg',
+    'reuters', 'bbc', 'pbs', 'cnbc', 'official'];
+  if (authSources.some(s => channelLower.includes(s))) score += 3;
 
   const qualityTerms = ['keynote', 'speech', 'interview', 'conference',
-    'testimony', 'announcement', 'talk', 'lecture', 'hearing'];
-  if (qualityTerms.some(t => tl.includes(t))) score += 2;
+    'testimony', 'announcement', 'earnings', 'hearing', 'talk'];
+  if (qualityTerms.some(t => titleLower.includes(t))) score += 2;
+
+  const lowQuality = ['top 10', 'reaction', 'compilation', '#shorts',
+    'tiktok', 'meme', 'funny', 'fail', 'secret'];
+  if (lowQuality.some(t => titleLower.includes(t))) score -= 3;
 
   return score;
+}
+
+// Fast heuristic + borderline Claude check to confirm relevance before downloading.
+async function isRelevantClip(result, scene) {
+  const titleLower = result.title.toLowerCase();
+  const anchors    = (scene.subject_anchors || []).map(a => a.toLowerCase());
+
+  const hasAnchorInTitle = anchors.some(anchor => {
+    const words = anchor.split(' ').filter(w => w.length > 3);
+    return words.some(w => titleLower.includes(w));
+  });
+
+  if (!hasAnchorInTitle) {
+    console.log(`[relevance] REJECTED: "${result.title}" — no anchor in title`);
+    return false;
+  }
+
+  // High-confidence score — skip API call
+  if (result.score >= 6) {
+    console.log(`[relevance] ACCEPTED (score ${result.score}): "${result.title}"`);
+    return true;
+  }
+
+  // Borderline — ask Claude
+  try {
+    const prompt = `Is this YouTube video relevant to the documentary scene?
+
+Scene subject: ${scene.subject_anchors?.join(', ')}
+Scene excerpt: "${scene.script_excerpt?.slice(0, 100)}"
+Video title: "${result.title}"
+Channel: "${result.channel}"
+
+Reply with only: YES or NO`;
+
+    const response = await callClaude(prompt, 'Reply only YES or NO.');
+    const relevant = response.trim().toUpperCase().startsWith('YES');
+    console.log(`[relevance] Claude says ${relevant ? 'YES' : 'NO'}: "${result.title}"`);
+    return relevant;
+  } catch {
+    return result.score > 2;
+  }
 }
 
 async function findBestTimestamp(strategy, videoDuration) {
@@ -134,7 +200,7 @@ async function findBestTimestamp(strategy, videoDuration) {
 }
 
 async function downloadIntelligentClip({ result, strategy, scene, filename }) {
-  const outputPath  = path.join(LIBRARY_CLIPS_DIR,  filename);
+  const outputPath   = path.join(LIBRARY_CLIPS_DIR,  filename);
   const remotionPath = path.join(REMOTION_CLIPS_DIR, filename);
 
   if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 10000) {
@@ -162,7 +228,6 @@ async function downloadIntelligentClip({ result, strategy, scene, filename }) {
 
     await execAsync(dlCmd, { timeout: 120000 });
 
-    // Find the temp file yt-dlp wrote (may add .mp4 suffix or similar)
     const tempFiles = fs.readdirSync(LIBRARY_CLIPS_DIR)
       .filter(f => f.startsWith('_temp_') && !f.endsWith('.part'));
 
@@ -210,7 +275,7 @@ async function autoSourceClip(scene, projectId, onProgress = null) {
   });
 
   const searchOptions = {
-    avoidTerms:  strategy.avoid_terms      || [],
+    avoidTerms:  strategy.avoid_terms       || [],
     minDuration: strategy.min_video_duration || 60,
     maxResults:  8,
   };
@@ -236,20 +301,45 @@ async function autoSourceClip(scene, projectId, onProgress = null) {
 
   if (allResults.length === 0 && strategy.fallback_query) {
     send({ type: 'fallback_search', scene_id: scene.scene_id, message: 'Trying general search...' });
-    const fallback = await searchYouTube(strategy.fallback_query, searchOptions);
-    allResults.push(...fallback);
+    allResults.push(...await searchYouTube(strategy.fallback_query, searchOptions));
   }
 
-  if (allResults.length === 0) {
-    send({ type: 'no_results', scene_id: scene.scene_id, message: 'No footage found — will use AI image' });
+  // Fix 4 — log all raw results before filtering
+  console.log(`\n[autoClipper] Scene ${scene.scene_id}: "${scene.script_excerpt?.slice(0, 60)}"`);
+  console.log(`[autoClipper] Subject anchors: ${scene.subject_anchors?.join(', ')}`);
+  console.log(`[autoClipper] Found ${allResults.length} total results:`);
+  allResults.forEach((r, i) => {
+    const s = scoreResult(r, scene.subject_anchors, strategy);
+    console.log(`  ${i + 1}. [score:${s}] "${r.title}" | ch: ${r.channel} | src: ${r.source}`);
+  });
+
+  // Fix 1 — hard gate: reject anything that scored <= 0
+  const scored = allResults
+    .map(r => ({ ...r, score: scoreResult(r, scene.subject_anchors, strategy) }))
+    .filter(r => r.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  console.log(`[autoClipper] ${scored.length} passed relevance filter (from ${allResults.length} total)`);
+
+  if (scored.length === 0) {
+    send({ type: 'no_results', scene_id: scene.scene_id, message: 'No relevant footage found — converting to AI image' });
     return null;
   }
 
-  const scored = allResults
-    .map(r => ({ ...r, score: scoreResult(r, scene.subject_anchors) }))
-    .sort((a, b) => b.score - a.score);
+  // Fix 3 — check top 5 for relevance before committing to download
+  const relevantResults = [];
+  for (const result of scored.slice(0, 5)) {
+    const relevant = await isRelevantClip(result, scene);
+    if (relevant) relevantResults.push(result);
+    if (relevantResults.length >= 2) break;
+  }
 
-  const best = scored[0];
+  if (relevantResults.length === 0) {
+    send({ type: 'no_results', scene_id: scene.scene_id, message: 'No relevant clips passed relevance check — converting to AI image' });
+    return null;
+  }
+
+  const best = relevantResults[0];
   send({
     type:     'downloading',
     scene_id: scene.scene_id,
@@ -267,7 +357,7 @@ async function autoSourceClip(scene, projectId, onProgress = null) {
   const tryDownload = async (result, fname) => {
     await downloadIntelligentClip({ result, strategy, scene, filename: fname });
 
-    const clip = clipStore.addClip({
+    return clipStore.addClip({
       file:       `/library/clips/${fname}`,
       title:      result.title,
       source:     result.source,
@@ -284,10 +374,8 @@ async function autoSourceClip(scene, projectId, onProgress = null) {
       warning:     result.license === 'fair_use'
         ? 'Copyrighted — fair use for documentary commentary only. 8 seconds max.'
         : null,
-      project_id:  projectId || null,
+      project_id: projectId || null,
     });
-
-    return clip;
   };
 
   try {
@@ -297,12 +385,12 @@ async function autoSourceClip(scene, projectId, onProgress = null) {
   } catch (err) {
     console.warn(`[autoClipper] download failed for scene ${scene.scene_id}:`, err.message);
 
-    if (scored.length > 1) {
-      send({ type: 'retry', scene_id: scene.scene_id, message: `Trying next result: ${scored[1].title?.slice(0, 40)}` });
+    if (relevantResults.length > 1) {
+      send({ type: 'retry', scene_id: scene.scene_id, message: `Trying next result: ${relevantResults[1].title?.slice(0, 40)}` });
       try {
-        const fname2 = `scene_${scene.scene_id}_${(scored[1].title || 'clip').replace(/[^a-z0-9]/gi, '_').slice(0, 30).toLowerCase()}_${Date.now()}.mp4`;
-        const clip = await tryDownload(scored[1], fname2);
-        send({ type: 'done', scene_id: scene.scene_id, clip, title: scored[1].title, source: scored[1].source });
+        const fname2 = `scene_${scene.scene_id}_${(relevantResults[1].title || 'clip').replace(/[^a-z0-9]/gi, '_').slice(0, 30).toLowerCase()}_${Date.now()}.mp4`;
+        const clip = await tryDownload(relevantResults[1], fname2);
+        send({ type: 'done', scene_id: scene.scene_id, clip, title: relevantResults[1].title, source: relevantResults[1].source });
         return clip;
       } catch (err2) {
         console.warn('[autoClipper] retry also failed:', err2.message);
