@@ -1,7 +1,6 @@
 const router = require('express').Router();
 const { analyzeScript } = require('../services/claude');
 const { loadDefaults }  = require('./settings');
-const { startSeed }     = require('../services/clipSeeder');
 
 router.post('/', async (req, res) => {
   const { script, metadata } = req.body;
@@ -18,13 +17,6 @@ router.post('/', async (req, res) => {
     const defaults = loadDefaults();
     const scenes   = await analyzeScript({ script, metadata: metadata || {}, defaults });
     res.json({ scenes });
-
-    // Background seed — fire-and-forget after response is sent
-    const { title, niche, projectId } = metadata || {};
-    if (title && projectId) {
-      startSeed({ title, niche: niche || 'General', projectId, maxClips: 10 });
-      console.log(`[analyze] background seed started for project ${projectId}`);
-    }
   } catch (err) {
     console.error('analyze error:', err.message);
     res.status(500).json({ error: err.message });

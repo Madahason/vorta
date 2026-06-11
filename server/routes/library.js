@@ -61,7 +61,7 @@ const youtubeFairUse   = require('../services/sources/youtubeFairUse')
 const internetArchive  = require('../services/sources/internetArchive')
 const cspan            = require('../services/sources/cspan')
 const { searchTED }    = require('../services/sources/ted')
-const { startSeed, addClient, removeClient } = require('../services/clipSeeder')
+// clipSeeder removed in simple branch
 const { downloadClip, MAX_SECONDS } = require('../services/clipDownloader')
 const { buildFootageQuery } = require('../services/sources/searchUtils')
 const { scoreResults }      = require('../services/resultScorer')
@@ -362,36 +362,7 @@ router.post('/import-url', async (req, res) => {
   }
 })
 
-// ── POST /api/library/seed — start auto-seed job ─────────────────────────────
-router.post('/seed', (req, res) => {
-  try {
-    const { title, niche, projectId, maxClips } = req.body
-    const seedId = startSeed({ title, niche, projectId, maxClips })
-    res.json({ seedId })
-  } catch (err) {
-    console.error('[library] seed error:', err.message)
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// ── GET /api/library/seed/progress/:seedId — SSE stream ──────────────────────
-router.get('/seed/progress/:seedId', (req, res) => {
-  const { seedId } = req.params
-
-  res.setHeader('Content-Type',  'text/event-stream')
-  res.setHeader('Cache-Control', 'no-cache')
-  res.setHeader('Connection',    'keep-alive')
-  res.setHeader('X-Accel-Buffering', 'no')
-  res.flushHeaders()
-
-  const ok = addClient(seedId, res)
-  if (!ok) {
-    res.write('data: {"type":"seed_error","error":"Seed job not found"}\n\n')
-    return res.end()
-  }
-
-  req.on('close', () => removeClient(seedId, res))
-})
+// seed endpoints removed in simple branch
 
 // ── POST /api/library/fair-use-ack ───────────────────────────────────────────
 router.post('/fair-use-ack', (req, res) => {

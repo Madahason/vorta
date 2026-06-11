@@ -17,66 +17,53 @@ const DEPS = checkDeps();
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
-// Raw binary body for audio file uploads — must come before JSON middleware on audio routes
-app.use('/api/audio/upload', express.raw({ type: '*/*', limit: '200mb' }));
 
-// Serve generated project assets (images, etc.)
+// Serve generated project assets (images, audio, etc.)
 app.use('/projects', express.static(path.join(__dirname, '../projects')));
 
-// Serve library assets (clips, thumbnails)
-const libraryPath = path.resolve(__dirname, '..', 'library');
+// Serve library clips
+const libraryPath      = path.resolve(__dirname, '..', 'library');
 const libraryClipsPath = path.join(libraryPath, 'clips');
-console.log('[static] serving library from:', libraryPath);
+console.log('[static] serving library/clips from:', libraryClipsPath);
 if (!fs.existsSync(libraryClipsPath)) {
   fs.mkdirSync(libraryClipsPath, { recursive: true });
-  console.log('[static] created library/clips folder');
 }
-app.use('/library', express.static(libraryPath));
+app.use('/library/clips', express.static(libraryClipsPath));
 
-// /clips — serves library/clips/ directly so staticFile('clips/...') in the
-// Remotion <Player> (browser preview) resolves correctly via the Vite proxy.
+// /clips — serves library/clips/ directly for staticFile('clips/...') in Remotion Player
 app.use('/clips', express.static(libraryClipsPath));
 
-// One-time startup: sync all existing library clips to remotion/public/clips/
-// so the Remotion CLI bundle server can serve them via staticFile().
+// One-time startup: sync library clips to remotion/public/clips/
 function syncAllClipsToRemotion() {
   const remotionClipsDir = path.join(__dirname, '../remotion/public/clips');
   if (!fs.existsSync(libraryClipsPath)) return;
   if (!fs.existsSync(remotionClipsDir)) fs.mkdirSync(remotionClipsDir, { recursive: true });
-
-  const clips = fs.readdirSync(libraryClipsPath)
-    .filter(f => /\.(mp4|webm|mov)$/i.test(f));
-
+  const clips = fs.readdirSync(libraryClipsPath).filter(f => /\.(mp4|webm|mov)$/i.test(f));
   let synced = 0;
   clips.forEach(filename => {
     const src  = path.join(libraryClipsPath, filename);
     const dest = path.join(remotionClipsDir, filename);
     if (!fs.existsSync(dest)) {
-      try { fs.copyFileSync(src, dest); synced++; } catch { /* skip on error */ }
+      try { fs.copyFileSync(src, dest); synced++; } catch { /* skip */ }
     }
   });
   console.log(`[startup] synced ${synced} new clips to remotion/public/clips (${clips.length} total)`);
 }
 syncAllClipsToRemotion();
 
-// /output also serves the projects folder — clean URL for MP4 downloads
+// /output serves the projects folder for MP4 downloads
 app.use('/output', express.static(path.join(__dirname, '../projects')));
 
-// Confirm env loaded
 const apiKeyLoaded = !!process.env.ANTHROPIC_API_KEY;
 console.log(`ANTHROPIC_API_KEY loaded: ${apiKeyLoaded}`);
 
-// Routes (stubs — wired in Phase 1)
-app.use('/api/settings',      require('./routes/settings'));
-app.use('/api/analyze',       require('./routes/analyze'));
-app.use('/api/generate',      require('./routes/generate'));
-app.use('/api/motion',        require('./routes/motion'));
-app.use('/api/library',       require('./routes/library'));
-app.use('/api/audio',         require('./routes/audio'));
-app.use('/api/voiceover',     require('./routes/voiceover'));
-app.use('/api/render',        require('./routes/render'));
-app.use('/api/sound-library', require('./routes/soundLibrary'));
-app.use('/api/clips',        require('./routes/clips'));
+app.use('/api/settings',  require('./routes/settings'));
+app.use('/api/analyze',   require('./routes/analyze'));
+app.use('/api/generate',  require('./routes/generate'));
+app.use('/api/motion',    require('./routes/motion'));
+app.use('/api/library',   require('./routes/library'));
+app.use('/api/voiceover', require('./routes/voiceover'));
+app.use('/api/render',    require('./routes/render'));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', anthropic_key: apiKeyLoaded, deps: DEPS });

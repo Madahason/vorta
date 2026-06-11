@@ -11,7 +11,6 @@ import { ScriptStep }  from './wizard/ScriptStep'
 import { ScenesStep }  from './wizard/ScenesStep'
 import { VisualsStep } from './wizard/VisualsStep'
 import { VoiceStep }   from './wizard/VoiceStep'
-import { AudioStep }   from './wizard/AudioStep'
 import { ExportStep }  from './wizard/ExportStep'
 
 const SERVER_URL = 'http://localhost:3001'
@@ -25,7 +24,6 @@ const LS = {
   clipMatches:   'vorta_clip_matches',
   selectedClips: 'vorta_selected_clips',
   sessionKey:    'vorta_session_key',
-  audioSpecs:    'vorta_audio_specs',
 }
 
 function lsRead(key) {
@@ -156,10 +154,6 @@ export default function VideoCreator() {
   const [voiceoverPanelOpen,  setVoiceoverPanelOpen]  = useState(false)
   const [voiceoverFocusScene, setVoiceoverFocusScene] = useState(null)
 
-  // Audio specs (music + ambient + stings per scene)
-  const [audioSpecs,   setAudioSpecs]   = useState(() => lsRead(LS.audioSpecs) || [])
-  const [audioVolumes, setAudioVolumes] = useState({ music: 0.12, ambient: 0.06, sting: 0.45 })
-
   // Overlay Studio + review modal
   const [overlayStudioScene, setOverlayStudioScene] = useState(null)
   const [overlayReviewOpen, setOverlayReviewOpen] = useState(false)
@@ -220,30 +214,12 @@ export default function VideoCreator() {
   useEffect(() => { lsWrite(LS.statuses,      sceneStatuses) }, [sceneStatuses])
   useEffect(() => { lsWrite(LS.selectedClips, selectedClips) }, [selectedClips])
   useEffect(() => {
-    if (audioSpecs.length > 0) {
-      try { localStorage.setItem(LS.audioSpecs, JSON.stringify(audioSpecs)) } catch { /* quota */ }
-    }
-  }, [audioSpecs])
-  useEffect(() => {
     const toSave = {}
     Object.entries(clipMatches).forEach(([sid, v]) => {
       if (!v.loading) toSave[sid] = v
     })
     lsWrite(LS.clipMatches, toSave)
   }, [clipMatches])
-
-  // ─── One-time migration: clear audioSpecs if they don't match current scenes ─
-  useEffect(() => {
-    const savedSpecs  = lsRead(LS.audioSpecs)  || []
-    const savedScenes = lsRead(LS.scenes)       || []
-    if (savedSpecs.length > 0 && savedScenes.length > 0 &&
-        savedSpecs.length !== savedScenes.length) {
-      console.warn('[init] audioSpecs count mismatch — clearing stale specs',
-        savedSpecs.length, '!=', savedScenes.length)
-      localStorage.removeItem('vorta_audio_specs')
-      setAudioSpecs([])
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Auto-save snapshot when generation completes (thumbnail available) ──
   useEffect(() => {
@@ -386,7 +362,6 @@ export default function VideoCreator() {
     setMotionStatuses({})
     setClipMatches({})
     setSelectedClips({})
-    setAudioSpecs([])
     setShowClipLibrary(false)
     setShowPlayer(false)
     setPlayerStuck(false)
@@ -396,52 +371,6 @@ export default function VideoCreator() {
     setBadgeFading(false)
     setResetKey(k => k + 1)
     wizard.resetWizard()
-  }
-
-  // ─── Apply audio specs — single source of truth for persisting specs ──────
-  const handleApplyAudioSpecs = (specs) => {
-    if (!specs?.length) return
-    const withNarration = specs.filter(s => s.narration?.url).length
-    console.log('[audio] applying specs:', specs.length, 'total, narration:', withNarration)
-    setAudioSpecs(specs)
-    try {
-      const json = JSON.stringify(specs)
-      localStorage.setItem(LS.audioSpecs, json)
-      const verify = JSON.parse(localStorage.getItem(LS.audioSpecs) || '[]')
-      console.log('[VideoCreator] audioSpecs saved to localStorage — count:', verify.length,
-        'first scene_id:', verify[0]?.scene_id)
-    } catch (err) {
-      console.error('[VideoCreator] localStorage save FAILED:', err)
-    }
-  }
-
-  // ─── Build audio specs (music + ambient + stings per scene) ──────────────
-  const handleBuildAudioSpecs = async () => {
-    if (!scenes.length) return
-
-    console.log('[VideoCreator] build-specs request — scenes:', scenes.length, 'projectId:', projectId)
-    const res = await fetch('/api/audio/build-specs', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ scenes, projectId }),
-    })
-    if (!res.ok) {
-      const text = await res.text()
-      throw new Error(text || `Build-specs failed (${res.status})`)
-    }
-    const data = await res.json()
-    console.log('[VideoCreator] build-specs response — success:', data.success, 'specs:', data.specs?.length)
-    if (data.success && data.specs?.length) {
-      handleApplyAudioSpecs(data.specs)
-      console.log('[audio] specs ready:', {
-        total:         data.specs.length,
-        withMusic:     data.specs.filter(s => s.music).length,
-        withAmbient:   data.specs.filter(s => s.ambient).length,
-        withNarration: data.specs.filter(s => s.narration).length,
-      })
-    } else {
-      console.warn('[VideoCreator] build-specs returned no specs — data:', JSON.stringify(data).slice(0, 200))
-    }
   }
 
   // ─── SSE subscription ─────────────────────────────────────────────────────
@@ -494,10 +423,6 @@ export default function VideoCreator() {
       if (!res.ok) throw new Error(data.error || 'Analysis failed')
       setScenes(data.scenes)
       setHasAnalyzed(true)
-      // Clear audioSpecs — they belong to the previous scene set and would mismatch
-      setAudioSpecs([])
-      localStorage.removeItem('vorta_audio_specs')
-      console.log('[analyze] cleared stale audioSpecs — new scene count:', data.scenes.length)
       matchClipsForScenes(data.scenes)
       // Advance wizard to Scenes step
       wizard.markComplete('script')
@@ -900,29 +825,13 @@ export default function VideoCreator() {
             wizard={wizard}
           />
         )
-      case 'audio':
-        return (
-          <AudioStep
-            scenes={scenes}
-            projectId={projectId}
-            audioSpecs={audioSpecs}
-            onBuildSpecs={handleBuildAudioSpecs}
-            onApplySpecs={handleApplyAudioSpecs}
-            audioVolumes={audioVolumes}
-            onVolumesChange={setAudioVolumes}
-            wizard={wizard}
-          />
-        )
       case 'export':
         return (
           <ExportStep
             scenes={scenes}
             sceneStatuses={sceneStatuses}
             selectedClips={selectedClips}
-            imagePaths={imagePaths}
-            globalSettings={globalSettings}
             voiceoverStatuses={voiceoverStatuses}
-            audioSpecs={audioSpecs}
             projectId={projectId}
             wizard={wizard}
           />
@@ -991,10 +900,7 @@ export default function VideoCreator() {
             <div style={{ width: 320, flexShrink: 0 }}>
               <VideoPlayer
                 scenes={scenes}
-                imagePaths={imagePaths}
                 selectedClips={selectedClips}
-                globalSettings={globalSettings}
-                audioSpecs={audioSpecs}
                 style={{ width: '100%', aspectRatio: '16/9', borderRadius: 6, overflow: 'hidden' }}
               />
             </div>
@@ -1047,9 +953,7 @@ export default function VideoCreator() {
             </button>
             <VideoPlayer
               scenes={previewScenes}
-              imagePaths={imagePaths}
               selectedClips={selectedClips}
-              globalSettings={globalSettings}
               style={{ width: '100%', aspectRatio: '16 / 9', borderRadius: '10px', overflow: 'hidden' }}
             />
             <p style={{ marginTop: 12, fontSize: 12, color: 'rgba(255,255,255,0.25)', textAlign: 'center' }}>
@@ -1087,10 +991,7 @@ export default function VideoCreator() {
           {!playerMinimized && (
             <VideoPlayer
               scenes={scenes}
-              imagePaths={imagePaths}
               selectedClips={selectedClips}
-              globalSettings={globalSettings}
-              audioSpecs={audioSpecs}
               style={{ width: '100%', aspectRatio: '16 / 9', display: 'block' }}
             />
           )}
