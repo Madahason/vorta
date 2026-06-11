@@ -168,6 +168,11 @@ router.post('/', async (req, res) => {
   try {
     const { buildProjectAudioSpecsCached } = require('../services/audioMixer');
     audioSpecs = absolutifyAudioSpecs(buildProjectAudioSpecsCached(renderScenes));
+    console.log('[render] audioSpecs:', audioSpecs.length,
+      '| narration:', audioSpecs.filter(s => s.narration?.url).length,
+      '| music:', audioSpecs.filter(s => s.music?.url).length);
+    if (audioSpecs[0]) console.log('[render] scene 0 narration url:', audioSpecs[0].narration?.url || '(none)');
+    if (renderScenes[0]) console.log('[render] scene 0 image path:', renderScenes[0].image_path);
   } catch (err) {
     console.warn('[render] audioSpecs build failed (non-fatal):', err.message);
   }

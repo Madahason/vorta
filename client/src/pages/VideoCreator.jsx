@@ -401,6 +401,8 @@ export default function VideoCreator() {
   // ─── Apply audio specs — single source of truth for persisting specs ──────
   const handleApplyAudioSpecs = (specs) => {
     if (!specs?.length) return
+    const withNarration = specs.filter(s => s.narration?.url).length
+    console.log('[audio] applying specs:', specs.length, 'total, narration:', withNarration)
     setAudioSpecs(specs)
     try {
       const json = JSON.stringify(specs)
@@ -766,17 +768,22 @@ export default function VideoCreator() {
 
   // ─── Voiceover — called by VoiceoverPanel on scene_done SSE event ────────
   const handleAudioGenerated = (sceneId, audioPath, audioDuration, sceneDuration) => {
-    setScenes(prev => prev.map(s => {
-      if (s.scene_id !== sceneId) return s
-      const base = { ...s, audio_path: audioPath, audio_duration: audioDuration }
-      if (sceneDuration) {
-        // Server measured the real duration and added 0.8s buffer
-        base.duration_seconds = sceneDuration
-      } else if (audioDuration && audioDuration > 0) {
-        base.duration_seconds = parseFloat((audioDuration + 0.8).toFixed(2))
-      }
-      return base
-    }))
+    console.log('[voiceover] updating scene', sceneId, 'audio_path:', audioPath)
+    setScenes(prev => {
+      const updated = prev.map(s => {
+        if (s.scene_id !== sceneId) return s
+        const base = { ...s, audio_path: audioPath, audio_duration: audioDuration }
+        if (sceneDuration) {
+          base.duration_seconds = sceneDuration
+        } else if (audioDuration && audioDuration > 0) {
+          base.duration_seconds = parseFloat((audioDuration + 0.8).toFixed(2))
+        }
+        return base
+      })
+      // Persist immediately so audio_path survives a page refresh before autosave fires
+      try { localStorage.setItem(LS.scenes, JSON.stringify(updated)) } catch { /* quota */ }
+      return updated
+    })
   }
 
   // ─── Manual match for a single scene ─────────────────────────────────────

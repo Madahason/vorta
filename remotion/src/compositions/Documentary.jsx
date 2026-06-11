@@ -116,9 +116,16 @@ export function Documentary({
   const musicVolume    = allSpecs.find(s => s.music?.volume)?.music?.volume   || 0.12
   const ambientVolume  = allSpecs.find(s => s.ambient?.volume)?.ambient?.volume || 0.06
 
+  const narrationCount = allSpecs.filter(s => s.narration?.url).length
   console.log('[Documentary] scenes:', scenes.length, '→ unique:', uniqueScenes.length,
     '| audioSpecs:', allSpecs.length, '/', audioSpecs.length,
-    '| music:', !!primaryMusic, '| ambient:', !!primaryAmbient)
+    '| narration:', narrationCount, '| music:', !!primaryMusic, '| ambient:', !!primaryAmbient)
+  if (uniqueScenes[0]) {
+    const s0  = uniqueScenes[0]
+    const sp0 = audioSpecMap[s0.scene_id]
+    console.log('[Documentary] scene', s0.scene_id,
+      'narration url:', sp0?.narration?.url || s0.audio_path || '(none)')
+  }
 
   if (!uniqueScenes.length) {
     return (

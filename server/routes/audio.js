@@ -101,7 +101,7 @@ router.post('/build-specs', async (req, res) => {
   }
   try {
     const specs = await buildProjectAudioSpecs(scenes)
-    console.log(`[audio] build-specs — ${specs.filter(s => s.music).length}/${specs.length} music, ${specs.filter(s => s.ambient).length}/${specs.length} ambient`)
+    console.log(`[audio] build-specs — ${specs.filter(s => s.narration).length}/${specs.length} narration, ${specs.filter(s => s.music).length}/${specs.length} music, ${specs.filter(s => s.ambient).length}/${specs.length} ambient`)
     res.json({ success: true, specs })
   } catch (err) {
     console.error('[audio] build-specs error:', err)

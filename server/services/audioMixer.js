@@ -119,7 +119,8 @@ async function buildProjectAudioSpecs(scenes) {
     }
 
     specs.push(spec)
-    console.log(`[mixer] scene ${scene.scene_id}: music=${!!spec.music} ambient=${!!spec.ambient} sting=${!!spec.sting} overlay_sounds=${spec.overlay_sounds.length}`)
+    console.log(`[mixer] scene ${scene.scene_id}: narration=${!!spec.narration} music=${!!spec.music} ambient=${!!spec.ambient} sting=${!!spec.sting} overlay_sounds=${spec.overlay_sounds.length}`)
+    if (spec.narration) console.log(`  narration url: ${spec.narration.url}`)
   }
 
   console.log(`[mixer] complete — ${specs.filter(s => s.music).length}/${specs.length} music, ${specs.filter(s => s.ambient).length}/${specs.length} ambient`)

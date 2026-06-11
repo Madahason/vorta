@@ -20,6 +20,11 @@ function prepareForEval(code) {
   return code
     .replace(/^import\s+[^\n]+from\s+['"][^'"]+['"];?\s*/gm, '')
     .replace(/^export default\s+/m, 'return ')
+    // Strip TypeScript `this` parameter annotations: fn(this: any, x) → fn(x)
+    .replace(/\(\s*this\s*:[^,)]+,?\s*/g, '(')
+    .replace(/\(\s*this\s*\)/g, '()')
+    // Strip remaining type annotations that new Function() can't parse
+    .replace(/:\s*(string|number|boolean|any|void|never|object|unknown|React\.FC[^,);\s]*)\b/g, '')
     .trim()
 }
 
