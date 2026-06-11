@@ -1919,3 +1919,36 @@ This ensures the 8-second clip captures the actual subject, not a title card or 
 4. If still 0: emit `no_results` → `onConvertToImage(scene_id)`
 5. If download fails: retry with second-ranked result
 6. If retry fails: emit `failed` → `onConvertToImage(scene_id)`
+
+---
+
+## Session 15 — Cinematographic Prompts, MagnatesMedia Motion Graphics, Composition-Driven Ken Burns
+**Commit:** `feature: cinematographic prompts, MagnatesMedia motion graphics, composition-driven Ken Burns`
+**Date:** 2026-06-11
+
+### Overview
+Three pipeline improvements to production output quality:
+1. **Cinematographic prompt system** — Claude now generates and validates prompts to HIGGSFIELD PROMPT RULES standard; `promptEnhancer.js` cleans every prompt before Higgsfield generation
+2. **MagnatesMedia-style motion graphics** — all 5 Remotion templates redesigned with left accent bars, word-by-word reveals, horizontal bars, and spring-animated dots
+3. **Composition-driven Ken Burns** — `scene.composition` field drives `transformOrigin` for zoom, so close-ups zoom from center, low angles zoom from bottom, over-shoulder from left
+
+### New fields in scene JSON
+- **`composition`** — `"close_up" | "medium" | "wide" | "aerial" | "low_angle" | "over_shoulder"` — assigned by Claude based on dramatic purpose; defaults to `"medium"`
+
+### New files
+- **`server/services/promptEnhancer.js`**
+  - `quickEnhance(prompt, scene)` — no API cost: removes banned words, adds missing composition/lighting, appends style lock
+  - `claudeEnhance(prompt, scene)` — full Claude Haiku rewrite for weak prompts
+  - `enhancePrompt(scene, useClaudeForWeak=true)` — main entry point
+  - `enhanceAllPrompts(scenes)` — batch: skips non-image scenes
+
+### Updated files
+- **`server/services/claude.js`** — HIGGSFIELD PROMPT RULES added: COMPOSITION, LIGHTING, PERIOD DETAIL, ATMOSPHERE requirements; `composition` field in FIELD RULES; `drift_down` in MOTION; `callClaude` export
+- **`server/routes/generate.js`** — `enhancePrompt(scene, false)` called before every `generateImage()`; added `POST /api/generate/enhance-prompts` batch endpoint
+- **`remotion/src/components/AnimatedCounter.jsx`** — left accent bar, bold 108px number, `to ?? value` compat
+- **`remotion/src/components/QuoteCard.jsx`** — left accent bar, word-by-word reveal, `quote || text` compat
+- **`remotion/src/components/TimelineBar.jsx`** — spring dots, left-aligned layout
+- **`remotion/src/components/ComparisonChart.jsx`** — horizontal bars (not vertical), 3px track fills with spring
+- **`remotion/src/components/MapHighlight.jsx`** — double ring, region label top-left, `coordinates=[lat,lng]` compat
+- **`remotion/src/components/ImageScene.jsx`** — `COMPOSITION_ORIGIN` map drives `transformOrigin`; `drift_down` added to `DRIFT_MAP`
+- **`client/src/pages/wizard/ScenesStep.jsx`** — "Enhance prompts" button, `handleEnhancePrompts()`, `isEnhancing` state

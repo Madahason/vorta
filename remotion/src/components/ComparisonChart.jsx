@@ -1,6 +1,6 @@
 import { AbsoluteFill, useCurrentFrame, interpolate, spring } from 'remotion'
 
-// Props: items — [{ label, value, color? }], title (string), unit (string '$' / '%' etc.)
+// Props: items — [{ label, value, color? }], title (string), unit (string)
 const DEFAULT_ITEMS = [
   { label: 'Before', value: 42 },
   { label: 'After',  value: 87 },
@@ -8,115 +8,113 @@ const DEFAULT_ITEMS = [
 
 export default function ComparisonChart({ items = DEFAULT_ITEMS, title = '', unit = '' }) {
   const frame = useCurrentFrame()
-  const { fps } = { fps: 30 }
 
   const maxValue = Math.max(...items.map(it => it.value), 1)
 
-  const titleOpacity = interpolate(frame, [0, 15], [0, 1], {
+  const titleOp = interpolate(frame, [0, 14], [0, 1], {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
   })
 
-  const COLORS = ['rgba(255,255,255,0.55)', 'rgba(255,255,255,0.22)', 'rgba(255,255,255,0.38)', 'rgba(255,255,255,0.15)']
+  const SHADES = [
+    'rgba(255,255,255,0.80)',
+    'rgba(255,255,255,0.42)',
+    'rgba(255,255,255,0.60)',
+    'rgba(255,255,255,0.28)',
+  ]
 
   return (
     <AbsoluteFill style={{
-      background: '#0a0a0a',
+      background: '#080808',
       display: 'flex',
       flexDirection: 'column',
-      alignItems: 'center',
+      alignItems: 'flex-start',
       justifyContent: 'center',
-      fontFamily: "'Inter', 'Helvetica Neue', sans-serif",
-      padding: '60px 160px',
+      fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
+      padding: '60px 100px',
     }}>
       {title && (
         <div style={{
-          fontSize: 18,
-          fontWeight: 400,
-          color: 'rgba(255,255,255,0.3)',
-          letterSpacing: 4,
+          fontSize: 13,
+          fontWeight: 600,
+          color: 'rgba(255,255,255,0.25)',
+          letterSpacing: 5,
           textTransform: 'uppercase',
-          marginBottom: 50,
-          opacity: titleOpacity,
+          marginBottom: 48,
+          opacity: titleOp,
         }}>
           {title}
         </div>
       )}
 
-      {/* Bars */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'flex-end',
-        gap: 40,
-        width: '100%',
-        maxWidth: 700,
-        height: 300,
-      }}>
+      {/* Horizontal bar rows */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 32, width: '100%' }}>
         {items.map((item, i) => {
-          const delay   = 10 + i * 12
+          const delay = 10 + i * 14
           const barFill = spring({
             frame: Math.max(0, frame - delay),
             fps: 30,
-            config: { damping: 60, stiffness: 60, mass: 0.8 },
+            config: { damping: 55, stiffness: 55, mass: 0.9 },
           })
-          const barHeight  = (item.value / maxValue) * 280 * barFill
-          const barColor   = item.color || COLORS[i % COLORS.length]
-          const valOpacity = interpolate(frame, [delay + 10, delay + 20], [0, 1], {
+          const barW = (item.value / maxValue) * 100 * barFill
+          const barColor = item.color || SHADES[i % SHADES.length]
+
+          const labelOp = interpolate(frame, [delay, delay + 10], [0, 1], {
+            extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
+          })
+          const valOp = interpolate(frame, [delay + 8, delay + 18], [0, 1], {
             extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
           })
 
           return (
-            <div key={i} style={{
-              flex: 1,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 12,
-            }}>
-              {/* Value label above bar */}
+            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {/* Label + value row */}
               <div style={{
-                fontSize: 28,
-                fontWeight: 700,
-                color: barColor,
-                letterSpacing: -1,
-                opacity: valOpacity,
-                fontVariantNumeric: 'tabular-nums',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'baseline',
               }}>
-                {unit}{item.value.toLocaleString()}
+                <span style={{
+                  fontSize: 14,
+                  fontWeight: 500,
+                  color: 'rgba(255,255,255,0.32)',
+                  letterSpacing: 3,
+                  textTransform: 'uppercase',
+                  opacity: labelOp,
+                }}>
+                  {item.label}
+                </span>
+                <span style={{
+                  fontSize: 26,
+                  fontWeight: 700,
+                  color: barColor,
+                  letterSpacing: -1,
+                  fontVariantNumeric: 'tabular-nums',
+                  opacity: valOp,
+                }}>
+                  {unit}{item.value.toLocaleString()}
+                </span>
               </div>
 
-              {/* Bar */}
-              <div style={{
-                width: '100%',
-                height: barHeight,
-                background: barColor,
-                borderRadius: '4px 4px 0 0',
-                minHeight: 2,
-              }} />
-
-              {/* Label below */}
-              <div style={{
-                fontSize: 14,
-                fontWeight: 400,
-                color: 'rgba(255,255,255,0.30)',
-                letterSpacing: 2,
-                textTransform: 'uppercase',
-                opacity: valOpacity,
-                textAlign: 'center',
-              }}>
-                {item.label}
+              {/* Track */}
+              <div style={{ position: 'relative', height: 3, width: '100%' }}>
+                <div style={{
+                  position: 'absolute',
+                  inset: 0,
+                  background: 'rgba(255,255,255,0.06)',
+                  borderRadius: 2,
+                }} />
+                <div style={{
+                  position: 'absolute',
+                  top: 0, left: 0, bottom: 0,
+                  width: `${barW}%`,
+                  background: barColor,
+                  borderRadius: 2,
+                }} />
               </div>
             </div>
           )
         })}
       </div>
-
-      {/* Baseline */}
-      <div style={{
-        width: '100%', maxWidth: 700,
-        height: 1,
-        background: 'rgba(255,255,255,0.08)',
-        marginTop: 0,
-      }} />
     </AbsoluteFill>
   )
 }

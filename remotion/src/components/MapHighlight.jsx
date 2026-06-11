@@ -1,13 +1,9 @@
 import { AbsoluteFill, useCurrentFrame, interpolate } from 'remotion'
 
-// Simple SVG world map with a highlighted region shown as a pulsing dot + label.
-// Props: region (string), lat (number -90..90), lng (number -180..180), label (string)
-// For a real project this would use a GeoJSON renderer; this version uses a
-// stylised world outline + positioned marker as a clean documentary lower-third style.
-
+// Props: region (string), lat (number), lng (number), label (string)
+// Backward compat: coordinates=[lat,lng] accepted instead of lat/lng
 const WORLD_VIEWBOX = '0 0 1000 500'
 
-// Simplified world silhouette paths (rough approximations)
 const LAND_PATH = `
   M 80 120 L 120 100 L 160 110 L 180 140 L 160 170 L 120 160 Z
   M 150 110 L 200 90 L 240 100 L 260 130 L 240 150 L 200 140 Z
@@ -31,120 +27,135 @@ const LAND_PATH = `
   M 270 290 L 350 280 L 390 305 L 390 355 L 355 385 L 305 384 L 274 358 L 262 318 Z
 `
 
-// Convert lat/lng to SVG x/y in our 1000x500 viewbox
 function latLngToXY(lat, lng) {
   const x = ((lng + 180) / 360) * 1000
   const y = ((90 - lat) / 180) * 500
   return { x, y }
 }
 
-export default function MapHighlight({ region = 'New York', lat = 40.7, lng = -74.0, label = '' }) {
+export default function MapHighlight({ region = 'New York', lat, lng, coordinates, label = '' }) {
   const frame = useCurrentFrame()
 
-  const { x, y } = latLngToXY(lat, lng)
+  // Backward compat: accept coordinates=[lat,lng] or lat/lng props
+  const resolvedLat = lat ?? (Array.isArray(coordinates) ? coordinates[0] : 40.7)
+  const resolvedLng = lng ?? (Array.isArray(coordinates) ? coordinates[1] : -74.0)
 
-  // Map fade in
-  const mapOpacity = interpolate(frame, [0, 20], [0, 0.4], {
+  const { x, y } = latLngToXY(resolvedLat, resolvedLng)
+
+  const mapOp = interpolate(frame, [0, 22], [0, 0.35], {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
   })
 
-  // Dot pulse
-  const pulseScale = 1 + 0.4 * Math.sin(frame * 0.15)
-  const dotOpacity = interpolate(frame, [15, 30], [0, 1], {
+  // Ripple pulse
+  const pulseScale = 1 + 0.5 * Math.sin(frame * 0.12)
+  const dotOp = interpolate(frame, [18, 32], [0, 1], {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
   })
 
-  // Label fade
-  const labelOpacity = interpolate(frame, [25, 45], [0, 1], {
+  const regionOp = interpolate(frame, [4, 20], [0, 1], {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
   })
-  const labelY = interpolate(frame, [25, 45], [6, 0], {
+  const regionY = interpolate(frame, [4, 20], [-8, 0], {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
   })
 
-  // Region text at top
-  const regionOpacity = interpolate(frame, [5, 22], [0, 1], {
+  const labelOp = interpolate(frame, [28, 44], [0, 1], {
+    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
+  })
+  const labelY = interpolate(frame, [28, 44], [6, 0], {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
   })
 
   return (
     <AbsoluteFill style={{
-      background: '#0a0a0a',
+      background: '#080808',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      fontFamily: "'Inter', 'Helvetica Neue', sans-serif",
+      fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
     }}>
-      {/* Region label top */}
+      {/* Region name — top left */}
       <div style={{
         position: 'absolute',
-        top: 80,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        fontSize: 18,
-        fontWeight: 400,
-        color: 'rgba(255,255,255,0.30)',
+        top: 72,
+        left: 100,
+        fontSize: 13,
+        fontWeight: 600,
+        color: 'rgba(255,255,255,0.28)',
         letterSpacing: 5,
         textTransform: 'uppercase',
-        opacity: regionOpacity,
+        opacity: regionOp,
+        transform: `translateY(${regionY}px)`,
         whiteSpace: 'nowrap',
       }}>
         {region}
       </div>
 
+      {/* Thin separator */}
+      <div style={{
+        position: 'absolute',
+        top: 100,
+        left: 100,
+        width: interpolate(frame, [10, 30], [0, 48], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }),
+        height: 1,
+        background: 'rgba(255,255,255,0.18)',
+      }} />
+
       {/* SVG map */}
-      <svg
-        viewBox={WORLD_VIEWBOX}
-        style={{
-          width: '80%',
-          height: 'auto',
-          opacity: mapOpacity,
-        }}
-      >
+      <svg viewBox={WORLD_VIEWBOX} style={{ width: '78%', height: 'auto', opacity: mapOp }}>
         <path
           d={LAND_PATH}
-          fill="rgba(255,255,255,0.18)"
-          stroke="rgba(255,255,255,0.08)"
-          strokeWidth="1"
+          fill="rgba(255,255,255,0.12)"
+          stroke="rgba(255,255,255,0.06)"
+          strokeWidth="0.8"
         />
 
-        {/* Highlight ring */}
+        {/* Outer ripple */}
         <circle
           cx={x} cy={y}
-          r={18 * pulseScale}
+          r={22 * pulseScale}
           fill="none"
-          stroke="rgba(255,255,255,0.15)"
+          stroke="rgba(255,255,255,0.10)"
           strokeWidth="1"
-          opacity={dotOpacity}
+          opacity={dotOp}
         />
 
-        {/* Marker dot */}
+        {/* Inner ring */}
         <circle
           cx={x} cy={y}
-          r={6}
-          fill="rgba(255,255,255,0.85)"
-          opacity={dotOpacity}
+          r={10}
+          fill="none"
+          stroke="rgba(255,255,255,0.35)"
+          strokeWidth="1"
+          opacity={dotOp}
+        />
+
+        {/* Marker */}
+        <circle
+          cx={x} cy={y}
+          r={4}
+          fill="#ffffff"
+          opacity={dotOp}
         />
       </svg>
 
-      {/* Floating label near dot */}
+      {/* Floating label */}
       {label && (
         <div style={{
           position: 'absolute',
-          // Rough SVG-to-screen mapping for 80% width, centered
-          left: `calc(10% + ${(x / 1000) * 80}%)`,
-          top:  `calc(50% - ${((500 - y) / 500) * 40}% + 24px)`,
+          left: `calc(11% + ${(x / 1000) * 78}%)`,
+          top: `calc(50% - ${((500 - y) / 500) * 38}% + 20px)`,
           transform: `translate(-50%, ${labelY}px)`,
-          fontSize: 13,
-          fontWeight: 500,
-          color: 'rgba(255,255,255,0.55)',
-          letterSpacing: 2,
+          fontSize: 11,
+          fontWeight: 600,
+          color: 'rgba(255,255,255,0.50)',
+          letterSpacing: 3,
           textTransform: 'uppercase',
-          opacity: labelOpacity,
+          opacity: labelOp,
           whiteSpace: 'nowrap',
-          background: 'rgba(0,0,0,0.6)',
+          background: 'rgba(0,0,0,0.55)',
           padding: '3px 8px',
-          borderRadius: 3,
+          borderRadius: 2,
         }}>
           {label}
         </div>

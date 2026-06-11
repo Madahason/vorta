@@ -76,15 +76,71 @@ Every script_excerpt will be read aloud by an AI narrator. It must be TTS-safe:
 4. Remove any stage directions, speaker labels, parenthetical asides, or bracketed text.
 5. Each excerpt must represent one complete thought or narrative beat — something a narrator would say in a single breath without pausing.
 
-PROMPT GROUNDING RULES (image scenes)
+HIGGSFIELD PROMPT RULES — CINEMATOGRAPHIC STANDARD
 
-1. SUBJECT ANCHORING — Every prompt must name the actual subject. Apple = Steve Jobs, iPhone, Macintosh, Cupertino, specific Apple products. Lehman Brothers = trading floor, cardboard boxes, NYSE ticker. Never use a stand-in.
-2. SCENE LITERALISM — Describe what is physically visible in the excerpt. Not a metaphor. Not a mood. The specific object, person, place, and action.
-3. VISUAL SPECIFICITY — Real location names. Real years in the scene. Product names and model numbers. People described by physical appearance and context (black turtleneck, jeans, rimless glasses).
-4. CAMERA FRAMING — Include one camera/framing note: wide establishing shot / medium shot / extreme close-up / low angle / aerial / over-the-shoulder. This makes the image more cinematic.
-5. BANNED WORDS — Do NOT use: businessman, businesswoman, office, technology, modern, futuristic, abstract, concept, idea, success, growth, innovation, digital, corporate, professional, entrepreneur, startup, leadership. Use specific real-world nouns instead.
-6. SUBJECT ANCHORS — Extract 3-6 specific named entities (people, companies, products, events, places, years). At least 2 must appear verbatim in higgsfield_prompt.
-7. MINIMUM LENGTH — higgsfield_prompt must be at least 40 characters of subject-specific description, not counting the style lock suffix.
+Every image prompt must read like a cinematographer's shot note. Specify all of:
+SUBJECT + COMPOSITION + LIGHTING + PERIOD DETAIL + ATMOSPHERE
+
+COMPOSITION — always specify one (also set the composition field):
+- "extreme close-up of [subject detail]" → close_up
+- "tight medium shot of [subject] centered left third" → medium
+- "wide establishing shot of [location] with [subject] small in frame" → wide
+- "aerial looking down on [subject/location]" → aerial
+- "low angle looking up at [subject] against [background]" → low_angle
+- "over-shoulder shot behind [subject] facing [direction]" → over_shoulder
+
+LIGHTING — always specify one:
+- "single overhead spotlight carving subject from darkness"
+- "harsh fluorescent office lighting casting flat shadows"
+- "golden hour backlight rim-lighting subject's silhouette"
+- "multiple monitor screens casting cold blue light on face"
+- "emergency lighting, red glow, dark corridors"
+- "overcast grey light, flat and clinical"
+- "streetlamp sodium orange against night sky"
+- "television screen light flickering on darkened faces"
+
+PERIOD DETAIL — always include one year-specific environmental detail:
+- Technology visible (CRT monitors, early smartphones, fax machines)
+- Fashion or hairstyle (wide ties 1990s, turtlenecks 2000s)
+- Architecture or signage (brutalist concrete 1970s, glass and steel 2000s)
+- Vehicle or product visible in background
+
+ATMOSPHERE — always include one specific physical detail:
+- "dust motes visible in the light beam"
+- "rain streaking the glass behind"
+- "cigarette smoke drifting across frame"
+- "steam rising from coffee cup in foreground"
+- "papers scattered across desk surface"
+- "empty chairs in rows behind the subject"
+- "crowd blurred in background bokeh"
+
+BANNED — never use these words:
+businessman, corporate, modern, futuristic, abstract, technology, professional,
+success, growth, innovation, digital, concept, idea, office worker, suit
+
+BAD prompt (forbidden):
+"Modern technology company office with professionals discussing business strategy"
+
+GOOD prompt (required):
+"Tight medium shot of Reed Hastings at a glass table in Netflix headquarters Los Gatos 2011,
+harsh overhead fluorescent lighting, early flat-screen monitors visible behind him,
+papers and a red Netflix envelope on the table surface"
+
+SUBJECT GROUNDING — every prompt must:
+1. Name the actual subject by real name (Steve Jobs, not "the founder")
+2. Include real location and year
+3. Describe what is physically visible, not the theme or concept
+4. Extract 3-6 subject_anchors — specific named entities (people, companies, products, events, places, years)
+5. At least 2 anchors must appear verbatim in higgsfield_prompt
+6. Minimum 40 characters of subject-specific content before the style lock
+
+COMPOSITION FIELD — assign one of these to the composition field based on dramatic purpose:
+- close_up: emotional moments, a person's face, key object detail
+- medium: dialogue, action, most narrative scenes (default)
+- wide: establishing location, scale revelation, isolation
+- aerial: power, geography, scope
+- low_angle: authority, threat, triumph
+- over_shoulder: tension, conversation, surveillance feeling
 
 MOTION — INTENTIONAL CAMERA MOVEMENT
 
@@ -94,6 +150,7 @@ Every image scene needs a motion assignment that matches the emotional weight of
 - drift_left: timelines, historical progression, walking through a story left to right
 - drift_right: reverse-timeline, rewinding, recalling the past
 - drift_up: aspiration, escape, achieving lift-off (product launch, stock price rise, founding moment)
+- drift_down: descent, decline, gravity pulling downward (market crash, fall from power)
 - static: death, failure, shock, gravity, decisive silence (firing, bankruptcy filing, product cancellation)
 
 intensity:
@@ -199,14 +256,15 @@ FIELD RULES
 - scene_id: "001", "002", etc.
 - script_excerpt: the exact sentences from the script this scene covers — must end with terminal punctuation, be 15-60 words, and contain no stage directions or bracketed text
 - duration_seconds: 4 for punchy single moments; 5-6 for standard scenes; 7-8 for complex establishing shots or emotional peaks
-- higgsfield_prompt: cinematic visual description only — no style instructions, no mood words. Pure visual content: who, what, where, when, how it looks. MINIMUM 40 characters of subject-specific content.
+- higgsfield_prompt: cinematographer's shot note — SUBJECT + COMPOSITION + LIGHTING + PERIOD DETAIL + ATMOSPHERE. MINIMUM 40 characters of subject-specific content. No style instructions (style lock is appended automatically).
+- composition: "close_up" | "medium" | "wide" | "aerial" | "low_angle" | "over_shoulder" — assign based on dramatic purpose (see COMPOSITION FIELD rules above). Default "medium" if uncertain.
 - motion_graphic_type: AnimatedCounter | TimelineBar | ComparisonChart | QuoteCard | MapHighlight
 - clip_search_tags: 3-6 lowercase tags, specific enough to find real footage
 
 Return ONLY a raw JSON array. No markdown, no explanation, no wrapper.
 
 Example (Apple documentary):
-{"scene_id":"001","script_excerpt":"It began not in a boardroom, but in a garage. Cupertino, California, 1976.","shot_type":"image","mood":"intimate","higgsfield_prompt":"Wide shot of a cluttered residential garage in Cupertino California 1976, wooden workbench covered in circuit boards and electronic components, bare concrete floor, fluorescent overhead light, cardboard boxes stacked against walls, one small window with late afternoon sun","subject_anchors":["Cupertino California","1976","Apple garage","Steve Jobs","Steve Wozniak"],"motion":{"type":"drift_right","intensity":"subtle"},"overlays":[{"type":"date_stamp","text":"Cupertino, California, 1976"}],"transition_out":"dissolve","grade":"warm_amber","motion_graphic_type":"","style_lock":"","real_footage_flag":false,"clip_search_tags":[],"duration_seconds":6}`;
+{"scene_id":"001","script_excerpt":"It began not in a boardroom, but in a garage. Cupertino, California, 1976.","shot_type":"image","mood":"intimate","composition":"wide","higgsfield_prompt":"Wide establishing shot of a cluttered residential garage in Cupertino California 1976, wooden workbench covered in circuit boards and soldering equipment, bare concrete floor, single bare incandescent bulb overhead casting warm shadows, faded cardboard boxes stacked against wood-panel walls, a hand-painted Apple Computer sign propped against the workbench","subject_anchors":["Cupertino California","1976","Apple garage","Steve Jobs","Steve Wozniak"],"motion":{"type":"drift_right","intensity":"subtle"},"overlays":[{"type":"date_stamp","text":{"line1":"Cupertino, California · 1976"},"timing":{"appearAt":0.5},"confidence":0.9,"reason":"First scene establishes historical time and place","status":"suggested"}],"transition_out":"dissolve","grade":"warm_amber","motion_graphic_type":"","style_lock":"","real_footage_flag":false,"clip_search_tags":[],"duration_seconds":6}`;
 
 // Build a fallback higgsfield_prompt from subject_anchors + script_excerpt
 // Used when Claude returns an empty or malformed prompt
@@ -338,6 +396,7 @@ Track entity introductions across all scenes — each named person or company ge
       scene_id: String(i + 1).padStart(3, '0'),
       style_lock: STYLE_LOCK,
       subject_anchors:  scene.subject_anchors  || [],
+      composition:      scene.composition      || 'medium',
       motion:           scene.shot_type === 'image'
         ? (scene.motion || { type: style.motionType || 'push_in', intensity: 'subtle' })
         : null,

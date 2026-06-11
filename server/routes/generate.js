@@ -4,6 +4,7 @@ const fs = require('fs');
 const https = require('https');
 const http = require('http');
 const { generateImage } = require('../services/higgsfield');
+const { enhancePrompt, enhanceAllPrompts } = require('../services/promptEnhancer');
 
 // In-memory progress store: projectId → { progress, clients, allDone }
 const store = new Map();
@@ -48,7 +49,8 @@ async function processScene(projectId, scene, assetsDir) {
     entry.progress[scene.scene_id].status = 'generating';
     broadcast(projectId, { type: 'update', scene_id: scene.scene_id, status: 'generating' });
 
-    const outputUrl = await generateImage(scene.higgsfield_prompt);
+    const promptToUse = await enhancePrompt(scene, false);
+    const outputUrl = await generateImage(promptToUse);
 
     // Use the real extension from the URL (Higgsfield returns .png)
     const ext = path.extname(new URL(outputUrl).pathname) || '.png';
@@ -188,6 +190,22 @@ router.post('/retry', async (req, res) => {
       broadcast(projectId, { type: 'done' });
     }
   })();
+});
+
+// ─── POST /api/generate/enhance-prompts — batch enhance all scene prompts ──────
+
+router.post('/enhance-prompts', async (req, res) => {
+  const { scenes } = req.body;
+  if (!Array.isArray(scenes) || !scenes.length) {
+    return res.status(400).json({ error: 'scenes array is required' });
+  }
+  try {
+    const enhanced = await enhanceAllPrompts(scenes);
+    res.json({ scenes: enhanced });
+  } catch (err) {
+    console.error('[generate] enhance-prompts failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

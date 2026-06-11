@@ -1,101 +1,117 @@
 import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, spring } from 'remotion'
 
-// Props: value (number), label (string), prefix (string '$'), suffix (string '%')
-export default function AnimatedCounter({ value = 1000, label = '', prefix = '', suffix = '' }) {
+// Props: to (number), from (number), label (string), prefix (string), suffix (string)
+// Backward compat: value= is accepted as alias for to=
+export default function AnimatedCounter({ to, from = 0, value, label = '', prefix = '', suffix = '' }) {
   const frame = useCurrentFrame()
   const { fps, durationInFrames } = useVideoConfig()
 
-  // Count-up animation with spring ease for natural deceleration
+  const target = to ?? value ?? 1000
+  const origin = from ?? 0
+
   const progress = spring({
     frame,
     fps,
-    config: { damping: 50, stiffness: 80, mass: 1 },
-    durationInFrames: Math.min(durationInFrames - 20, durationInFrames * 0.8),
+    config: { damping: 40, stiffness: 60, mass: 1.2 },
+    durationInFrames: Math.min(durationInFrames - 10, durationInFrames * 0.85),
   })
 
-  const displayValue = Math.round(progress * value)
+  const current = origin + Math.round(progress * (target - origin))
+  const formatted = current.toLocaleString()
 
-  // Format large numbers with commas
-  const formatted = displayValue.toLocaleString()
-
-  // Label fade in
-  const labelOpacity = interpolate(frame, [0, 20], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
+  const appear = interpolate(frame, [0, 10], [0, 1], {
+    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
   })
 
-  // Number entrance
-  const numScale = interpolate(frame, [0, 15], [0.85, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
+  // Accent bar slides down
+  const barH = interpolate(frame, [0, 18], [0, 72], {
+    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
   })
-  const numOpacity = interpolate(frame, [0, 12], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
+
+  // Label slides up
+  const labelY = interpolate(frame, [8, 24], [12, 0], {
+    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
+  })
+  const labelOp = interpolate(frame, [8, 24], [0, 1], {
+    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
   })
 
   return (
     <AbsoluteFill style={{
-      background: '#0a0a0a',
+      background: '#080808',
       display: 'flex',
-      flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
-      fontFamily: "'Inter', 'Helvetica Neue', sans-serif",
+      fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
     }}>
-      {/* Number */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'baseline',
-        gap: 6,
-        opacity: numOpacity,
-        transform: `scale(${numScale})`,
-      }}>
-        {prefix && (
-          <span style={{ fontSize: 64, fontWeight: 300, color: 'rgba(255,255,255,0.4)', letterSpacing: -2 }}>
-            {prefix}
-          </span>
-        )}
-        <span style={{
-          fontSize: 120,
-          fontWeight: 700,
-          color: 'rgba(255,255,255,0.92)',
-          letterSpacing: -6,
-          lineHeight: 1,
-          fontVariantNumeric: 'tabular-nums',
-        }}>
-          {formatted}
-        </span>
-        {suffix && (
-          <span style={{ fontSize: 64, fontWeight: 300, color: 'rgba(255,255,255,0.4)', letterSpacing: -2 }}>
-            {suffix}
-          </span>
-        )}
-      </div>
-
-      {/* Label */}
-      {label && (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 32 }}>
+        {/* Vertical accent bar */}
         <div style={{
-          marginTop: 24,
-          fontSize: 22,
-          fontWeight: 400,
-          color: 'rgba(255,255,255,0.35)',
-          letterSpacing: 4,
-          textTransform: 'uppercase',
-          opacity: labelOpacity,
-        }}>
-          {label}
-        </div>
-      )}
+          width: 3,
+          height: barH,
+          background: 'rgba(255,255,255,0.7)',
+          borderRadius: 2,
+          alignSelf: 'center',
+        }} />
 
-      {/* Underline accent */}
-      <div style={{
-        marginTop: 20,
-        width: interpolate(progress, [0, 1], [0, 120]),
-        height: 2,
-        background: 'rgba(255,255,255,0.15)',
-        borderRadius: 1,
-      }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {/* Number row */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            gap: 8,
+            opacity: appear,
+          }}>
+            {prefix && (
+              <span style={{
+                fontSize: 52,
+                fontWeight: 300,
+                color: 'rgba(255,255,255,0.38)',
+                letterSpacing: -1,
+                lineHeight: 1,
+              }}>
+                {prefix}
+              </span>
+            )}
+            <span style={{
+              fontSize: 108,
+              fontWeight: 800,
+              color: '#ffffff',
+              letterSpacing: -5,
+              lineHeight: 1,
+              fontVariantNumeric: 'tabular-nums',
+            }}>
+              {formatted}
+            </span>
+            {suffix && (
+              <span style={{
+                fontSize: 52,
+                fontWeight: 300,
+                color: 'rgba(255,255,255,0.38)',
+                letterSpacing: -1,
+                lineHeight: 1,
+              }}>
+                {suffix}
+              </span>
+            )}
+          </div>
+
+          {/* Label */}
+          {label && (
+            <div style={{
+              fontSize: 16,
+              fontWeight: 500,
+              color: 'rgba(255,255,255,0.30)',
+              letterSpacing: 5,
+              textTransform: 'uppercase',
+              opacity: labelOp,
+              transform: `translateY(${labelY}px)`,
+            }}>
+              {label}
+            </div>
+          )}
+        </div>
+      </div>
     </AbsoluteFill>
   )
 }
