@@ -1,6 +1,6 @@
 const fs   = require('fs')
 const path = require('path')
-const { v4: uuidv4 } = require('uuid')
+const { randomUUID: uuidv4 } = require('crypto')
 
 const LIBRARY_DIR  = path.resolve(__dirname, '../../library/sounds')
 const INDEX_PATH   = path.resolve(__dirname, '../../library/soundIndex.json')

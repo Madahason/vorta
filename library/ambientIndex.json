@@ -1,0 +1,50 @@
+{
+  "tech_neutral": {
+    "filename": "ambient_tech_neutral_1781012010832.mp3",
+    "url": "/library/ambient/ambient_tech_neutral_1781012010832.mp3",
+    "key": "tech_neutral",
+    "prompt": "Modern tech office ambient, server hum, air conditioning, quiet keyboard sounds, 30 second loop, neutral, unobtrusive"
+  },
+  "tech_tense": {
+    "filename": "ambient_tech_tense_1781012014146.mp3",
+    "url": "/library/ambient/ambient_tech_tense_1781012014146.mp3",
+    "key": "tech_tense",
+    "prompt": "Modern tech office ambient, server hum, air conditioning, quiet keyboard sounds, 30 second loop, with subtle tension, slightly uneasy"
+  },
+  "tech_dramatic": {
+    "filename": "ambient_tech_dramatic_1781012017043.mp3",
+    "url": "/library/ambient/ambient_tech_dramatic_1781012017043.mp3",
+    "key": "tech_dramatic",
+    "prompt": "Modern tech office ambient, server hum, air conditioning, quiet keyboard sounds, 30 second loop, heightened, intense background"
+  },
+  "default_anticipatory": {
+    "filename": "ambient_default_anticipatory_1781028621292.mp3",
+    "url": "/library/ambient/ambient_default_anticipatory_1781028621292.mp3",
+    "key": "default_anticipatory",
+    "prompt": "Soft neutral room tone ambient, subtle background texture, 30 second loop, neutral, unobtrusive"
+  },
+  "default_neutral": {
+    "filename": "ambient_default_neutral_1781028623141.mp3",
+    "url": "/library/ambient/ambient_default_neutral_1781028623141.mp3",
+    "key": "default_neutral",
+    "prompt": "Soft neutral room tone ambient, subtle background texture, 30 second loop, neutral, unobtrusive"
+  },
+  "default_dramatic": {
+    "filename": "ambient_default_dramatic_1781028624715.mp3",
+    "url": "/library/ambient/ambient_default_dramatic_1781028624715.mp3",
+    "key": "default_dramatic",
+    "prompt": "Soft neutral room tone ambient, subtle background texture, 30 second loop, heightened, intense background"
+  },
+  "finance_somber": {
+    "filename": "ambient_finance_somber_1781028626208.mp3",
+    "url": "/library/ambient/ambient_finance_somber_1781028626208.mp3",
+    "key": "finance_somber",
+    "prompt": "Stock exchange trading floor ambient sound, distant crowd murmur, ticker sounds, 30 second loop, quiet, minimal, somber atmosphere"
+  },
+  "tech_institutional": {
+    "filename": "ambient_tech_institutional_1781028627575.mp3",
+    "url": "/library/ambient/ambient_tech_institutional_1781028627575.mp3",
+    "key": "tech_institutional",
+    "prompt": "Modern tech office ambient, server hum, air conditioning, quiet keyboard sounds, 30 second loop, neutral, unobtrusive"
+  }
+}

@@ -1,7 +1,7 @@
 const { ElevenLabsClient } = require('@elevenlabs/elevenlabs-js')
 const fs   = require('fs')
 const path = require('path')
-const { v4: uuidv4 } = require('uuid')
+const { randomUUID: uuidv4 } = require('crypto')
 const {
   addToLibrary, searchLibrary, incrementUsage,
   STINGS_DIR, AMBIENT_DIR, OVERLAY_DIR,
