@@ -7,7 +7,23 @@ const { promisify } = require('util')
 const execAsync = promisify(exec)
 const multer  = require('multer')
 
-const CLIPS_DIR = path.join(__dirname, '../../library/clips')
+const CLIPS_DIR        = path.join(__dirname, '../../library/clips')
+const REMOTION_CLIPS   = path.resolve(__dirname, '../../remotion/public/clips')
+
+// Keep remotion/public/clips/ in sync whenever a new clip lands in library/clips/
+function syncSingleClipToRemotion(filename) {
+  const src  = path.join(CLIPS_DIR, filename)
+  const dest = path.join(REMOTION_CLIPS, filename)
+  try {
+    if (!fs.existsSync(REMOTION_CLIPS)) fs.mkdirSync(REMOTION_CLIPS, { recursive: true })
+    if (fs.existsSync(src) && !fs.existsSync(dest)) {
+      fs.copyFileSync(src, dest)
+      console.log('[library] synced to remotion:', filename)
+    }
+  } catch (err) {
+    console.warn('[library] remotion sync failed (non-fatal):', err.message)
+  }
+}
 
 const storage = multer.diskStorage({
   destination: CLIPS_DIR,
@@ -442,6 +458,7 @@ router.post('/download', async (req, res) => {
 
     send({ type: 'saving', message: 'Saving to library…' })
     const saved = clipStore.addClip(clipData)
+    syncSingleClipToRemotion(path.basename(saved.file))
 
     send({ type: 'done', clip: saved })
     res.end()
@@ -484,6 +501,7 @@ router.post('/upload', upload.single('clip'), async (req, res) => {
       project_id: null,
     })
 
+    syncSingleClipToRemotion(filename)
     console.log(`[library] uploaded clip ${clip.clip_id} — ${filename} — ${duration}s`)
     res.json({ clip })
   } catch (err) {

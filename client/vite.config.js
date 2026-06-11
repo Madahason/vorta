@@ -7,15 +7,16 @@ export default defineConfig({
   resolve: {
     alias: {
       '@remotion-compositions': path.resolve(__dirname, '../remotion/src'),
-      // Force all Remotion composition imports to use the client's copies of
-      // these packages — prevents multiple React/Remotion instances which
-      // cause "Invalid hook call" and "resolveDispatcher is null" errors.
-      'react':           path.resolve(__dirname, 'node_modules/react'),
-      'react-dom':       path.resolve(__dirname, 'node_modules/react-dom'),
-      'remotion':        path.resolve(__dirname, 'node_modules/remotion'),
-      '@remotion/player':path.resolve(__dirname, 'node_modules/@remotion/player'),
+      // Force all Remotion imports to use the client's copies — prevents
+      // multiple React/Remotion instances ("Invalid hook call") and version
+      // mismatches (SequenceWithoutSchema undefined in @remotion/transitions).
+      'react':                    path.resolve(__dirname, 'node_modules/react'),
+      'react-dom':                path.resolve(__dirname, 'node_modules/react-dom'),
+      'remotion':                 path.resolve(__dirname, 'node_modules/remotion'),
+      '@remotion/player':         path.resolve(__dirname, 'node_modules/@remotion/player'),
+      '@remotion/transitions':    path.resolve(__dirname, 'node_modules/@remotion/transitions'),
     },
-    dedupe: ['react', 'react-dom', 'remotion', '@remotion/player'],
+    dedupe: ['react', 'react-dom', 'remotion', '@remotion/player', '@remotion/transitions'],
   },
   server: {
     proxy: {
@@ -23,6 +24,7 @@ export default defineConfig({
       '/projects': 'http://localhost:3001',
       '/library':  'http://localhost:3001',
       '/output':   'http://localhost:3001',
+      '/clips':    'http://localhost:3001',  // staticFile('clips/...') in Remotion Player
     },
   },
 })

@@ -33,6 +33,32 @@ if (!fs.existsSync(libraryClipsPath)) {
 }
 app.use('/library', express.static(libraryPath));
 
+// /clips — serves library/clips/ directly so staticFile('clips/...') in the
+// Remotion <Player> (browser preview) resolves correctly via the Vite proxy.
+app.use('/clips', express.static(libraryClipsPath));
+
+// One-time startup: sync all existing library clips to remotion/public/clips/
+// so the Remotion CLI bundle server can serve them via staticFile().
+function syncAllClipsToRemotion() {
+  const remotionClipsDir = path.join(__dirname, '../remotion/public/clips');
+  if (!fs.existsSync(libraryClipsPath)) return;
+  if (!fs.existsSync(remotionClipsDir)) fs.mkdirSync(remotionClipsDir, { recursive: true });
+
+  const clips = fs.readdirSync(libraryClipsPath)
+    .filter(f => /\.(mp4|webm|mov)$/i.test(f));
+
+  let synced = 0;
+  clips.forEach(filename => {
+    const src  = path.join(libraryClipsPath, filename);
+    const dest = path.join(remotionClipsDir, filename);
+    if (!fs.existsSync(dest)) {
+      try { fs.copyFileSync(src, dest); synced++; } catch { /* skip on error */ }
+    }
+  });
+  console.log(`[startup] synced ${synced} new clips to remotion/public/clips (${clips.length} total)`);
+}
+syncAllClipsToRemotion();
+
 // /output also serves the projects folder — clean URL for MP4 downloads
 app.use('/output', express.static(path.join(__dirname, '../projects')));
 

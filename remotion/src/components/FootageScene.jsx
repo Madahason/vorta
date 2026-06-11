@@ -3,24 +3,21 @@ import { Video, staticFile, AbsoluteFill } from 'remotion'
 import FilmLook from './overlays/FilmLook'
 import PlaceholderScene from './PlaceholderScene'
 
-// Converts the backend file path to a Remotion static path.
-// Clips must be copied to remotion/public/clips/ for Remotion to serve them.
-const getClipPath = (filePath) => {
-  const filename = filePath.split('/').pop()
-  return staticFile(`clips/${filename}`)
-}
-
-export default function FootageScene({ clip }) {
+export default function FootageScene({ clip, scene }) {
   const [error, setError] = useState(false)
 
-  // Use filename field if present, fall back to deriving from file path
-  const filename = clip?.filename || (clip?.file ? clip.file.split('/').pop() : null)
+  // Extract just the filename so staticFile() can resolve it from remotion/public/clips/.
+  // clip.file may arrive as /library/clips/name.mp4 or http://localhost:3001/library/clips/name.mp4
+  const filename = clip?.file
+    ? clip.file.split('/').pop().split('\\').pop()
+    : null
 
   if (error || !filename) {
     return (
       <PlaceholderScene
         label={filename ? 'Clip not found' : 'No clip selected'}
         sublabel={filename}
+        scene={scene}
       />
     )
   }
@@ -30,7 +27,10 @@ export default function FootageScene({ clip }) {
       <Video
         src={staticFile(`clips/${filename}`)}
         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-        onError={() => setError(true)}
+        onError={() => {
+          console.error('[FootageScene] failed to load:', filename)
+          setError(true)
+        }}
       />
       <FilmLook grade="neutral" grainIntensity={0.04} vignetteIntensity={0.35} />
     </AbsoluteFill>

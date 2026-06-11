@@ -27,5 +27,13 @@ client/dist/
 # Projects output (generated at runtime — not source)
 projects/
 
+# Clip video files synced at runtime — too large for git; sync logic recreates them
+remotion/public/clips/*.mp4
+remotion/public/clips/*.webm
+remotion/public/clips/*.mov
+library/clips/*.mp4
+library/clips/*.webm
+library/clips/*.mov
+
 # Claude Code internal state
 .claude/

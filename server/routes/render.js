@@ -39,6 +39,35 @@ function absolutifyAudioSpecs(specs) {
   }));
 }
 
+// Copy selected clip files from library/clips/ into remotion/public/clips/ so
+// Remotion's bundle server can serve them via staticFile() during CLI rendering.
+function syncClipsToRemotionPublic(selectedClips) {
+  if (!selectedClips || Object.keys(selectedClips).length === 0) return;
+
+  const remotionClipsDir = path.resolve(__dirname, '../../remotion/public/clips');
+  if (!fs.existsSync(remotionClipsDir)) {
+    fs.mkdirSync(remotionClipsDir, { recursive: true });
+  }
+
+  for (const [, clip] of Object.entries(selectedClips)) {
+    if (!clip?.file) continue;
+    const srcPath  = path.resolve(__dirname, '../..', clip.file.replace(/^\/+/, ''));
+    const filename = path.basename(srcPath);
+    const destPath = path.join(remotionClipsDir, filename);
+
+    if (!fs.existsSync(srcPath)) {
+      console.warn(`[render] clip file not found: ${srcPath}`);
+      continue;
+    }
+    if (!fs.existsSync(destPath)) {
+      fs.copyFileSync(srcPath, destPath);
+      console.log(`[render] synced clip: ${filename}`);
+    } else {
+      console.log(`[render] clip already synced: ${filename}`);
+    }
+  }
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────────
 
 const q = (p) => `"${p}"`;  // quote a path for shell command
@@ -99,6 +128,11 @@ router.post('/', async (req, res) => {
   if (existing?.process) {
     try { existing.process.kill(); } catch {}
   }
+
+  console.log('[render] selectedClips count:', Object.keys(selectedClips || {}).length);
+
+  // Sync selected clip files to remotion/public/clips/ before rendering
+  syncClipsToRemotionPublic(selectedClips);
 
   // ── Build render props with full HTTP URLs ────────────────────────────────
   // All asset URLs in props must be full http://localhost:PORT/... URLs.
