@@ -417,27 +417,18 @@ export default function VideoCreator() {
   const handleBuildAudioSpecs = async () => {
     if (!scenes.length) return
 
-    // Pre-download missing stings so build-specs doesn't time out waiting
-    try {
-      const statusRes = await fetch('/api/audio/status')
-      const status    = await statusRes.json()
-      if (status.stingsAvailable < status.stingsTotal) {
-        console.log('[audio] downloading missing stings before building specs…')
-        await Promise.allSettled([
-          fetch('/api/audio/download-stings', { method: 'POST' }),
-        ])
-      }
-    } catch { /* non-fatal — build-specs handles missing files internally */ }
-
     console.log('[VideoCreator] build-specs request — scenes:', scenes.length, 'projectId:', projectId)
-    const res  = await fetch('/api/audio/build-specs', {
+    const res = await fetch('/api/audio/build-specs', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ scenes, projectId }),
     })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(text || `Build-specs failed (${res.status})`)
+    }
     const data = await res.json()
-    console.log('[VideoCreator] build-specs response — success:', data.success, 'specs:', data.specs?.length, 'error:', data.error)
-    if (!res.ok) throw new Error(data.error || 'Build-specs failed')
+    console.log('[VideoCreator] build-specs response — success:', data.success, 'specs:', data.specs?.length)
     if (data.success && data.specs?.length) {
       handleApplyAudioSpecs(data.specs)
       console.log('[audio] specs ready:', {
@@ -886,6 +877,7 @@ export default function VideoCreator() {
             onOpenOverlayStudio={handleOpenOverlayStudio}
             onAcceptSceneOverlays={handleAcceptSceneOverlays}
             onRejectSceneOverlays={handleRejectSceneOverlays}
+            projectId={projectId}
             wizard={wizard}
           />
         )
@@ -920,6 +912,8 @@ export default function VideoCreator() {
             scenes={scenes}
             sceneStatuses={sceneStatuses}
             selectedClips={selectedClips}
+            imagePaths={imagePaths}
+            globalSettings={globalSettings}
             voiceoverStatuses={voiceoverStatuses}
             audioSpecs={audioSpecs}
             projectId={projectId}
@@ -987,7 +981,7 @@ export default function VideoCreator() {
             borderBottom:   '1px solid rgba(255,255,255,0.06)',
             flexShrink:      0,
           }}>
-            <div style={{ width: 240, flexShrink: 0 }}>
+            <div style={{ width: 320, flexShrink: 0 }}>
               <VideoPlayer
                 scenes={scenes}
                 imagePaths={imagePaths}

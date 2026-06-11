@@ -355,4 +355,16 @@ Track entity introductions across all scenes — each named person or company ge
   return processed
 }
 
-module.exports = { analyzeScript }
+// Generic Claude call for use by other services (e.g. clipIntelligence)
+async function callClaude(prompt, systemPrompt = '') {
+  const client = new Anthropic()
+  const message = await client.messages.create({
+    model:      'claude-haiku-4-5-20251001',
+    max_tokens: 1024,
+    system:     systemPrompt,
+    messages:   [{ role: 'user', content: prompt }],
+  })
+  return message.content[0].text.trim()
+}
+
+module.exports = { analyzeScript, callClaude }

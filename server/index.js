@@ -76,6 +76,7 @@ app.use('/api/audio',         require('./routes/audio'));
 app.use('/api/voiceover',     require('./routes/voiceover'));
 app.use('/api/render',        require('./routes/render'));
 app.use('/api/sound-library', require('./routes/soundLibrary'));
+app.use('/api/clips',        require('./routes/clips'));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', anthropic_key: apiKeyLoaded, deps: DEPS });
