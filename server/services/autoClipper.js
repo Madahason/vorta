@@ -1,3 +1,10 @@
+// ============================================================
+// YOUTUBE CLIP SYSTEM — DISABLED
+// Replaced by stock footage library (Pexels + Pixabay)
+// See: server/services/stockFootage.js
+// ============================================================
+
+/*
 const path     = require('path');
 const fs       = require('fs');
 const { exec } = require('child_process');
@@ -98,8 +105,6 @@ async function searchArchive(query, options = {}) {
   }
 }
 
-// Hard gate: subject anchor must appear in title or channel — no exceptions.
-// Returns -999 (immediate reject) if nothing matches.
 function scoreResult(result, subjectAnchors, strategy) {
   const titleLower   = result.title.toLowerCase();
   const channelLower = result.channel.toLowerCase();
@@ -116,14 +121,12 @@ function scoreResult(result, subjectAnchors, strategy) {
 
   let score = 0;
 
-  // Full anchor phrase match — strong signal
   for (const anchor of (subjectAnchors || [])) {
     const a = anchor.toLowerCase();
     if (titleLower.includes(a))   score += 5;
     if (channelLower.includes(a)) score += 3;
   }
 
-  // Individual word matches
   for (const anchor of (subjectAnchors || [])) {
     const words = anchor.toLowerCase().split(' ').filter(w => w.length > 3);
     for (const word of words) {
@@ -150,7 +153,6 @@ function scoreResult(result, subjectAnchors, strategy) {
   return score;
 }
 
-// Fast heuristic + borderline Claude check to confirm relevance before downloading.
 async function isRelevantClip(result, scene) {
   const titleLower = result.title.toLowerCase();
   const anchors    = (scene.subject_anchors || []).map(a => a.toLowerCase());
@@ -165,13 +167,11 @@ async function isRelevantClip(result, scene) {
     return false;
   }
 
-  // High-confidence score — skip API call
   if (result.score >= 6) {
     console.log(`[relevance] ACCEPTED (score ${result.score}): "${result.title}"`);
     return true;
   }
 
-  // Borderline — ask Claude
   try {
     const prompt = `Is this YouTube video relevant to the documentary scene?
 
@@ -304,29 +304,16 @@ async function autoSourceClip(scene, projectId, onProgress = null) {
     allResults.push(...await searchYouTube(strategy.fallback_query, searchOptions));
   }
 
-  // Fix 4 — log all raw results before filtering
-  console.log(`\n[autoClipper] Scene ${scene.scene_id}: "${scene.script_excerpt?.slice(0, 60)}"`);
-  console.log(`[autoClipper] Subject anchors: ${scene.subject_anchors?.join(', ')}`);
-  console.log(`[autoClipper] Found ${allResults.length} total results:`);
-  allResults.forEach((r, i) => {
-    const s = scoreResult(r, scene.subject_anchors, strategy);
-    console.log(`  ${i + 1}. [score:${s}] "${r.title}" | ch: ${r.channel} | src: ${r.source}`);
-  });
-
-  // Fix 1 — hard gate: reject anything that scored <= 0
   const scored = allResults
     .map(r => ({ ...r, score: scoreResult(r, scene.subject_anchors, strategy) }))
     .filter(r => r.score > 0)
     .sort((a, b) => b.score - a.score);
-
-  console.log(`[autoClipper] ${scored.length} passed relevance filter (from ${allResults.length} total)`);
 
   if (scored.length === 0) {
     send({ type: 'no_results', scene_id: scene.scene_id, message: 'No relevant footage found — converting to AI image' });
     return null;
   }
 
-  // Fix 3 — check top 5 for relevance before committing to download
   const relevantResults = [];
   for (const result of scored.slice(0, 5)) {
     const relevant = await isRelevantClip(result, scene);
@@ -434,3 +421,6 @@ async function autoSourceAllClips(scenes, projectId, onProgress = null) {
 }
 
 module.exports = { autoSourceAllClips, autoSourceClip };
+*/
+
+module.exports = {};

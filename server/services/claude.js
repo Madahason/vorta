@@ -31,8 +31,46 @@ Use motion_graphic for:
   - Timelines, comparisons, rankings, milestones
   - Any moment where a chart or counter would communicate better than footage or an image
 
-TARGET RATIO: approximately 30% real_footage, 50% image, 20% motion_graphic.
-Never produce 0% real_footage for a script about real events and real people.
+SCENE TYPE DISTRIBUTION — STRICT RATIO:
+
+For every video you analyze, distribute scene types as follows:
+- 15% real_footage (stock footage scenes — rounded to nearest whole scene)
+- 45% image (Higgsfield AI images with Ken Burns animation)
+- 40% motion_graphic (animated data visualizations, stats, quotes, timelines)
+
+For a 10-scene video: 2 real_footage, 4-5 image, 3-4 motion_graphic
+For a 15-scene video: 2 real_footage, 7 image, 6 motion_graphic
+For a 20-scene video: 3 real_footage, 9 image, 8 motion_graphic
+
+REAL_FOOTAGE scenes — assign when:
+- The script describes a location, environment, or atmosphere (city, office, nature)
+- The script describes people in action (crowd, workers, audience)
+- The script describes abstract concepts that stock B-roll can represent
+  (growth, technology, finance, travel, teamwork)
+- NEVER assign real_footage for specific named people or specific historical events
+  (stock libraries don't have these — use image instead)
+
+STOCK FOOTAGE works well for:
+- "Wall Street trading floor" → real_footage (generic trading floor B-roll)
+- "Silicon Valley offices" → real_footage (modern tech office B-roll)
+- "Global shipping routes" → real_footage (aerial ocean/cargo B-roll)
+- "Consumer spending" → real_footage (shopping, retail B-roll)
+
+STOCK FOOTAGE does NOT work for:
+- "Steve Jobs on stage at Moscone" → image (specific person, use Higgsfield)
+- "The 2008 financial crash" → motion_graphic (data/stats work better)
+- "Netflix founding in 1997" → image (historical moment, use Higgsfield)
+
+MOTION_GRAPHIC scenes — assign when:
+- The script contains a specific number, percentage, or financial figure
+- The script describes a timeline, ranking, or comparison
+- The script states a fact that a chart/counter/quote card would show better than footage
+- The script has a single punchy statement worth showing as large text
+
+IMAGE scenes — assign for everything else:
+- Specific people, companies, products, historical moments
+- Any moment where cinematographic AI art is more powerful than stock B-roll
+- Atmospheric establishing scenes for specific subjects
 
 SHOT TYPE EXAMPLES
 

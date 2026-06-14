@@ -1952,3 +1952,80 @@ Three pipeline improvements to production output quality:
 - **`remotion/src/components/MapHighlight.jsx`** — double ring, region label top-left, `coordinates=[lat,lng]` compat
 - **`remotion/src/components/ImageScene.jsx`** — `COMPOSITION_ORIGIN` map drives `transformOrigin`; `drift_down` added to `DRIFT_MAP`
 - **`client/src/pages/wizard/ScenesStep.jsx`** — "Enhance prompts" button, `handleEnhancePrompts()`, `isEnhancing` state
+
+---
+
+## Session 16 — Stock Footage Library (Pexels + Pixabay)
+**Commit:** `feature: stock footage library with Pexels + Pixabay, disable YouTube clip system`
+**Date:** 2026-06-14
+
+### Overview
+Replaced the YouTube clip system (yt-dlp + autoClipper) with a stock footage library using Pexels and Pixabay. All YouTube clip code is commented out. The new system uses free commercial B-roll with no attribution requirements.
+
+### YouTube clip system — DISABLED
+- `server/services/autoClipper.js` — entire implementation wrapped in block comment, `module.exports = {}`
+- `server/services/clipIntelligence.js` — entire implementation wrapped in block comment, `module.exports = {}`
+- yt-dlp and ffmpeg no longer required for clip sourcing
+
+### New: Stock footage system
+**`server/services/stockFootage.js`** (NEW):
+- `searchPexels(query, perPage)` — Pexels Videos API, returns landscape MP4 links, prefers HD
+- `searchPixabay(query, perPage)` — Pixabay Videos API, returns free commercial clips
+- `generateStockQuery(scene)` — Claude generates a 2-4 word B-roll search query from the scene context; falls back to subject anchors
+- `scoreStockResult(result, subjectAnchors, query)` — relevance scoring: query word matches, anchor word matches, resolution bonus, Pexels preference, duration bonus
+- `downloadStockClip(result, filename)` — direct HTTPS download with redirect following; validates >50KB; syncs to `remotion/public/clips/`
+- `sourceStockClip(scene, projectId)` — searches Pexels + Pixabay in parallel, scores, downloads top result, adds to clip index via `clipStore.addClip()`
+- `sourceAllStockClips(scenes, projectId, onProgress)` — iterates all `real_footage` scenes, returns `{ selectedClips, fallbackToImage }`
+
+**`server/routes/clips.js`** — fully rewritten:
+- `POST /api/clips/auto-source` — SSE endpoint, calls `sourceAllStockClips`; emits `{ type: 'complete', selectedClips, fallbackToImage }`
+- `GET /api/clips/search?query=&source=pexels|pixabay|both` — manual search endpoint for ClipLibrary UI
+- `POST /api/clips/download` — downloads a specific stock clip to library
+- `GET /api/clips/status` — returns `{ pexels, pixabay, clipCount, youtubeSystem: 'disabled' }`
+
+### Scene type ratio update
+`server/services/claude.js` — SCENE TYPE DISTRIBUTION changed:
+- Old: ~30% real_footage, 50% image, 20% motion_graphic
+- New: **15% real_footage, 45% image, 40% motion_graphic**
+- real_footage now targets stock B-roll (locations, environments, crowds) NOT specific named people
+- Added explicit examples of what stock footage works/doesn't work for
+
+### ClipLibrary UI update
+`client/src/components/video-creator/ClipLibrary.jsx`:
+- TABS changed: `library`, `pexels`, `pixabay` (YouTube CC, Fair Use, C-SPAN, TED disabled)
+- New `StockSearchTab` component: search bar + results grid
+- New `StockResultCard` component: thumbnail, duration, resolution, free commercial badge, Add button
+- Header: shows Pexels/Pixabay connection status instead of yt-dlp version
+- Stock search/download state: `stockQuery`, `stockResults`, `stockLoading`, `downloadingId`, `downloadedIds`
+- `GET /api/clips/status` checked on load for API key status
+
+### VisualsStep UI update
+`client/src/pages/wizard/VisualsStep.jsx`:
+- STATUS_CONFIG updated: `sourcing`, `done`, `fallback` events (was: `analyzing`, `searching`, `downloading`, `retry`)
+- `complete` event handler: reads `fallbackToImage` field (was `convertToImage`)
+- `fallback` SSE event type → calls `onConvertToImage(scene_id)`
+- Panel description updated: "Claude generates search query · Pexels + Pixabay · free commercial"
+
+### Environment variables required
+```
+PEXELS_API_KEY=...    # Free at pexels.com/api
+PIXABAY_API_KEY=...   # Free at pixabay.com/api/docs
+```
+Both added to `.env` template.
+
+### Fallback chain
+1. Claude generates 2-4 word search query from scene context
+2. Search Pexels (10 results) + Pixabay (10 results) in parallel
+3. Score all 20 results → download top 3 until one succeeds
+4. Success → `selectedClips[scene_id] = clip`
+5. All downloads fail or no results → `fallbackToImage` → scene auto-converted to `image` type → queued for Higgsfield generation
+
+### Testing
+```powershell
+# Test Pexels search
+Invoke-RestMethod -Uri 'http://localhost:3001/api/clips/search?query=city+skyline&source=pexels'
+# Test Pixabay search
+Invoke-RestMethod -Uri 'http://localhost:3001/api/clips/search?query=office+meeting&source=pixabay'
+# Test status
+Invoke-RestMethod -Uri 'http://localhost:3001/api/clips/status'
+```

@@ -5,55 +5,13 @@ import { ClipScrubber } from './ClipScrubber'
 
 const SERVER_URL = 'http://localhost:3001'
 
+// YouTube CC, YouTube Fair Use, C-SPAN, TED tabs — DISABLED
+// Replaced by Stock Footage tab using Pexels + Pixabay
 const TABS = [
-  { id: 'library',     label: 'My Library' },
-  { id: 'youtube_cc',  label: 'YouTube CC' },
-  { id: 'fair_use',    label: 'Fair Use' },
-  { id: 'archive',     label: 'Archive' },
-  { id: 'cspan',       label: 'C-SPAN' },
-  { id: 'ted',         label: 'TED' },
+  { id: 'library', label: '📚 My Library' },
+  { id: 'pexels',  label: '🎬 Pexels' },
+  { id: 'pixabay', label: '🎥 Pixabay' },
 ]
-
-// Map route-slug source identifiers to internal identifiers
-const SOURCE_NORM = {
-  'youtube-cc':       'youtube_cc',
-  'youtube-fair-use': 'youtube_fair_use',
-  'archive':          'internet_archive',
-  'cspan':            'cspan',
-  'ted':              'ted',
-}
-
-const SOURCE_PRIORITY = ['internet_archive', 'cspan', 'ted', 'youtube_cc', 'youtube_fair_use']
-
-function SourcePriorityBadge({ source }) {
-  const internal = SOURCE_NORM[source] || source
-  if (internal === 'internet_archive' || internal === 'cspan') {
-    return (
-      <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: 'rgba(34,197,94,0.10)', color: 'rgba(74,222,128,0.85)', border: '1px solid rgba(34,197,94,0.20)' }}>
-        🟢 Public domain
-      </span>
-    )
-  }
-  if (internal === 'ted') {
-    return (
-      <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: 'rgba(239,68,68,0.12)', color: 'rgba(252,165,165,0.90)', border: '1px solid rgba(239,68,68,0.25)' }}>
-        🟢 TED CC
-      </span>
-    )
-  }
-  if (internal === 'youtube_cc') {
-    return (
-      <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: 'rgba(234,179,8,0.10)', color: 'rgba(253,224,71,0.85)', border: '1px solid rgba(234,179,8,0.22)' }}>
-        🟡 Creative Commons
-      </span>
-    )
-  }
-  return (
-    <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: 'rgba(249,115,22,0.10)', color: 'rgba(253,186,116,0.85)', border: '1px solid rgba(249,115,22,0.22)' }}>
-      🟠 Fair use risk
-    </span>
-  )
-}
 
 const MOOD_OPTIONS = ['tense', 'formal', 'intense', 'neutral', 'anticipatory']
 
@@ -96,11 +54,18 @@ export default function ClipLibrary({ onClose, projectId }) {
   const [deleting,   setDeleting]   = useState(null)
   const [gaps,       setGaps]       = useState({ total: 0, topTags: [] })
 
-  // yt-dlp / ffmpeg dependency status
-  const [ytdlpStatus, setYtdlpStatus] = useState(null)
-  const [ffmpegOk,    setFfmpegOk]    = useState(true) // assume ok until checked
+  // Stock footage search state (Pexels / Pixabay tabs)
+  const [stockQuery,    setStockQuery]    = useState('')
+  const [stockResults,  setStockResults]  = useState([])
+  const [stockLoading,  setStockLoading]  = useState(false)
+  const [stockError,    setStockError]    = useState(null)
+  const [downloadingId, setDownloadingId] = useState(null)
+  const [downloadedIds, setDownloadedIds] = useState([])
 
-  // Seeding state
+  // Stock footage API status
+  const [stockStatus, setStockStatus] = useState(null)
+
+  // Seeding state (legacy — kept for compat)
   const [seeding,    setSeeding]    = useState(false)
   const [seedEvents, setSeedEvents] = useState([])
   const seedEsRef                   = useRef(null)
@@ -145,21 +110,54 @@ export default function ClipLibrary({ onClose, projectId }) {
       .catch(() => { /* ignore */ })
   }
 
-  const fetchStatus = () => {
-    fetch('/api/library/status')
+  const fetchStockStatus = () => {
+    fetch('/api/clips/status')
       .then(r => r.json())
-      .then(data => setYtdlpStatus(data))
+      .then(data => setStockStatus(data))
       .catch(() => { /* ignore */ })
   }
 
-  const fetchDeps = () => {
-    fetch('/api/deps')
-      .then(r => r.json())
-      .then(data => setFfmpegOk(data.ffmpeg === true))
-      .catch(() => { /* ignore */ })
+  const handleStockSearch = async () => {
+    if (!stockQuery.trim()) return
+    const source = tab === 'pexels' ? 'pexels' : 'pixabay'
+    setStockLoading(true)
+    setStockError(null)
+    setStockResults([])
+    try {
+      const res = await fetch(`/api/clips/search?query=${encodeURIComponent(stockQuery)}&source=${source}`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Search failed')
+      setStockResults(data.results || [])
+      if ((data.results || []).length === 0) setStockError('No results found. Try different keywords.')
+    } catch (err) {
+      setStockError(err.message)
+    } finally {
+      setStockLoading(false)
+    }
   }
 
-  useEffect(() => { fetchLibrary(); fetchGaps(); fetchStatus(); fetchDeps() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const handleDownloadStock = async (result) => {
+    setDownloadingId(result.id)
+    try {
+      const res = await fetch('/api/clips/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ result }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Download failed')
+      setDownloadedIds(prev => [...prev, result.id])
+      fetchLibrary()
+      fetchGaps()
+    } catch (err) {
+      console.error('[ClipLibrary] stock download failed:', err.message)
+      setStockError(`Download failed: ${err.message}`)
+    } finally {
+      setDownloadingId(null)
+    }
+  }
+
+  useEffect(() => { fetchLibrary(); fetchGaps(); fetchStockStatus() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { fetchLibrary(query, catFilter) }, [query, catFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleClipUploaded = (clip) => {
@@ -233,28 +231,21 @@ export default function ClipLibrary({ onClose, projectId }) {
               <Film size={15} style={{ color: 'rgba(251,191,36,0.6)' }} />
               <span style={{ fontSize: 14, fontWeight: 500, color: 'rgba(255,255,255,0.70)' }}>Clip Library</span>
               <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.25)' }}>· {loading ? '…' : `${totalCount} clips`}</span>
-              {ytdlpStatus?.ytdlp?.installed
-                ? <span style={{ fontSize: 10, color: 'rgba(74,222,128,0.60)', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.12)', borderRadius: 3, padding: '1px 5px' }}>yt-dlp {ytdlpStatus.ytdlp.version}</span>
-                : <span style={{ fontSize: 10, color: 'rgba(251,191,36,0.60)', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.15)', borderRadius: 3, padding: '1px 5px' }}>yt-dlp not found</span>
+              {stockStatus?.pexels?.connected
+                ? <span style={{ fontSize: 10, color: 'rgba(74,222,128,0.60)', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.12)', borderRadius: 3, padding: '1px 5px' }}>Pexels ✓</span>
+                : <span style={{ fontSize: 10, color: 'rgba(251,191,36,0.60)', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.15)', borderRadius: 3, padding: '1px 5px' }}>Pexels key needed</span>
+              }
+              {stockStatus?.pixabay?.connected
+                ? <span style={{ fontSize: 10, color: 'rgba(74,222,128,0.60)', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.12)', borderRadius: 3, padding: '1px 5px' }}>Pixabay ✓</span>
+                : <span style={{ fontSize: 10, color: 'rgba(251,191,36,0.60)', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.15)', borderRadius: 3, padding: '1px 5px' }}>Pixabay key needed</span>
               }
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button
-                onClick={handleSeed}
-                disabled={seeding || !ytdlpStatus?.ytdlp?.installed}
-                title={!ytdlpStatus?.ytdlp?.installed ? 'yt-dlp must be installed to auto-seed' : 'Auto-seed library from project entities'}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 5,
-                  fontSize: 11, padding: '4px 10px',
-                  background: seeding ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.12)',
-                  border: '1px solid rgba(99,102,241,0.25)', borderRadius: 5,
-                  color: seeding || !ytdlpStatus?.ytdlp?.installed ? 'rgba(165,180,252,0.35)' : 'rgba(165,180,252,0.80)',
-                  cursor: seeding || !ytdlpStatus?.ytdlp?.installed ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {seeding ? <Loader2 size={10} className="animate-spin" /> : <Zap size={10} />}
-                {seeding ? 'Seeding…' : 'Seed Library'}
-              </button>
+              {stockStatus && (
+                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.30)', padding: '3px 8px', background: 'rgba(255,255,255,0.04)', borderRadius: 4, border: '1px solid rgba(255,255,255,0.08)' }}>
+                  {stockStatus.clipCount} stock clip{stockStatus.clipCount !== 1 ? 's' : ''} cached
+                </span>
+              )}
               <button onClick={handleClose} style={{ color: 'rgba(255,255,255,0.30)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex' }}
                 onMouseEnter={e => e.currentTarget.style.color = 'rgba(255,255,255,0.70)'}
                 onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.30)'}
@@ -264,28 +255,11 @@ export default function ClipLibrary({ onClose, projectId }) {
             </div>
           </div>
 
-          {/* Source breakdown — only shown once status is loaded and there are clips */}
-          {ytdlpStatus && totalCount > 0 && (
+          {/* Stock source breakdown */}
+          {stockStatus && totalCount > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8, fontSize: 11, color: 'rgba(255,255,255,0.28)' }}>
-              {(ytdlpStatus.sources?.manual || 0) > 0 && (
-                <span>Manual: {ytdlpStatus.sources.manual}</span>
-              )}
-              {(ytdlpStatus.sources?.youtube_cc || 0) > 0 && (
-                <span style={{ color: 'rgba(74,222,128,0.50)' }}>CC: {ytdlpStatus.sources.youtube_cc}</span>
-              )}
-              {(ytdlpStatus.sources?.internet_archive || 0) > 0 && (
-                <span style={{ color: 'rgba(74,222,128,0.50)' }}>Archive: {ytdlpStatus.sources.internet_archive}</span>
-              )}
-              {(ytdlpStatus.sources?.cspan || 0) > 0 && (
-                <span style={{ color: 'rgba(74,222,128,0.50)' }}>C-SPAN: {ytdlpStatus.sources.cspan}</span>
-              )}
-              {(ytdlpStatus.sources?.youtube_fair_use || 0) > 0 && (
-                <span style={{ color: 'rgba(251,191,36,0.55)' }}>⚠ Fair Use: {ytdlpStatus.sources.youtube_fair_use}</span>
-              )}
-              {/* Show zero-count categories too so user knows sourcing is possible */}
-              {(ytdlpStatus.sources?.youtube_cc || 0) === 0 && ytdlpStatus.ytdlp?.installed && (
-                <span style={{ color: 'rgba(255,255,255,0.16)' }}>0 CC · 0 Archive · 0 C-SPAN</span>
-              )}
+              <span style={{ color: 'rgba(74,222,128,0.50)' }}>🎬 Stock footage — free commercial use</span>
+              <span>Pexels + Pixabay</span>
             </div>
           )}
         </div>
@@ -293,13 +267,12 @@ export default function ClipLibrary({ onClose, projectId }) {
         {/* Tabs */}
         <div style={{ display: 'flex', padding: '0 20px', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0, overflowX: 'auto' }}>
           {TABS.map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{
-              padding: '10px 10px', fontSize: 12, background: 'none', border: 'none',
-              cursor: 'pointer', borderBottom: `2px solid ${tab === t.id ? (t.id === 'ted' ? '#ef4444' : '#6366f1') : 'transparent'}`,
-              color: tab === t.id ? (t.id === 'ted' ? 'rgba(252,165,165,0.90)' : 'rgba(165,180,252,0.90)') : 'rgba(255,255,255,0.35)',
-              marginBottom: -1, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 5,
+            <button key={t.id} onClick={() => { setTab(t.id); setStockResults([]); setStockError(null) }} style={{
+              padding: '10px 12px', fontSize: 12, background: 'none', border: 'none',
+              cursor: 'pointer', borderBottom: `2px solid ${tab === t.id ? '#6366f1' : 'transparent'}`,
+              color: tab === t.id ? 'rgba(165,180,252,0.90)' : 'rgba(255,255,255,0.35)',
+              marginBottom: -1, whiteSpace: 'nowrap',
             }}>
-              {t.id === 'ted' && <span style={{ fontSize: 9, fontWeight: 700, background: '#ef4444', color: 'white', padding: '1px 4px', borderRadius: 2, letterSpacing: '0.05em' }}>TED</span>}
               {t.label}
             </button>
           ))}
@@ -307,21 +280,8 @@ export default function ClipLibrary({ onClose, projectId }) {
 
         {/* Tab content */}
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-          {/* ffmpeg warning — source tabs only, shown when not installed */}
-          {tab !== 'library' && !ffmpegOk && (
-            <div style={{
-              margin: '12px 20px 0', padding: '8px 12px', flexShrink: 0,
-              background: 'rgba(239,68,68,0.07)',
-              border: '1px solid rgba(239,68,68,0.25)',
-              borderRadius: 6, fontSize: 12,
-              color: 'rgba(239,68,68,0.80)', lineHeight: 1.5,
-            }}>
-              ⚠ ffmpeg not found — clip trimming disabled. Install:{' '}
-              <code style={{ fontFamily: 'monospace', fontSize: 11, background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: 3 }}>winget install ffmpeg</code>
-            </div>
-          )}
-          {/* yt-dlp warning — source tabs only, shown when not installed */}
-          {tab !== 'library' && ytdlpStatus && !ytdlpStatus.ytdlp?.installed && (
+          {/* Stock API key warning */}
+          {(tab === 'pexels' || tab === 'pixabay') && stockStatus && !stockStatus[tab]?.connected && (
             <div style={{
               margin: '12px 20px 0', padding: '8px 12px', flexShrink: 0,
               background: 'rgba(234,179,8,0.07)',
@@ -329,36 +289,43 @@ export default function ClipLibrary({ onClose, projectId }) {
               borderRadius: 6, fontSize: 12,
               color: 'rgba(234,179,8,0.80)', lineHeight: 1.5,
             }}>
-              yt-dlp not installed — clip downloading is disabled.{' '}
-              Install with:{' '}
-              <code style={{ fontFamily: 'monospace', fontSize: 11, background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: 3 }}>pip install yt-dlp</code>
+              {tab === 'pexels' ? 'PEXELS_API_KEY' : 'PIXABAY_API_KEY'} not set in .env.{' '}
+              Get a free key at{' '}
+              {tab === 'pexels'
+                ? <strong>pexels.com/api</strong>
+                : <strong>pixabay.com/api/docs</strong>
+              }, then restart the server.
             </div>
           )}
-          {tab === 'library'     && <LibraryTab clips={clips} allClips={allClips} categories={categories} loading={loading} error={libError} query={query} setQuery={setQuery} catFilter={catFilter} setCatFilter={setCatFilter} showAddForm={showAddForm} setShowAddForm={setShowAddForm} deleting={deleting} onDelete={handleDelete} onRefresh={fetchLibrary} onRefreshGaps={fetchGaps} onPreview={setPreviewClip} onClipUploaded={handleClipUploaded} />}
-          {tab === 'youtube_cc'  && <SourceTab source="youtube-cc"       label="YouTube CC"       hasSegment={true}  warningText={null} projectId={projectId} onDownloaded={() => { fetchLibrary(); fetchGaps(); fetchStatus() }} />}
-          {tab === 'fair_use'    && <SourceTab source="youtube-fair-use" label="YouTube Fair Use"  hasSegment={true}  warningText="Copyrighted content — confirm documentary/commentary purpose before distributing." projectId={projectId} onDownloaded={() => { fetchLibrary(); fetchGaps(); fetchStatus() }} />}
-          {tab === 'archive'     && <SourceTab source="archive"          label="Internet Archive"  hasSegment={false} warningText={null} projectId={projectId} onDownloaded={() => { fetchLibrary(); fetchGaps(); fetchStatus() }} />}
-          {tab === 'cspan'       && <SourceTab source="cspan"            label="C-SPAN"            hasSegment={true}  warningText={null} projectId={projectId} onDownloaded={() => { fetchLibrary(); fetchGaps(); fetchStatus() }} />}
-          {tab === 'ted'         && <SourceTab source="ted"              label="TED"               hasSegment={true}  warningText={null} projectId={projectId} onDownloaded={() => { fetchLibrary(); fetchGaps(); fetchStatus() }} tedNote />}
+          {tab === 'library' && <LibraryTab clips={clips} allClips={allClips} categories={categories} loading={loading} error={libError} query={query} setQuery={setQuery} catFilter={catFilter} setCatFilter={setCatFilter} showAddForm={showAddForm} setShowAddForm={setShowAddForm} deleting={deleting} onDelete={handleDelete} onRefresh={fetchLibrary} onRefreshGaps={fetchGaps} onPreview={setPreviewClip} onClipUploaded={handleClipUploaded} />}
+          {(tab === 'pexels' || tab === 'pixabay') && (
+            <StockSearchTab
+              source={tab}
+              query={stockQuery}
+              onQueryChange={setStockQuery}
+              onSearch={handleStockSearch}
+              results={stockResults}
+              loading={stockLoading}
+              error={stockError}
+              downloadingId={downloadingId}
+              downloadedIds={downloadedIds}
+              onDownload={handleDownloadStock}
+            />
+          )}
         </div>
 
-        {/* Seed progress banner */}
-        {(seeding || seedEvents.length > 0) && (
-          <SeedProgressBanner events={seedEvents} seeding={seeding} onDismiss={() => setSeedEvents([])} />
-        )}
-
         {/* Gap footer */}
-        {tab === 'library' && !seeding && seedEvents.length === 0 && (
+        {tab === 'library' && (
           <div style={{ padding: '10px 20px', borderTop: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
             {gaps.total > 0
               ? <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                   <AlertCircle size={12} style={{ color: 'rgba(251,191,36,0.50)' }} />
                   <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>
                     <span style={{ color: 'rgba(251,191,36,0.70)', fontWeight: 500 }}>{gaps.total} scene{gaps.total !== 1 ? 's' : ''} need clips</span>
-                    {gaps.topTags.length > 0 && <span style={{ color: 'rgba(255,255,255,0.22)' }}> · {gaps.topTags.join(', ')}</span>}
+                    {gaps.topTags.length > 0 && <span style={{ color: 'rgba(255,255,255,0.22)' }}> · search Pexels or Pixabay tabs</span>}
                   </span>
                 </div>
-              : <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.18)' }}>Add clips to <code>library/clips/</code> or use Seed Library to auto-download</p>
+              : <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.18)' }}>Use Pexels or Pixabay tabs to find free commercial stock footage</p>
             }
           </div>
         )}
@@ -695,7 +662,124 @@ function ClipCard({ clip, onDelete, isDeleting, fileExists, onPreview }) {
   )
 }
 
-// ─── SourceTab ────────────────────────────────────────────────────────────────
+// ─── StockSearchTab (Pexels / Pixabay) ───────────────────────────────────────
+
+function StockResultCard({ result, onDownload, isDownloading, isDone }) {
+  return (
+    <div style={{
+      background: '#111',
+      border: '1px solid rgba(255,255,255,0.08)',
+      borderRadius: 8,
+      overflow: 'hidden',
+    }}>
+      {result.thumbnailUrl && (
+        <img
+          src={result.thumbnailUrl}
+          alt={result.title}
+          style={{ width: '100%', aspectRatio: '16/9', objectFit: 'cover', display: 'block' }}
+        />
+      )}
+      <div style={{ padding: '8px 10px' }}>
+        <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 11, marginBottom: 4, lineHeight: 1.3 }}>
+          {(result.title || '').slice(0, 50)}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 10 }}>{result.duration}s</span>
+            <span style={{ color: '#4ade80', fontSize: 10 }}>Free Commercial</span>
+            <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10 }}>{result.width}p</span>
+          </div>
+          <button
+            onClick={onDownload}
+            disabled={isDownloading || isDone}
+            style={{
+              padding: '3px 8px',
+              fontSize: 10,
+              borderRadius: 4,
+              border: 'none',
+              cursor: isDone ? 'default' : (isDownloading ? 'not-allowed' : 'pointer'),
+              background: isDone ? 'rgba(34,197,94,0.15)' : (isDownloading ? 'rgba(255,255,255,0.08)' : '#3b82f6'),
+              color: isDone ? '#4ade80' : 'white',
+            }}
+          >
+            {isDone ? '✓ Added' : isDownloading ? '⟳' : '⬇ Add'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function StockSearchTab({ source, query, onQueryChange, onSearch, results, loading, error, downloadingId, downloadedIds, onDownload }) {
+  const label = source === 'pexels' ? 'Pexels' : 'Pixabay'
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+      <div style={{ padding: '12px 20px', borderBottom: '1px solid rgba(255,255,255,0.04)', flexShrink: 0 }}>
+        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', marginBottom: 8 }}>
+          Free commercial stock footage from {label}. No attribution required.
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.16)', borderRadius: 8, padding: '6px 10px' }}>
+            <Search size={12} style={{ color: 'rgba(255,255,255,0.45)', flexShrink: 0 }} />
+            <input
+              type="text"
+              value={query}
+              onChange={e => onQueryChange(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && onSearch()}
+              placeholder={`Search ${label}… e.g. "city skyline", "office meeting"`}
+              style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 12, color: 'rgba(255,255,255,0.88)' }}
+            />
+          </div>
+          <button
+            onClick={onSearch}
+            disabled={loading || !query.trim()}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '6px 14px',
+              background: loading ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.15)',
+              border: '1px solid rgba(99,102,241,0.25)',
+              borderRadius: 6,
+              color: 'rgba(165,180,252,0.80)',
+              fontSize: 12,
+              cursor: loading ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {loading ? <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} /> : <Search size={11} />}
+            Search
+          </button>
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 20px' }}>
+        {error && (
+          <div style={{ fontSize: 12, color: 'rgba(239,68,68,0.75)', padding: '8px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <AlertCircle size={12} /> {error}
+          </div>
+        )}
+        {!loading && results.length === 0 && !error && (
+          <div style={{ padding: '32px 0', textAlign: 'center', color: 'rgba(255,255,255,0.25)', fontSize: 13 }}>
+            Search for stock footage above
+          </div>
+        )}
+        {results.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {results.map(result => (
+              <StockResultCard
+                key={result.id}
+                result={result}
+                onDownload={() => onDownload(result)}
+                isDownloading={downloadingId === result.id}
+                isDone={downloadedIds.includes(result.id)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── SourceTab (DISABLED — YouTube system replaced by stock footage) ───────────
 
 const CONTEXT_OPTIONS = [
   { value: '',        label: 'Any' },

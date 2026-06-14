@@ -3,12 +3,9 @@ import { Loader2, Zap } from 'lucide-react'
 import SceneGrid from '../../components/video-creator/SceneGrid'
 
 const STATUS_CONFIG = {
-  analyzing:      { icon: '🧠', color: '#a78bfa', label: 'Claude analyzing...' },
-  searching:      { icon: '🔍', color: '#60a5fa', label: 'Searching sources...' },
-  fallback_search:{ icon: '🔄', color: '#fbbf24', label: 'Trying fallback...' },
-  downloading:    { icon: '⬇',  color: '#34d399', label: 'Downloading...' },
-  retry:          { icon: '↺',  color: '#fbbf24', label: 'Retrying...' },
-  done:           { icon: '✓',  color: '#4ade80', label: 'Clip ready' },
+  sourcing:       { icon: '🔍', color: '#60a5fa', label: 'Searching Pexels + Pixabay...' },
+  done:           { icon: '✓',  color: '#4ade80', label: 'Stock clip ready' },
+  fallback:       { icon: '→',  color: '#94a3b8', label: 'Using AI image (no stock clip)' },
   failed:         { icon: '→',  color: '#94a3b8', label: 'Using AI image' },
   no_results:     { icon: '→',  color: '#94a3b8', label: 'Using AI image' },
 }
@@ -69,12 +66,12 @@ export function VisualsStep({
               onSelectClip(event.scene_id, event.clip)
             }
 
-            if (event.type === 'failed' || event.type === 'no_results') {
+            if (event.type === 'fallback' || event.type === 'failed' || event.type === 'no_results') {
               onConvertToImage(event.scene_id)
             }
 
             if (event.type === 'complete') {
-              ;(event.convertToImage || []).forEach(id => onConvertToImage(id))
+              ;(event.fallbackToImage || event.convertToImage || []).forEach(id => onConvertToImage(id))
               setClipsDone(true)
               setIsSourcing(false)
             }
@@ -157,7 +154,7 @@ export function VisualsStep({
                 🎬 Real Footage — {realFootageScenes.length} scene{realFootageScenes.length !== 1 ? 's' : ''}
               </div>
               <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 12, marginTop: 2 }}>
-                Claude identifies exact sources · yt-dlp downloads · 8s clips
+                Claude generates search query · Pexels + Pixabay · free commercial
               </div>
             </div>
             {!isSourcingClips && !clipsDone && (
@@ -196,9 +193,7 @@ export function VisualsStep({
                       <div style={{ color: config?.color || 'rgba(255,255,255,0.4)', fontSize: 11 }}>
                         {progress.type === 'done'
                           ? `✓ "${progress.title?.slice(0, 50)}" · ${progress.source}`
-                          : progress.type === 'downloading'
-                            ? `⬇ "${progress.message?.slice(0, 60)}"`
-                            : progress.message || config?.label
+                          : progress.message || config?.label
                         }
                       </div>
                     )}
