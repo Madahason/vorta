@@ -8,6 +8,9 @@ const clipStore = require('./clipStore');
 const CLIPS_DIR = path.resolve(__dirname, '../../library/clips');
 const REMOTION_CLIPS_DIR = path.resolve(__dirname, '../../remotion/public/clips');
 
+// Reuse a permissive agent for dev environments with local CA cert issues
+const devAgent = new https.Agent({ rejectUnauthorized: false });
+
 [CLIPS_DIR, REMOTION_CLIPS_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
@@ -23,6 +26,7 @@ async function searchPexels(query, perPage = 10) {
   return new Promise((resolve) => {
     const url = `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=${perPage}&orientation=landscape&size=medium`;
     https.get(url, {
+      agent: devAgent,
       headers: {
         'Authorization': key,
         'Accept': 'application/json'
@@ -90,7 +94,7 @@ async function searchPixabay(query, perPage = 10) {
     });
 
     const url = `https://pixabay.com/api/videos/?${params.toString()}`;
-    https.get(url, { headers: { 'Accept': 'application/json' } }, (res) => {
+    https.get(url, { agent: devAgent, headers: { 'Accept': 'application/json' } }, (res) => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
@@ -186,7 +190,9 @@ async function downloadStockClip(result, filename) {
 
     const request = (urlStr) => {
       const mod = urlStr.startsWith('https') ? https : http;
-      mod.get(urlStr, { headers: { 'User-Agent': 'DevMarketingFlow/1.0' } }, (res) => {
+      const opts = { headers: { 'User-Agent': 'DevMarketingFlow/1.0' } };
+      if (urlStr.startsWith('https')) opts.agent = devAgent;
+      mod.get(urlStr, opts, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           request(res.headers.location);
           return;
