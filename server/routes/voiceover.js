@@ -117,6 +117,14 @@ router.post('/generate', async (req, res) => {
           : (scene.duration_seconds || 5)
         const audio_path = `/projects/${projectId}/audio/scene_${scene.scene_id}.mp3`
 
+        const absolutePath = path.resolve(outputPath)
+        const fileExists   = fs.existsSync(absolutePath)
+        const fileSize     = fileExists ? fs.statSync(absolutePath).size : 0
+        console.log('[voiceover] scene done:', scene.scene_id)
+        console.log('[voiceover] audio saved at:', absolutePath)
+        console.log('[voiceover] file exists:', fileExists, 'size:', fileSize, 'bytes')
+        console.log('[voiceover] audio_path sent to client:', audio_path)
+
         results.push({ scene_id: scene.scene_id, audio_path, audio_duration: audioDuration, scene_duration: sceneDuration, status: 'done' })
 
         send({ type: 'scene_done', scene_id: scene.scene_id, audio_path, audio_duration: audioDuration, scene_duration: sceneDuration })
@@ -170,6 +178,7 @@ router.post('/sync-timings', async (req, res) => {
     if (!duration) return scene
     return {
       ...scene,
+      audio_path:       `/projects/${projectId}/audio/scene_${scene.scene_id}.mp3`,
       audio_duration:   duration,
       duration_seconds: parseFloat((duration + 0.8).toFixed(2)),
     }

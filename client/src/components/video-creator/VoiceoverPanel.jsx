@@ -208,6 +208,7 @@ export default function VoiceoverPanel({
             const event = JSON.parse(line.slice(6))
             if (event.type === 'scene_done') {
               const { scene_id, audio_path, audio_duration, scene_duration } = event
+              console.log('[voiceover] scene_done received:', scene_id, 'audio_path:', audio_path)
               setSceneStatuses(prev => {
                 const next = { ...prev, [scene_id]: { status: 'done', duration: audio_duration, error: null } }
                 onVoiceoverStatusChange?.(next)
@@ -249,7 +250,17 @@ export default function VoiceoverPanel({
           })
           const syncData = await syncRes.json()
           if (syncData.updatedScenes) {
-            onScenesChange(() => syncData.updatedScenes)
+            // Merge sync-timings updates into the current state.
+            // Using functional update to access the latest state (which has audio_path
+            // from the per-scene SSE events) rather than the stale closure value.
+            onScenesChange(prev => {
+              const syncMap = {}
+              syncData.updatedScenes.forEach(s => { syncMap[s.scene_id] = s })
+              return prev.map(s => syncMap[s.scene_id]
+                ? { ...s, ...syncMap[s.scene_id] }
+                : s
+              )
+            })
             const total = syncData.updatedScenes.reduce((s, sc) => s + (sc.duration_seconds || 5), 0)
             console.log('[voiceover] timings synced — total:', total.toFixed(1), 'seconds')
           }

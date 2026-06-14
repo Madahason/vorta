@@ -49,6 +49,7 @@ export default function SceneGrid({
   onPreviewScene,
   voiceoverStatuses = {},
   onOpenVoiceover,
+  onOpenStockSearch,
 }) {
 
   const updateScene = (index, patch) =>
@@ -94,6 +95,7 @@ export default function SceneGrid({
               onConvertToImage={() => onConvertToImage?.(scene.scene_id)}
               onManualMatch={() => onManualMatch?.(scene)}
               onOpenLibrary={onOpenLibrary}
+              onOpenStockSearch={onOpenStockSearch ? () => onOpenStockSearch(scene) : null}
               onPreview={() => onPreviewScene?.(scene)}
               voiceoverStatus={voiceoverStatuses[scene.scene_id] || null}
               onOpenVoiceover={onOpenVoiceover ? () => onOpenVoiceover(scene) : null}
@@ -111,7 +113,7 @@ export default function SceneGrid({
 function SceneCard({
   scene, index, onChange, genStatus, onRetry,
   motionStatus, onBuildComponent,
-  clipMatch, selectedClip, onSelectClip, onConvertToImage, onManualMatch, onOpenLibrary, onPreview,
+  clipMatch, selectedClip, onSelectClip, onConvertToImage, onManualMatch, onOpenLibrary, onOpenStockSearch, onPreview,
   voiceoverStatus, onOpenVoiceover,
 }) {
   const [editingPrompt, setEditingPrompt] = useState(false)
@@ -307,6 +309,7 @@ function SceneCard({
                 onSelectClip={onSelectClip}
                 onConvertToImage={onConvertToImage}
                 onManualMatch={onManualMatch}
+                onOpenStockSearch={onOpenStockSearch}
               />
             )
           })()}
@@ -380,7 +383,7 @@ function SceneCard({
 
 // ─── ClipMatchSection ─────────────────────────────────────────────────────────
 
-function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConvertToImage, onManualMatch }) {
+function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConvertToImage, onManualMatch, onOpenStockSearch }) {
   const loading = clipMatch?.loading ?? false
   const matches = Array.isArray(clipMatch?.matches) ? clipMatch.matches : []
 
@@ -413,12 +416,19 @@ function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConv
         <div className="flex items-center justify-between rounded-lg bg-amber-500/[0.06] border border-amber-500/[0.15] px-3 py-2">
           <div className="flex items-center gap-2">
             <Film size={11} className="text-amber-400/60" />
-            <span className="text-[11px] text-amber-300/70 font-mono">{selectedClip.clip_id}</span>
+            <span className="text-[11px] text-amber-300/70 font-mono">{selectedClip.clip_id || selectedClip.filename || 'clip'}</span>
             <span className="text-[11px] text-white/30">{selectedClip.title || selectedClip.description}</span>
           </div>
-          <button onClick={() => onSelectClip(null)} className="text-[10px] text-white/20 hover:text-white/45 transition-colors">
-            Change
-          </button>
+          <div className="flex items-center gap-2">
+            {onOpenStockSearch && (
+              <button onClick={onOpenStockSearch} className="text-[10px] text-blue-400/50 hover:text-blue-300 transition-colors">
+                Replace stock
+              </button>
+            )}
+            <button onClick={() => onSelectClip(null)} className="text-[10px] text-white/20 hover:text-white/45 transition-colors">
+              Change
+            </button>
+          </div>
         </div>
       )}
 
@@ -457,14 +467,19 @@ function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConv
       {!loading && !selectedClip && clipMatch && matches.length === 0 && (
         <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-3 space-y-2">
           <p className="text-[11px] text-white/30">No matching clips in library for these tags.</p>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            {onOpenStockSearch && (
+              <button onClick={onOpenStockSearch} className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded-lg text-blue-300 transition-colors">
+                🔍 Search stock footage
+              </button>
+            )}
             {onManualMatch && (
               <button onClick={onManualMatch} className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded-lg text-amber-300 transition-colors">
                 <RefreshCw size={11} />
-                Rematch
+                Rematch library
               </button>
             )}
-            <button onClick={onConvertToImage} className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded-lg text-blue-300 transition-colors">
+            <button onClick={onConvertToImage} className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] rounded-lg text-white/40 transition-colors">
               <ImageIcon size={11} />
               Convert to image
             </button>
@@ -474,14 +489,21 @@ function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConv
 
       {/* Not yet searched */}
       {!loading && !clipMatch && (
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <span className="text-[11px] text-white/20 italic">No clip matches yet</span>
-          {onManualMatch && (
-            <button onClick={onManualMatch} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded text-amber-300 transition-colors">
-              <RefreshCw size={10} />
-              Find clips
-            </button>
-          )}
+          <div className="flex gap-2">
+            {onOpenStockSearch && (
+              <button onClick={onOpenStockSearch} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded text-blue-300 transition-colors">
+                🔍 Stock footage
+              </button>
+            )}
+            {onManualMatch && (
+              <button onClick={onManualMatch} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded text-amber-300 transition-colors">
+                <RefreshCw size={10} />
+                Find in library
+              </button>
+            )}
+          </div>
         </div>
       )}
 

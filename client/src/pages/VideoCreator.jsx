@@ -956,8 +956,27 @@ export default function VideoCreator() {
         imagePaths={imagePaths}
         selectedClips={selectedClips}
         globalSettings={globalSettings}
+        sceneStatuses={sceneStatuses}
         isOpen={showPreview}
         onClose={() => setShowPreview(false)}
+        onRegenerateImage={(sceneId) => {
+          setShowPreview(false)
+          wizard.goTo('visuals')
+          // Trigger retry for this scene using its current prompt
+          const scene = scenes.find(s => s.scene_id === sceneId)
+          if (scene) handleRetry(sceneId, scene.higgsfield_prompt)
+        }}
+        onRegenerateVoice={() => {
+          setShowPreview(false)
+          wizard.goTo('voice')
+        }}
+        onShotTypeChange={(sceneId, newType) => {
+          setScenes(prev => prev.map(s =>
+            s.scene_id === sceneId
+              ? { ...s, shot_type: newType, real_footage_flag: newType === 'real_footage' }
+              : s
+          ))
+        }}
       />
 
       {/* Preview hint — shown briefly after visuals generation completes */}

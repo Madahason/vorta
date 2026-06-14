@@ -158,6 +158,9 @@ router.post('/', async (req, res) => {
   }));
   const narrationCount = audioSpecs.filter(s => s.narration?.url).length;
   console.log('[render] audioSpecs: narration', narrationCount, '/', audioSpecs.length, 'scenes');
+  audioSpecs.forEach(s =>
+    console.log(`  [render] scene ${s.scene_id}:`, s.narration?.url || 'NO NARRATION')
+  );
   if (renderScenes[0]) console.log('[render] scene 0 image path:', renderScenes[0].image_path);
 
   const propsData = {
