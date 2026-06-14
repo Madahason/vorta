@@ -2029,3 +2029,73 @@ Invoke-RestMethod -Uri 'http://localhost:3001/api/clips/search?query=office+meet
 # Test status
 Invoke-RestMethod -Uri 'http://localhost:3001/api/clips/status'
 ```
+
+---
+
+## Session 17 — Remove Music, Sound Effects, Overlays Permanently
+**Commit:** `cleanup: remove music, sound effects, overlays permanently`
+**Date:** 2026-06-14
+
+## Removed Features (permanently)
+- Background music — removed
+- Ambient sound — removed
+- Transition stings — removed
+- Overlay system (lower thirds, date stamps, kinetic text, stat callouts, chapter titles) — removed
+- Sound effects — removed
+- Audio step in wizard — removed
+
+## Current Pipeline
+Script → Scenes → Visuals → Voice → Export
+
+## Output
+MP4 with:
+- AI images (Higgsfield) with Ken Burns motion — 45% of scenes
+- Remotion motion graphics — 40% of scenes
+- Stock footage (Pexels/Pixabay) — 15% of scenes
+- Narration (ElevenLabs TTS)
+- No music, no sound effects, no overlays
+
+## Post-production (CapCut)
+- Background music
+- Sound effects
+- Color grade
+- Overlays and lower thirds
+- Transitions polish
+
+### Files deleted
+**Server:**
+- `server/services/elevenLabsAudio.js`
+- `server/services/elevenLabsSound.js`
+- `server/services/soundLibrary.js`
+- `server/services/audioMixer.js`
+- `server/services/ambientSelector.js`
+- `server/services/ambientLibrary.js`
+- `server/config/musicMoods.js`
+- `server/config/transitionStings.js`
+- `server/routes/audio.js`
+- `server/routes/soundLibrary.js`
+
+**Client:**
+- `client/src/components/video-creator/AudioPanel.jsx`
+- `client/src/components/video-creator/SoundLibraryPanel.jsx`
+- `client/src/components/video-creator/OverlayStudio.jsx`
+- `client/src/components/video-creator/DraggableOverlayCanvas.jsx`
+- `client/src/components/video-creator/OverlayReviewModal.jsx`
+- `client/src/pages/wizard/AudioStep.jsx`
+
+**Library directories:**
+- `library/music/`, `library/ambient/`, `library/stings/`, `library/overlay-sounds/`, `library/sounds/`
+- `library/soundIndex.json`, `library/musicIndex.json`
+
+### Files modified
+- `server/index.js` — removed audio/soundLibrary routes and raw body middleware
+- `server/routes/render.js` — removed audioMixer dependency; audioSpecs is now narration-only
+- `server/services/claude.js` — removed OVERLAY GENERATION RULES, STING PLACEMENT RULES from system prompt; removed overlays/use_sting from postProcessScenes; removed templateContext from attemptAnalysis
+- `remotion/src/compositions/Documentary.jsx` — removed music/ambient/overlay_sounds audio; kept per-scene narration and global NarrationTrack
+- `remotion/src/components/ImageScene.jsx` — removed all overlay rendering; kept FilmLook (grain+vignette+grade) and Ken Burns motion
+- `client/src/hooks/useWizardState.js` — removed audio step from STEPS array (5 steps: script, scenes, visuals, voice, export)
+- `client/src/pages/VideoCreator.jsx` — removed audioSpecs state, overlay handlers, OverlayStudio/OverlayReviewModal modals, AudioStep case
+- `client/src/pages/wizard/ScenesStep.jsx` — removed overlay banner and overlay-related props
+- `client/src/pages/wizard/ExportStep.jsx` — removed audioSpecs prop
+- `client/src/components/video-creator/SceneGrid.jsx` — removed OverlayEditorPanel, OverlayRow, card footer Overlay Studio section, overlay-related constants and props
+- `client/src/components/video-creator/ExportPanel.jsx` — removed music/ambient/sting checklist items and audioSpecs prop

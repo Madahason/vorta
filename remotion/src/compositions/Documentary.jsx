@@ -1,7 +1,7 @@
-import { useMemo }                                                                     from 'react'
-import { AbsoluteFill, Audio, Sequence, interpolate, useVideoConfig, useCurrentFrame } from 'remotion'
-import { TransitionSeries, springTiming }                                       from '@remotion/transitions'
-import { fade }                                                                 from '@remotion/transitions/fade'
+import { useMemo }                                                      from 'react'
+import { AbsoluteFill, Audio, interpolate, useVideoConfig, useCurrentFrame } from 'remotion'
+import { TransitionSeries, springTiming }                              from '@remotion/transitions'
+import { fade }                                                        from '@remotion/transitions/fade'
 import ImageScene             from '../components/ImageScene'
 import FootageScene           from '../components/FootageScene'
 import PlaceholderScene       from '../components/PlaceholderScene'
@@ -32,13 +32,6 @@ export function computeLayout(scenes) {
 // Accept relative URLs (/...) and HTTP URLs — Windows absolute paths are not
 // supported by Remotion headless Chrome; render.js always converts to HTTP URLs.
 const isValidUrl = (src) => !!src && (src.startsWith('/') || src.startsWith('http'))
-
-// Return most frequently occurring value in array (picks one music/ambient URL for whole video)
-function mostCommon(arr) {
-  if (!arr.length) return null
-  const freq = arr.reduce((map, val) => { map[val] = (map[val] || 0) + 1; return map }, {})
-  return Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0]
-}
 
 // ── SceneRenderer — per-scene dispatch ───────────────────────────────────────
 function SceneRenderer({ scene, imagePath, selectedClip, globalSettings }) {
@@ -101,31 +94,16 @@ export function Documentary({
     })
   }, [scenes])
 
-  // Filter audioSpecs to only entries whose scene_id exists in the deduplicated scene list
+  // Build narration spec map
   const validSceneIds = new Set(uniqueScenes.map(s => s.scene_id))
   const audioSpecMap  = {}
   audioSpecs.forEach(spec => {
     if (validSceneIds.has(spec.scene_id)) audioSpecMap[spec.scene_id] = spec
   })
 
-  // Derive a single music and ambient URL to play continuously under the whole video.
-  // Global tracks outside <TransitionSeries> never remount — total audio tags = uniqueScenes.length + 2.
-  const allSpecs       = Object.values(audioSpecMap)
-  const primaryMusic   = mostCommon(allSpecs.map(s => s.music?.url).filter(Boolean))
-  const primaryAmbient = mostCommon(allSpecs.map(s => s.ambient?.url).filter(Boolean))
-  const musicVolume    = allSpecs.find(s => s.music?.volume)?.music?.volume   || 0.12
-  const ambientVolume  = allSpecs.find(s => s.ambient?.volume)?.ambient?.volume || 0.06
-
-  const narrationCount = allSpecs.filter(s => s.narration?.url).length
+  const narrationCount = Object.values(audioSpecMap).filter(s => s.narration?.url).length
   console.log('[Documentary] scenes:', scenes.length, '→ unique:', uniqueScenes.length,
-    '| audioSpecs:', allSpecs.length, '/', audioSpecs.length,
-    '| narration:', narrationCount, '| music:', !!primaryMusic, '| ambient:', !!primaryAmbient)
-  if (uniqueScenes[0]) {
-    const s0  = uniqueScenes[0]
-    const sp0 = audioSpecMap[s0.scene_id]
-    console.log('[Documentary] scene', s0.scene_id,
-      'narration url:', sp0?.narration?.url || s0.audio_path || '(none)')
-  }
+    '| narration:', narrationCount, '/', audioSpecs.length)
 
   if (!uniqueScenes.length) {
     return (
@@ -178,18 +156,6 @@ export function Documentary({
               }}
             />
           )}
-
-          {/* Overlay sounds — each fires at its overlay's appearAt time */}
-          {spec?.overlay_sounds?.map((os, i) => {
-            if (!isValidUrl(os.url)) return null
-            const appearFrame = Math.max(0, Math.round((os.appear_at || 0.7) * fps))
-            const remaining   = Math.max(1, durationFrames - appearFrame)
-            return (
-              <Sequence key={`os_${i}`} from={appearFrame} durationInFrames={remaining}>
-                <Audio src={os.url} volume={os.volume || 0.30} />
-              </Sequence>
-            )
-          })}
         </AbsoluteFill>
       </TransitionSeries.Sequence>
     )
@@ -212,18 +178,6 @@ export function Documentary({
       {/* Global uploaded narration track (from ExportPanel audio upload) */}
       {audio?.path && <NarrationTrack audio={audio} />}
 
-      {/* Continuous background music — single global track, never remounts between scenes */}
-      {isValidUrl(primaryMusic) && (
-        <Audio src={primaryMusic} volume={musicVolume} loop startFrom={0} />
-      )}
-
-      {/* Continuous ambient sound — single global track, never remounts between scenes */}
-      {isValidUrl(primaryAmbient) && (
-        <Audio src={primaryAmbient} volume={ambientVolume} loop startFrom={0} />
-      )}
-
-      {/* Scene sequences with cross-fade transitions.
-          Total audio tags = uniqueScenes.length + 2 (music + ambient). */}
       <TransitionSeries>
         {seriesChildren}
       </TransitionSeries>

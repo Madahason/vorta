@@ -1,5 +1,4 @@
 const Anthropic = require('@anthropic-ai/sdk');
-const { randomUUID } = require('crypto');
 
 const STYLE_LOCK = 'dark cinematic 4K shallow depth of field slow dolly movement documentary aesthetic muted tones';
 
@@ -196,85 +195,6 @@ intensity:
 - moderate: main narrative beat
 - strong: turning point, climax, emotional peak — use for no more than 3 scenes per script
 
-OVERLAY GENERATION RULES
-
-For every scene, analyze the script excerpt and generate an overlays array.
-Apply these rules strictly:
-
-LOWER THIRD rules:
-- Add a lower_third when a real named person or company is introduced for the FIRST TIME in the entire script
-- Track entity introductions across ALL scenes — never add a lower_third for an entity already introduced in a previous scene
-- text.line1 = person or company name, text.line2 = their role/title/context at that moment
-- Never add lower_third for abstract concepts, dates, or locations — only named people and companies
-- Never add lower_third to more than one scene per named entity across the whole video
-
-DATE STAMP rules:
-- Add a date_stamp when the script mentions a specific year, date, or named location
-- text.line1 = "City/Location · Year" or just "Year" if no location
-- Maximum 1 date_stamp per scene
-- Do not add date_stamp if a lower_third is already on this scene
-
-STAT CALLOUT rules:
-- Add a stat_callout when the script contains a specific financial figure, percentage, user count, or measurable milestone
-- text.line1 = the number/stat with prefix/suffix (e.g. "$3T"), text.line2 = context label (e.g. "Market Cap · 2023")
-- Maximum 1 stat_callout per scene
-- Do not add stat_callout if another overlay type is already on this scene
-
-KINETIC TEXT rules:
-- Add kinetic_text for a single punchy declarative statement that carries narrative weight
-- Use sparingly — maximum 1 in every 4 scenes across the whole video
-- Examples: "The most valuable company in human history" / "90 days from bankruptcy"
-- Never duplicate kinetic_text and stat_callout on the same scene
-
-CHAPTER TITLE rules:
-- Insert a chapter_title overlay on scenes that mark major narrative transitions (new era, new phase, new subject)
-- text.line1 = "Chapter N", text.line2 = short evocative title (e.g. "The Fall")
-- Maximum 3-5 across a full documentary
-- Chapter title scenes should have no other overlays
-
-BACKGROUND OVERLAY rules:
-- Add background_overlay (template "gradient_bottom") to any scene where text overlays need legibility help
-- Background overlays can combine with any other overlay type
-
-PRIORITY RULES:
-- lower_third takes priority over date_stamp on the same scene — never both together
-- stat_callout and kinetic_text cannot coexist on same scene — pick the more impactful
-- background_overlay can always be combined with other types
-- Maximum 2 overlays per scene (excluding background_overlay)
-
-OVERLAY OUTPUT FORMAT per scene:
-"overlays": [
-  {
-    "type": "lower_third",
-    "template": "USE_THE_TEMPLATE_FROM_USER_MESSAGE",
-    "text": { "line1": "Steve Jobs", "line2": "Co-Founder · Apple" },
-    "timing": { "appearAt": 0.7 },
-    "confidence": 0.95,
-    "reason": "First mention of Steve Jobs in the script",
-    "status": "suggested"
-  }
-]
-
-- "status" must always be "suggested" — never "accepted"
-- "template" must use the template name provided in the user message for that overlay type
-- "confidence" is 0.0–1.0 — how certain you are this overlay is appropriate
-- "reason" is a plain English explanation of why you added this overlay
-- Leave overlays: [] for purely atmospheric or action scenes with no named subjects, stats, or key locations
-
-STING PLACEMENT RULES
-
-Add use_sting: true when:
-- The scene marks a major narrative turning point (company collapses, product launches, shocking revelation)
-- transition_out is dip_black or dip_white
-- The scene introduces a new chapter or major time period shift
-
-Add use_sting: false when:
-- Regular B-roll or context-setting scenes
-- use_sting was true in either of the previous 2 scenes (never back-to-back)
-- The scene is one of a sequence of similar content scenes
-
-Default to false — stings must be sparse and meaningful. Maximum 1 in every 3 consecutive scenes.
-
 TRANSITIONS
 
 - dissolve: default — smooth cross-fade for continuity
@@ -312,15 +232,12 @@ Keep each scene JSON compact to avoid truncation. Hard limits per field:
 - script_excerpt: maximum 30 words (trim at a sentence boundary if longer)
 - subject_anchors: maximum 4 items
 - clip_search_tags: maximum 4 items
-- overlays: maximum 1 overlay per scene (pick the most important)
-- reason field in overlays: maximum 10 words
-
 These limits are mandatory. Verbose responses get truncated and fail. Compact = complete.
 
 Return ONLY a raw JSON array. No markdown, no explanation, no wrapper.
 
 Example (Apple documentary):
-{"scene_id":"001","script_excerpt":"It began not in a boardroom, but in a garage. Cupertino, California, 1976.","shot_type":"image","mood":"intimate","composition":"wide","higgsfield_prompt":"Wide establishing shot of a cluttered residential garage in Cupertino California 1976, wooden workbench covered in circuit boards and soldering equipment, bare concrete floor, single bare incandescent bulb overhead casting warm shadows, faded cardboard boxes stacked against wood-panel walls, a hand-painted Apple Computer sign propped against the workbench","subject_anchors":["Cupertino California","1976","Apple garage","Steve Jobs","Steve Wozniak"],"motion":{"type":"drift_right","intensity":"subtle"},"overlays":[{"type":"date_stamp","text":{"line1":"Cupertino, California · 1976"},"timing":{"appearAt":0.5},"confidence":0.9,"reason":"First scene establishes historical time and place","status":"suggested"}],"transition_out":"dissolve","grade":"warm_amber","motion_graphic_type":"","style_lock":"","real_footage_flag":false,"clip_search_tags":[],"duration_seconds":6}`;
+{"scene_id":"001","script_excerpt":"It began not in a boardroom, but in a garage. Cupertino, California, 1976.","shot_type":"image","mood":"intimate","composition":"wide","higgsfield_prompt":"Wide establishing shot of a cluttered residential garage in Cupertino California 1976, wooden workbench covered in circuit boards and soldering equipment, bare concrete floor, single bare incandescent bulb overhead casting warm shadows, faded cardboard boxes stacked against wood-panel walls, a hand-painted Apple Computer sign propped against the workbench","subject_anchors":["Cupertino California","1976","Apple garage","Steve Jobs","Steve Wozniak"],"motion":{"type":"drift_right","intensity":"subtle"},"transition_out":"dissolve","grade":"warm_amber","motion_graphic_type":"","style_lock":"","real_footage_flag":false,"clip_search_tags":[],"duration_seconds":6}`;
 
 // Build a fallback higgsfield_prompt from subject_anchors + script_excerpt
 // Used when Claude returns an empty or malformed prompt
@@ -475,11 +392,6 @@ function postProcessScenes(scenes, defaults = {}) {
       }
     }
 
-    const overlaysWithIds = (scene.overlays || []).map(o => ({
-      id: o.id || randomUUID(),
-      ...o,
-    }));
-
     return {
       ...scene,
       scene_id:          String(i + 1).padStart(3, '0'),
@@ -489,14 +401,13 @@ function postProcessScenes(scenes, defaults = {}) {
       motion:            scene.shot_type === 'image'
         ? (scene.motion || { type: style.motionType || 'push_in', intensity: 'subtle' })
         : null,
-      overlays:          overlaysWithIds,
+      overlays:          [],
       transition_out:    scene.transition_out || style.transition || 'dissolve',
       grade:             scene.shot_type === 'image' ? (scene.grade || style.grade || 'cool_blue') : null,
       duration_seconds:  scene.duration_seconds || style.durationSeconds || 5,
       higgsfield_prompt: finalPrompt,
       real_footage_flag: scene.shot_type === 'real_footage',
       clip_search_tags:  scene.clip_search_tags || [],
-      use_sting:         scene.use_sting === true,
     };
   });
 }
@@ -506,30 +417,15 @@ function postProcessScenes(scenes, defaults = {}) {
 async function attemptAnalysis(script, metadata, defaults) {
   const client = new Anthropic();
 
-  const overlayTemplates = defaults.overlayTemplates || {};
-  const templateContext = `USER DEFAULT TEMPLATES:
-- lower_third template: ${overlayTemplates.lower_third || 'minimal_line'}
-- date_stamp template: ${overlayTemplates.date_stamp || 'minimal_pill'}
-- kinetic_text template: ${overlayTemplates.kinetic_text || 'center_impact'}
-- stat_callout template: ${overlayTemplates.stat_callout || 'big_number'}
-- chapter_title template: ${overlayTemplates.chapter_title || 'minimal_chapter'}
-- background_overlay template: ${overlayTemplates.background_overlay || 'gradient_bottom'}`;
-
   const userMessage = `VIDEO TITLE: ${metadata.title || 'Untitled'}
 NICHE: ${metadata.niche || 'General'}
 STYLE PRESET: ${metadata.stylePreset || 'Dark Cinematic'}
 NARRATOR TONE: ${metadata.narratorTone || 'Authoritative'}
 
-${templateContext}
-
-ENTITIES ALREADY INTRODUCED: []
-(This is the first scene — no entities introduced yet)
-
 SCRIPT:
 ${script}
 
 Analyze the full script and return the complete scenes array.
-Track entity introductions across all scenes — each named person or company gets a lower_third only once.
 REMINDER: Maximum 20 scenes. Keep all field values compact (see COMPACT JSON RULES).`;
 
   const message = await client.messages.create({

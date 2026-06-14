@@ -1,22 +1,6 @@
 {
   "clips": [
     {
-      "clip_id": "408e0c9d-59d5-4538-8bfa-3bc05409a029",
-      "file": "/library/clips/yt_cc_408e0c9d-59d5-4538-8bfa-3bc05409a029.mp4",
-      "title": "Steve Jobs Secrets of Life",
-      "source": "youtube_cc",
-      "license": "creative_commons",
-      "source_url": "https://www.youtube.com/watch?v=kYfNvmF0Bqw",
-      "tags": [],
-      "mood": "neutral",
-      "category": "general",
-      "duration": 8,
-      "description": "I don't have access to the actual video to see what's visually shown. To provide an accurate description, I would need to either watch the video or have information about its specific visual content. Could you provide details about what appears in the video, or would you like me to help you write a description based on information you can share?",
-      "warning": null,
-      "added_at": "2026-06-06T08:50:04.999Z",
-      "project_id": "proj_1780722117914"
-    },
-    {
       "clip_id": "699664f0-f41c-4ab5-a948-3898eca064cd",
       "file": "/library/clips/manual_2e4d89d7-352b-4f06-8e0e-c002a1a6a010.mp4",
       "title": "testing video",
@@ -357,6 +341,53 @@
       "description": "Jeff Bezos Netflix acquisition offer 1999 — Jeff Bezos Customer Obsession 1999",
       "warning": "Copyrighted — fair use for documentary commentary only. 8 seconds max.",
       "added_at": "2026-06-11T19:03:21.444Z",
+      "project_id": null
+    },
+    {
+      "clip_id": "95cc9b47-1922-4f75-a386-07e0a191e017",
+      "file": "/library/clips/pexels_7640710_people_in_a_business_meeting_7.mp4",
+      "title": "people in a business meeting 7640710",
+      "source": "pexels",
+      "license": "free_commercial",
+      "source_url": "https://www.pexels.com/video/people-in-a-business-meeting-7640710/",
+      "tags": [
+        "venture capital",
+        "netflix",
+        "67 rejections",
+        "1999",
+        "venture capital meeting",
+        "startup pitch rejection",
+        "conference room 1990s"
+      ],
+      "mood": "somber",
+      "category": "general",
+      "duration": 16,
+      "description": "Stock footage: business rejection meeting",
+      "warning": null,
+      "added_at": "2026-06-14T17:46:43.116Z",
+      "project_id": null
+    },
+    {
+      "clip_id": "e6d3a82a-f146-4bd2-83ad-4fd1feffe580",
+      "file": "/library/clips/pixabay_26531_camera__camcorder__video__movi.mp4",
+      "title": "camera, camcorder, video, movie theater, equipment, lens, digital, technology, audiovisual, media, photo, tv, production, image, streaming, studio, the operator, event, people, celebration, show, crowd, entertainment",
+      "source": "pixabay",
+      "license": "free_commercial",
+      "source_url": "https://pixabay.com/videos/id-26531/",
+      "tags": [
+        "netflix",
+        "subscription model",
+        "friction elimination",
+        "red envelopes mail delivery",
+        "postal worker sorting packages",
+        "home mailbox letters"
+      ],
+      "mood": "reflective",
+      "category": "general",
+      "duration": 14,
+      "description": "Stock footage: smooth streaming technology",
+      "warning": null,
+      "added_at": "2026-06-14T17:46:57.273Z",
       "project_id": null
     }
   ]

@@ -1,13 +1,5 @@
 import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate } from 'remotion'
-import FilmLook          from './overlays/FilmLook'
-import LowerThird        from './overlays/LowerThird'
-import DateStamp         from './overlays/DateStamp'
-import KineticText       from './overlays/KineticText'
-import StatCallout       from './overlays/StatCallout'
-import ChapterTitle      from './overlays/ChapterTitle'
-import SourceCitation    from './overlays/SourceCitation'
-import BackgroundOverlay from './overlays/BackgroundOverlay'
-import Watermark         from './overlays/Watermark'
+import FilmLook from './overlays/FilmLook'
 
 const SCALE_MAP = {
   push_in:  { subtle: [1.00, 1.06], moderate: [1.00, 1.10], strong: [1.00, 1.16] },
@@ -40,22 +32,12 @@ export default function ImageScene({ scene, imagePath, globalSettings = {} }) {
   const motionIntensity = scene.motion?.intensity || 'subtle'
   const composition     = scene.composition       || 'medium'
   const grade           = scene.grade             || 'cool_blue'
-  const overlays        = scene.overlays          || []
 
-  // Grain: global override > per-scene overlay > default 0.06
-  const grainOverlay   = overlays.find(o => o.type === 'grain')
   const grainIntensity = globalSettings.grainIntensity !== undefined
     ? globalSettings.grainIntensity
-    : (grainOverlay ? (grainOverlay.intensity ?? 0.06) : 0.06)
-  const grainPattern   = grainOverlay?.animation?.pattern ?? 'random'
-
-  // Vignette: per-scene overlay or default
-  const vignetteOverlay   = overlays.find(o => o.type === 'vignette')
-  const vignetteIntensity = vignetteOverlay ? (vignetteOverlay.intensity ?? 0.45) : 0.45
-
-  // Color grade: overlay overrides scene-level grade field
-  const colorGradeOverlay = overlays.find(o => o.type === 'color_grade')
-  const effectiveGrade    = colorGradeOverlay?.grade || grade
+    : 0.06
+  const vignetteIntensity = 0.45
+  const effectiveGrade    = grade
 
   // ── Motion transform ────────────────────────────────────────────────────────
   let transform = 'none'
@@ -90,21 +72,7 @@ export default function ImageScene({ scene, imagePath, globalSettings = {} }) {
         />
       </div>
 
-      <FilmLook grade={effectiveGrade} grainIntensity={grainIntensity} grainPattern={grainPattern} vignetteIntensity={vignetteIntensity} />
-
-      {overlays
-      .filter(o => o.status === 'accepted' || !o.status)
-      .map((o, i) => {
-        if (o.type === 'lower_third')        return <LowerThird        key={i} overlay={o} />
-        if (o.type === 'date_stamp')         return <DateStamp         key={i} overlay={o} />
-        if (o.type === 'kinetic_text')       return <KineticText       key={i} overlay={o} />
-        if (o.type === 'stat_callout')       return <StatCallout       key={i} overlay={o} />
-        if (o.type === 'chapter_title')      return <ChapterTitle      key={i} overlay={o} />
-        if (o.type === 'source_citation')    return <SourceCitation    key={i} overlay={o} />
-        if (o.type === 'background_overlay') return <BackgroundOverlay key={i} overlay={o} />
-        if (o.type === 'watermark')          return <Watermark         key={i} overlay={o} />
-        return null
-      })}
+      <FilmLook grade={effectiveGrade} grainIntensity={grainIntensity} grainPattern="random" vignetteIntensity={vignetteIntensity} />
     </AbsoluteFill>
   )
 }

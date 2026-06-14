@@ -4,7 +4,7 @@ import { VideoPlayer } from '../../components/video-creator/VideoPlayer'
 
 export function ExportStep({
   scenes, sceneStatuses, selectedClips, imagePaths, globalSettings,
-  voiceoverStatuses, audioSpecs, projectId, wizard,
+  voiceoverStatuses, projectId, wizard,
 }) {
   const [showPreview, setShowPreview] = useState(false)
 
@@ -37,7 +37,7 @@ export function ExportStep({
             imagePaths={imagePaths}
             selectedClips={selectedClips}
             globalSettings={globalSettings}
-            audioSpecs={audioSpecs}
+
             style={{
               width: '100%',
               maxWidth: 900,

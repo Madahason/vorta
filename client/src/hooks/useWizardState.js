@@ -5,7 +5,6 @@ const STEPS = [
   { id: 'scenes',  label: 'Scenes',  icon: '🎬', description: 'Review and edit scene breakdown' },
   { id: 'visuals', label: 'Visuals', icon: '🖼',  description: 'Generate images and motion graphics' },
   { id: 'voice',   label: 'Voice',   icon: '🎙',  description: 'Generate narration voiceover' },
-  { id: 'audio',   label: 'Audio',   icon: '🎵',  description: 'Add music and sound effects' },
   { id: 'export',  label: 'Export',  icon: '🎥',  description: 'Render and download your video' },
 ]
 

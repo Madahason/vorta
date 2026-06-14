@@ -27,18 +27,6 @@ function toHttpUrl(url) {
   return `http://localhost:${SERVER_PORT}${clean}`;
 }
 
-function absolutifyAudioSpecs(specs) {
-  if (!specs?.length) return specs;
-  return specs.map(spec => ({
-    ...spec,
-    narration: spec.narration ? { ...spec.narration, url: toHttpUrl(spec.narration.url) } : null,
-    music:     spec.music     ? { ...spec.music,     url: toHttpUrl(spec.music.url)     } : null,
-    ambient:   spec.ambient   ? { ...spec.ambient,   url: toHttpUrl(spec.ambient.url)   } : null,
-    sting:     spec.sting     ? { ...spec.sting,     url: toHttpUrl(spec.sting.url)     } : null,
-    overlay_sounds: (spec.overlay_sounds || []).map(os => ({ ...os, url: toHttpUrl(os.url) })),
-  }));
-}
-
 // Copy selected clip files from library/clips/ into remotion/public/clips/ so
 // Remotion's bundle server can serve them via staticFile() during CLI rendering.
 function syncClipsToRemotionPublic(selectedClips) {
@@ -163,19 +151,14 @@ router.post('/', async (req, res) => {
   // Uploaded narration audio (ExportPanel upload flow): convert to HTTP URL
   const audioProps = audio?.path ? { ...audio, path: toHttpUrl(audio.path) } : null;
 
-  // Background music / ambient / stings from cached index
-  let audioSpecs = [];
-  try {
-    const { buildProjectAudioSpecsCached } = require('../services/audioMixer');
-    audioSpecs = absolutifyAudioSpecs(buildProjectAudioSpecsCached(renderScenes));
-    console.log('[render] audioSpecs:', audioSpecs.length,
-      '| narration:', audioSpecs.filter(s => s.narration?.url).length,
-      '| music:', audioSpecs.filter(s => s.music?.url).length);
-    if (audioSpecs[0]) console.log('[render] scene 0 narration url:', audioSpecs[0].narration?.url || '(none)');
-    if (renderScenes[0]) console.log('[render] scene 0 image path:', renderScenes[0].image_path);
-  } catch (err) {
-    console.warn('[render] audioSpecs build failed (non-fatal):', err.message);
-  }
+  // Narration-only audio specs — music and sound effects are handled in post-production
+  const audioSpecs = renderScenes.map(scene => ({
+    scene_id:  scene.scene_id,
+    narration: scene.audio_path ? { url: scene.audio_path, volume: 1.0 } : null,
+  }));
+  const narrationCount = audioSpecs.filter(s => s.narration?.url).length;
+  console.log('[render] audioSpecs: narration', narrationCount, '/', audioSpecs.length, 'scenes');
+  if (renderScenes[0]) console.log('[render] scene 0 image path:', renderScenes[0].image_path);
 
   const propsData = {
     scenes:        renderScenes,

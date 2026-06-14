@@ -16,7 +16,7 @@ function formatFileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export default function ExportPanel({ scenes, sceneStatuses, selectedClips, projectId, voiceoverStatuses = {}, audioSpecs = [] }) {
+export default function ExportPanel({ scenes, sceneStatuses, selectedClips, projectId, voiceoverStatuses = {} }) {
   const [renderState, setRenderState] = useState('idle') // idle | rendering | done | error
   const [progress, setProgress]       = useState({ percent: 0, frame: 0, totalFrames: 0 })
   const [elapsed, setElapsed]         = useState(0)
@@ -55,10 +55,6 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
   const estRenderMinutes  = Math.max(1, Math.ceil(totalFrames / 30 / 10))
 
   const voiceoverReady = scenes.filter(s => voiceoverStatuses[s.scene_id]?.status === 'done').length
-
-  const musicReady   = audioSpecs.filter(s => s.music).length
-  const ambientReady = audioSpecs.filter(s => s.ambient).length
-  const stingReady   = audioSpecs.filter(s => s.sting).length
 
   const readyCount   = imageReady + motionScenes.length + footageMatched
   const readyPercent = scenes.length > 0 ? (readyCount / scenes.length) * 100 : 0
@@ -275,21 +271,6 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
       label:  'Voiceover',
       value:  voiceoverReady === 0 ? 'none' : `${voiceoverReady} / ${scenes.length} scenes`,
       status: voiceoverReady === 0 ? 'neutral' : voiceoverReady === scenes.length ? 'ok' : 'warn',
-    },
-    {
-      label:  'Background music',
-      value:  audioSpecs.length === 0 ? 'not built' : `${musicReady} / ${scenes.length} scenes`,
-      status: audioSpecs.length === 0 ? 'neutral' : musicReady === scenes.length ? 'ok' : 'warn',
-    },
-    {
-      label:  'Ambient sound',
-      value:  audioSpecs.length === 0 ? 'not built' : ambientReady > 0 ? `${ambientReady} scenes` : 'none',
-      status: ambientReady > 0 ? 'ok' : 'neutral',
-    },
-    {
-      label:  'Transition stings',
-      value:  audioSpecs.length === 0 ? 'not built' : stingReady > 0 ? `${stingReady} scenes` : 'none',
-      status: stingReady > 0 ? 'ok' : 'neutral',
     },
     {
       label:  'Estimated duration',
