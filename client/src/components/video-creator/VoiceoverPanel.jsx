@@ -283,7 +283,11 @@ export default function VoiceoverPanel({
         })
         const data = await res.json()
         if (data.updatedScenes) {
-          onScenesChange(() => data.updatedScenes)
+          onScenesChange(prev => {
+            const syncMap = {}
+            data.updatedScenes.forEach(s => { syncMap[s.scene_id] = s })
+            return prev.map(s => syncMap[s.scene_id] ? { ...s, ...syncMap[s.scene_id] } : s)
+          })
           const count = data.updatedScenes.filter(s => s.audio_duration).length
           console.log('[voiceover] sync-timings — synced', count, 'scenes')
           return
@@ -294,13 +298,12 @@ export default function VoiceoverPanel({
     }
     // Local fallback when endpoint unavailable or no projectId
     let count = 0
-    const updated = scenes.map(s => {
+    onScenesChange(prev => prev.map(s => {
       const duration = sceneStatuses[s.scene_id]?.duration ?? s.audio_duration
       if (!duration) return s
       count++
       return { ...s, duration_seconds: parseFloat((duration + 0.8).toFixed(2)) }
-    })
-    onScenesChange(() => updated)
+    }))
     console.log(`[voiceover] local sync — ${count} scenes`)
   }
 
