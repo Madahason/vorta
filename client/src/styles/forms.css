@@ -1,5 +1,10 @@
 /* ── Vorta Design System — Form Controls ─────────────────────────────────────── */
 
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 :root {
   --input-bg:           rgba(255, 255, 255, 0.08);
   --input-bg-hover:     rgba(255, 255, 255, 0.11);

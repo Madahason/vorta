@@ -9,6 +9,7 @@ import { ScenesStep }  from './wizard/ScenesStep'
 import { VisualsStep } from './wizard/VisualsStep'
 import { VoiceStep }   from './wizard/VoiceStep'
 import { ExportStep }  from './wizard/ExportStep'
+import { PreviewPlayer } from '../components/video-creator/PreviewPlayer'
 
 const SERVER_URL = 'http://localhost:3001'
 
@@ -178,6 +179,8 @@ export default function VideoCreator() {
   const [badgeFading, setBadgeFading] = useState(false)
 
   const [resetKey, setResetKey]         = useState(0)
+  const [showPreview, setShowPreview]       = useState(false)
+  const [showPreviewHint, setShowPreviewHint] = useState(false)
   const [showPlayer, setShowPlayer]     = useState(false)
   const [playerStuck, setPlayerStuck]   = useState(false)
   const [playerMinimized, setPlayerMinimized] = useState(false)
@@ -187,8 +190,9 @@ export default function VideoCreator() {
   // on every parent render when a scene is previewed.
   const previewScenes = useMemo(() => previewScene ? [previewScene] : [], [previewScene])
 
-  const eventSourceRef = useRef(null)
-  const sentinelRef    = useRef(null)
+  const eventSourceRef       = useRef(null)
+  const sentinelRef          = useRef(null)
+  const prevGeneratingRef    = useRef(false)
 
   // ─── Session-restored fade-out ───────────────────────────────────────────
   useEffect(() => {
@@ -221,9 +225,21 @@ export default function VideoCreator() {
   // ─── Keyboard shortcuts ───────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e) => {
+      // Space — toggle full-screen preview (not in inputs/textareas)
+      if (e.code === 'Space' &&
+          e.target.tagName !== 'INPUT' &&
+          e.target.tagName !== 'TEXTAREA' &&
+          e.target.tagName !== 'SELECT') {
+        if (scenes.length > 0) {
+          e.preventDefault()
+          setShowPreview(prev => !prev)
+          return
+        }
+      }
       if (e.key === 'Escape') {
-        if (previewScene) { setPreviewScene(null); return }
-        if (showClipLibrary) { setShowClipLibrary(false); return }
+        if (showPreview)      { setShowPreview(false); return }
+        if (previewScene)     { setPreviewScene(null); return }
+        if (showClipLibrary)  { setShowClipLibrary(false); return }
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
         if (hasAnalyzed && scenes.length > 0) {
@@ -234,7 +250,7 @@ export default function VideoCreator() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [previewScene, showClipLibrary, hasAnalyzed, scenes.length])
+  }, [showPreview, previewScene, showClipLibrary, hasAnalyzed, scenes.length])
 
   // ─── Derive imagePaths from sceneStatuses for the Remotion player ────────
   const imagePaths = useMemo(() => {
@@ -273,6 +289,16 @@ export default function VideoCreator() {
   // ─── SSE cleanup on unmount ───────────────────────────────────────────────
   useEffect(() => { return () => eventSourceRef.current?.close() }, [])
 
+  // ─── Preview hint — show after generation finishes ────────────────────────
+  useEffect(() => {
+    if (prevGeneratingRef.current && !isGenerating && generateDone && scenes.length > 0) {
+      setShowPreviewHint(true)
+      const t = setTimeout(() => setShowPreviewHint(false), 4000)
+      return () => clearTimeout(t)
+    }
+    prevGeneratingRef.current = isGenerating
+  }, [isGenerating]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Clear session ────────────────────────────────────────────────────────
   const handleClearSession = () => {
     eventSourceRef.current?.close()
@@ -290,6 +316,8 @@ export default function VideoCreator() {
     setClipMatches({})
     setSelectedClips({})
     setShowClipLibrary(false)
+    setShowPreview(false)
+    setShowPreviewHint(false)
     setShowPlayer(false)
     setPlayerStuck(false)
     setPlayerMinimized(false)
@@ -761,7 +789,11 @@ export default function VideoCreator() {
           borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0,
           overflow: 'hidden', minWidth: 0,
         }}>
-          <WizardNav wizard={wizard} />
+          <WizardNav
+            wizard={wizard}
+            scenes={scenes}
+            onPreview={() => setShowPreview(true)}
+          />
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '0 20px', flexShrink: 0 }}>
             {sessionRestored && (
               <span style={{
@@ -916,6 +948,52 @@ export default function VideoCreator() {
 
       {showClipLibrary && (
         <ClipLibrary onClose={() => setShowClipLibrary(false)} projectId={projectId} />
+      )}
+
+      {/* Full-screen preview player */}
+      <PreviewPlayer
+        scenes={scenes}
+        imagePaths={imagePaths}
+        selectedClips={selectedClips}
+        globalSettings={globalSettings}
+        isOpen={showPreview}
+        onClose={() => setShowPreview(false)}
+      />
+
+      {/* Preview hint — shown briefly after visuals generation completes */}
+      {showPreviewHint && (
+        <div style={{
+          position:   'fixed',
+          bottom:      24,
+          right:       24,
+          zIndex:      100,
+          padding:    '10px 16px',
+          background: 'rgba(59,130,246,0.15)',
+          border:     '1px solid rgba(59,130,246,0.3)',
+          borderRadius: 8,
+          display:    'flex',
+          alignItems: 'center',
+          gap:         10,
+          animation:  'slideIn 0.2s ease',
+        }}>
+          <span style={{ color: '#60a5fa', fontSize: 13 }}>
+            ▶ Press Space or click Preview to check your video
+          </span>
+          <button
+            onClick={() => { setShowPreviewHint(false); setShowPreview(true) }}
+            style={{
+              padding:      '4px 10px',
+              borderRadius:  5,
+              background:   '#3b82f6',
+              border:       'none',
+              color:        'white',
+              cursor:       'pointer',
+              fontSize:      12,
+            }}
+          >
+            Preview now
+          </button>
+        </div>
       )}
     </>
   )

@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 
-export function WizardNav({ wizard }) {
+export function WizardNav({ wizard, scenes = [], onPreview }) {
   const { steps, currentStep, isComplete, isAccessible, goTo } = wizard
   const [width, setWidth]       = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1024))
   const [canScrollL, setCanScrollL] = useState(false)
@@ -43,8 +43,9 @@ export function WizardNav({ wizard }) {
     el.scrollBy({ left: dir * 180, behavior: 'smooth' })
   }
 
-  const isCompact = width < 520
-  const hidDesc   = width < 800
+  const isCompact  = width < 520
+  const hidDesc    = width < 800
+  const hasScenes  = scenes.length > 0
 
   const arrowBtn = (dir, enabled) => (
     <button
@@ -186,6 +187,40 @@ export function WizardNav({ wizard }) {
       </div>
 
       {arrowBtn(1, canScrollR)}
+
+      {hasScenes && onPreview && (
+        <button
+          onClick={onPreview}
+          style={{
+            flexShrink:   0,
+            display:      'flex',
+            alignItems:   'center',
+            gap:           6,
+            padding:      '8px 14px',
+            margin:       '8px 12px',
+            borderRadius:  8,
+            border:       '1px solid rgba(59,130,246,0.4)',
+            background:   'rgba(59,130,246,0.1)',
+            color:        '#60a5fa',
+            cursor:       'pointer',
+            fontSize:      13,
+            fontWeight:    500,
+            whiteSpace:   'nowrap',
+            transition:   'all 0.15s',
+          }}
+          onMouseEnter={e => {
+            e.currentTarget.style.background   = 'rgba(59,130,246,0.2)'
+            e.currentTarget.style.borderColor  = 'rgba(59,130,246,0.6)'
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.background   = 'rgba(59,130,246,0.1)'
+            e.currentTarget.style.borderColor  = 'rgba(59,130,246,0.4)'
+          }}
+        >
+          <span style={{ fontSize: 13 }}>▶</span>
+          Preview
+        </button>
+      )}
     </div>
   )
 }

@@ -56,7 +56,6 @@ export function ExportStep({
         sceneStatuses={sceneStatuses}
         selectedClips={selectedClips}
         voiceoverStatuses={voiceoverStatuses}
-        audioSpecs={audioSpecs}
         projectId={projectId}
       />
     </div>
