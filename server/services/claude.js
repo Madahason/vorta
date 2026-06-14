@@ -299,6 +299,24 @@ FIELD RULES
 - motion_graphic_type: AnimatedCounter | TimelineBar | ComparisonChart | QuoteCard | MapHighlight
 - clip_search_tags: 3-6 lowercase tags, specific enough to find real footage
 
+SCENE COUNT LIMIT
+
+Generate between 8 and 20 scenes maximum regardless of script length.
+For long scripts, combine related paragraphs into single scenes rather than splitting every sentence.
+Never exceed 20 scenes total — this is a hard limit.
+
+COMPACT JSON RULES — CRITICAL FOR RESPONSE LENGTH
+
+Keep each scene JSON compact to avoid truncation. Hard limits per field:
+- higgsfield_prompt: maximum 40 words
+- script_excerpt: maximum 30 words (trim at a sentence boundary if longer)
+- subject_anchors: maximum 4 items
+- clip_search_tags: maximum 4 items
+- overlays: maximum 1 overlay per scene (pick the most important)
+- reason field in overlays: maximum 10 words
+
+These limits are mandatory. Verbose responses get truncated and fail. Compact = complete.
+
 Return ONLY a raw JSON array. No markdown, no explanation, no wrapper.
 
 Example (Apple documentary):
@@ -362,17 +380,140 @@ function validateAndGroundPrompts(scenes) {
   })
 }
 
-async function analyzeScript({ script, metadata, defaults = {} }) {
-  const client = new Anthropic()
+// ─── JSON extraction with truncation recovery ───────────────────────────────
 
-  const overlayTemplates = defaults.overlayTemplates || {}
+function extractJSON(text) {
+  if (!text || text.trim().length === 0) {
+    throw new Error('Empty response from Claude');
+  }
+
+  console.log('[claude] response length:', text.length, 'chars');
+  console.log('[claude] response tail:', text.slice(-100));
+
+  // Strip markdown fences first
+  const clean = text.trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/i, '')
+    .trim();
+
+  // 1. Direct parse
+  try {
+    const parsed = JSON.parse(clean);
+    const arr = Array.isArray(parsed) ? parsed : (parsed.scenes || parsed);
+    if (Array.isArray(arr) && arr.length > 0) return arr;
+  } catch {}
+
+  // 2. Find array boundaries and parse
+  const arrayStart = clean.indexOf('[');
+  const arrayEnd   = clean.lastIndexOf(']');
+  if (arrayStart !== -1 && arrayEnd !== -1 && arrayEnd > arrayStart) {
+    try {
+      const parsed = JSON.parse(clean.slice(arrayStart, arrayEnd + 1));
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch {}
+  }
+
+  // 3. Truncation recovery — find last complete scene object and close the array
+  if (arrayStart !== -1) {
+    const partial = clean.slice(arrayStart);
+
+    // Find the last "},\n" or "}," pattern — marks end of a complete scene object
+    const lastCompleteComma = partial.lastIndexOf('},');
+    if (lastCompleteComma !== -1) {
+      const recovered = partial.slice(0, lastCompleteComma + 1) + ']';
+      try {
+        const parsed = JSON.parse(recovered);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          console.warn(`[claude] TRUNCATION RECOVERY: recovered ${parsed.length} scenes from truncated response`);
+          return parsed;
+        }
+      } catch {}
+    }
+
+    // Last resort: find last well-formed '}' and close
+    const lastBrace = partial.lastIndexOf('}');
+    if (lastBrace !== -1) {
+      const recovered = partial.slice(0, lastBrace + 1) + ']';
+      try {
+        const parsed = JSON.parse(recovered);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          console.warn(`[claude] TRUNCATION RECOVERY (last-brace): recovered ${parsed.length} scenes`);
+          return parsed;
+        }
+      } catch {}
+    }
+  }
+
+  // 4. Try JSON object with scenes key
+  const objStart = clean.indexOf('{');
+  const objEnd   = clean.lastIndexOf('}');
+  if (objStart !== -1 && objEnd !== -1 && objEnd > objStart) {
+    try {
+      const parsed = JSON.parse(clean.slice(objStart, objEnd + 1));
+      if (parsed.scenes && Array.isArray(parsed.scenes)) return parsed.scenes;
+    } catch {}
+  }
+
+  console.error('[claude] could not parse response. First 500:', text.slice(0, 500));
+  throw new Error(`Could not parse Claude response (length: ${text.length}). Last 100 chars: ${text.slice(-100)}`);
+}
+
+// ─── Post-process: apply style lock, IDs, defaults ──────────────────────────
+
+function postProcessScenes(scenes, defaults = {}) {
+  const style = defaults.style || {};
+  return validateAndGroundPrompts(scenes).map((scene, i) => {
+    const subjectPrompt = (scene.higgsfield_prompt || '').trim();
+
+    let finalPrompt = '';
+    if (scene.shot_type === 'image' || scene.shot_type === 'real_footage') {
+      if (subjectPrompt && subjectPrompt.length >= 10) {
+        finalPrompt = `${subjectPrompt}, ${STYLE_LOCK}`;
+      } else {
+        const fallback = buildFallbackPrompt({ ...scene, scene_id: String(i + 1).padStart(3, '0') });
+        finalPrompt = `${fallback}, ${STYLE_LOCK}`;
+      }
+    }
+
+    const overlaysWithIds = (scene.overlays || []).map(o => ({
+      id: o.id || randomUUID(),
+      ...o,
+    }));
+
+    return {
+      ...scene,
+      scene_id:          String(i + 1).padStart(3, '0'),
+      style_lock:        STYLE_LOCK,
+      subject_anchors:   scene.subject_anchors  || [],
+      composition:       scene.composition      || 'medium',
+      motion:            scene.shot_type === 'image'
+        ? (scene.motion || { type: style.motionType || 'push_in', intensity: 'subtle' })
+        : null,
+      overlays:          overlaysWithIds,
+      transition_out:    scene.transition_out || style.transition || 'dissolve',
+      grade:             scene.shot_type === 'image' ? (scene.grade || style.grade || 'cool_blue') : null,
+      duration_seconds:  scene.duration_seconds || style.durationSeconds || 5,
+      higgsfield_prompt: finalPrompt,
+      real_footage_flag: scene.shot_type === 'real_footage',
+      clip_search_tags:  scene.clip_search_tags || [],
+      use_sting:         scene.use_sting === true,
+    };
+  });
+}
+
+// ─── Primary analysis attempt ────────────────────────────────────────────────
+
+async function attemptAnalysis(script, metadata, defaults) {
+  const client = new Anthropic();
+
+  const overlayTemplates = defaults.overlayTemplates || {};
   const templateContext = `USER DEFAULT TEMPLATES:
 - lower_third template: ${overlayTemplates.lower_third || 'minimal_line'}
 - date_stamp template: ${overlayTemplates.date_stamp || 'minimal_pill'}
 - kinetic_text template: ${overlayTemplates.kinetic_text || 'center_impact'}
 - stat_callout template: ${overlayTemplates.stat_callout || 'big_number'}
 - chapter_title template: ${overlayTemplates.chapter_title || 'minimal_chapter'}
-- background_overlay template: ${overlayTemplates.background_overlay || 'gradient_bottom'}`
+- background_overlay template: ${overlayTemplates.background_overlay || 'gradient_bottom'}`;
 
   const userMessage = `VIDEO TITLE: ${metadata.title || 'Untitled'}
 NICHE: ${metadata.niche || 'General'}
@@ -388,68 +529,78 @@ SCRIPT:
 ${script}
 
 Analyze the full script and return the complete scenes array.
-Track entity introductions across all scenes — each named person or company gets a lower_third only once.`
+Track entity introductions across all scenes — each named person or company gets a lower_third only once.
+REMINDER: Maximum 20 scenes. Keep all field values compact (see COMPACT JSON RULES).`;
 
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 8192,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: userMessage }],
-  })
+    model:      'claude-sonnet-4-6',
+    max_tokens: 16000,
+    system:     SYSTEM_PROMPT,
+    messages:   [{ role: 'user', content: userMessage }],
+  });
 
-  const raw = message.content[0].text.trim()
-  console.log('[claude] raw response (first 500 chars):', raw.slice(0, 500))
+  const raw = message.content[0]?.text || '';
+  console.log('[claude] stop_reason:', message.stop_reason);
+  const scenes = extractJSON(raw);
+  console.log(`[claude] returning ${scenes.length} scenes`);
+  return scenes;
+}
 
-  // Strip markdown code fences if Claude wraps the JSON despite instructions
-  const clean  = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '')
-  const scenes = JSON.parse(clean)
+// ─── Simplified fallback analysis (minimal JSON per scene) ───────────────────
 
-  // Validate and repair prompts BEFORE applying style lock
-  const validated = validateAndGroundPrompts(scenes)
+async function attemptAnalysisSimplified(script, metadata) {
+  const client = new Anthropic();
+  console.log('[claude] running simplified fallback analysis...');
 
-  const style = defaults.style || {}
+  const message = await client.messages.create({
+    model:      'claude-sonnet-4-6',
+    max_tokens: 16000,
+    messages:   [{
+      role:    'user',
+      content: `Analyze this documentary script and return a JSON array of scenes.
 
-  const processed = validated.map((scene, i) => {
-    const subjectPrompt = (scene.higgsfield_prompt || '').trim()
+Script: ${script.slice(0, 4000)}
 
-    // Only append style lock if there is real subject content
-    let finalPrompt = ''
-    if (scene.shot_type === 'image' || scene.shot_type === 'real_footage') {
-      if (subjectPrompt && subjectPrompt.length >= 10) {
-        finalPrompt = `${subjectPrompt}, ${STYLE_LOCK}`
-      } else {
-        const fallback = buildFallbackPrompt({ ...scene, scene_id: String(i + 1).padStart(3, '0') })
-        finalPrompt = `${fallback}, ${STYLE_LOCK}`
-      }
-    }
+Return ONLY a valid JSON array. Maximum 15 scenes. Each scene object needs ONLY these fields:
+- scene_id (string, zero-padded: "001")
+- shot_type ("image" | "motion_graphic" | "real_footage")
+- script_excerpt (max 20 words, complete sentence)
+- mood ("tense"|"triumphant"|"somber"|"neutral"|"dramatic"|"reflective"|"anticipatory"|"institutional")
+- higgsfield_prompt (max 25 words, only for image/real_footage scenes, else "")
+- motion_graphic_type (one of: "AnimatedCounter"|"QuoteCard"|"TimelineBar"|"ComparisonChart"|"MapHighlight" — only for motion_graphic, else "")
+- duration_seconds (number, 4-7)
+- subject_anchors (array, max 3 strings)
+- composition ("medium")
+- motion ({"type":"push_in","intensity":"moderate"})
+- overlays ([])
+- transition_out ("dissolve")
+- grade ("cool_blue")
+- use_sting (false)
+- clip_search_tags (array, max 3 strings)
 
-    // Ensure every overlay has a stable ID so the review UI can accept/reject individually
-    const overlaysWithIds = (scene.overlays || []).map(o => ({
-      id: o.id || randomUUID(),
-      ...o,
-    }))
+Distribution: 15% real_footage, 45% image, 40% motion_graphic.
+Return ONLY the JSON array, no markdown, no explanation.`,
+    }],
+  });
 
-    return {
-      ...scene,
-      scene_id: String(i + 1).padStart(3, '0'),
-      style_lock: STYLE_LOCK,
-      subject_anchors:  scene.subject_anchors  || [],
-      composition:      scene.composition      || 'medium',
-      motion:           scene.shot_type === 'image'
-        ? (scene.motion || { type: style.motionType || 'push_in', intensity: 'subtle' })
-        : null,
-      overlays:         overlaysWithIds,
-      transition_out:   scene.transition_out || style.transition || 'dissolve',
-      grade:            scene.shot_type === 'image' ? (scene.grade || style.grade || 'cool_blue') : null,
-      duration_seconds: scene.duration_seconds || style.durationSeconds || 5,
-      higgsfield_prompt: finalPrompt,
-      real_footage_flag: scene.shot_type === 'real_footage',
-      clip_search_tags:  scene.clip_search_tags || [],
-      use_sting:         scene.use_sting === true,
-    }
-  })
+  const raw = message.content[0]?.text || '';
+  console.log('[claude] simplified stop_reason:', message.stop_reason);
+  return extractJSON(raw);
+}
 
-  return processed
+// ─── Public analyzeScript with retry ────────────────────────────────────────
+
+async function analyzeScript({ script, metadata, defaults = {} }) {
+  let scenes;
+  try {
+    scenes = await attemptAnalysis(script, metadata, defaults);
+  } catch (err) {
+    console.warn('[claude] primary analysis failed:', err.message);
+    console.warn('[claude] retrying with simplified prompt...');
+    scenes = await attemptAnalysisSimplified(script, metadata);
+  }
+
+  return postProcessScenes(scenes, defaults);
 }
 
 // Generic Claude call for use by other services (e.g. clipIntelligence)
