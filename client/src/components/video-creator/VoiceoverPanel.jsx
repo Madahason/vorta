@@ -27,6 +27,12 @@ const sectionLabel = {
   marginBottom: 8,
 }
 
+const DEFAULT_VOICE_PROFILE = {
+  useMoodSettings:  true,
+  usePreprocessing: true,
+  normaliseVolume:  false,
+}
+
 // ── SettingRow ────────────────────────────────────────────────────────────────
 function SettingRow({ label, description, checked, onChange, badge }) {
   return (
@@ -84,8 +90,16 @@ export default function VoiceoverPanel({
 
   // Professional settings
   const [voiceProfile, setVoiceProfile] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('vorta_voice_profile')) } catch {}
-    return { useMoodSettings: false, usePreprocessing: false, normaliseVolume: false }
+    try {
+      const stored = localStorage.getItem('vorta_voice_profile')
+      if (!stored) return DEFAULT_VOICE_PROFILE
+      const parsed = JSON.parse(stored)
+      if (!parsed || typeof parsed !== 'object') return DEFAULT_VOICE_PROFILE
+      // Merge with defaults so missing keys are always present
+      return { ...DEFAULT_VOICE_PROFILE, ...parsed }
+    } catch {
+      return DEFAULT_VOICE_PROFILE
+    }
   })
   const [showSettings,   setShowSettings]   = useState(false)
   const [processedTexts, setProcessedTexts] = useState({})  // { [scene_id]: string }
@@ -96,13 +110,15 @@ export default function VoiceoverPanel({
   const panelRef       = useRef(null)
   const sceneRefs      = useRef({})
 
-  // ── Persist voice profile preference ─────────────────────────────────────
+  // ── Persist voice profile whenever it changes ─────────────────────────────
+  useEffect(() => {
+    if (voiceProfile && typeof voiceProfile === 'object') {
+      try { localStorage.setItem('vorta_voice_profile', JSON.stringify(voiceProfile)) } catch {}
+    }
+  }, [voiceProfile])
+
   const updateVoiceProfile = (patch) => {
-    setVoiceProfile(prev => {
-      const next = { ...prev, ...patch }
-      try { localStorage.setItem('vorta_voice_profile', JSON.stringify(next)) } catch {}
-      return next
-    })
+    setVoiceProfile(prev => ({ ...(prev || DEFAULT_VOICE_PROFILE), ...patch }))
   }
 
   // ── Sync when parent opens panel ──────────────────────────────────────────
@@ -453,6 +469,13 @@ export default function VoiceoverPanel({
     acc[cat].push(v)
     return acc
   }, {})
+
+  // Null guard — should never happen after the fixed initializer, but prevents
+  // crashes from any stale null value that survived a page reload mid-session.
+  if (!voiceProfile) {
+    setVoiceProfile(DEFAULT_VOICE_PROFILE)
+    return null
+  }
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
