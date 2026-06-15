@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Download, Loader2, X, ChevronDown, ChevronUp, RefreshCw, AlertCircle, Music, Upload, ShieldAlert } from 'lucide-react'
+import { GRADE_TIPS } from '../../config/effectTips'
 
 // SSE must connect directly to Express — Vite proxy buffers text/event-stream
 const SERVER_URL = 'http://localhost:3001'
@@ -423,6 +424,9 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
             )}
           </div>
 
+          {/* Visual profile summary */}
+          <VisualProfileSummary scenes={scenes} />
+
           {/* Render button */}
           <button
             onClick={handleRender}
@@ -709,6 +713,60 @@ function FairUseModal({ clips, onConfirm, onCancel, loading }) {
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─── VisualProfileSummary ─────────────────────────────────────────────────────
+
+function VisualProfileSummary({ scenes }) {
+  if (!scenes?.length) return null
+  const imageScenes = scenes.filter(s => s.shot_type === 'image')
+  if (!imageScenes.length) return null
+
+  const gradeBreakdown = imageScenes.reduce((acc, s) => {
+    const g = s.grade || 'cool_blue'
+    acc[g] = (acc[g] || 0) + 1
+    return acc
+  }, {})
+
+  const tensionCount = scenes.filter(s => ['tense', 'dramatic', 'anticipatory'].includes(s.mood)).length
+  const sortedGrades = Object.entries(gradeBreakdown).sort(([, a], [, b]) => b - a)
+
+  return (
+    <div style={{
+      marginBottom: 14,
+      padding: '10px 12px',
+      background: 'rgba(255,255,255,0.02)',
+      border: '1px solid rgba(255,255,255,0.07)',
+      borderRadius: 8,
+    }}>
+      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+        Visual Profile
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {sortedGrades.map(([grade, count]) => {
+          const tip = GRADE_TIPS[grade]
+          if (!tip) return null
+          return (
+            <div key={grade} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{
+                width: 8, height: 8, borderRadius: '50%',
+                background: tip.tagColor, flexShrink: 0,
+              }} />
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)' }}>
+                {tip.label}
+              </span>
+              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>×{count}</span>
+            </div>
+          )
+        })}
+      </div>
+      {tensionCount > 0 && (
+        <div style={{ marginTop: 6, fontSize: 10, color: 'rgba(239,68,68,0.5)' }}>
+          {tensionCount} scene{tensionCount !== 1 ? 's' : ''} with camera shake (tense / dramatic / anticipatory mood)
+        </div>
+      )}
     </div>
   )
 }

@@ -5,6 +5,9 @@ import {
   X, Mic,
 } from 'lucide-react'
 import { buildPreviewHTML } from '../../utils/buildPreviewHTML'
+import GradeSelector from '../ui/GradeSelector'
+import MotionSelector from '../ui/MotionSelector'
+import CompositionSelector from '../ui/CompositionSelector'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -22,7 +25,7 @@ const SHOT_TYPES      = ['image', 'motion_graphic', 'real_footage']
 const MOTION_TYPES    = ['push_in', 'pull_out', 'drift_left', 'drift_right', 'drift_up', 'static']
 const MOTION_INTENS   = ['subtle', 'moderate', 'strong']
 const TRANSITION_TYPES= ['dissolve', 'cut', 'dip_black', 'dip_white']
-const GRADE_TYPES     = ['cool_blue', 'warm_amber', 'desaturated', 'neutral']
+const GRADE_TYPES     = ['cool_blue', 'warm_amber', 'desaturated', 'neutral', 'magnates', 'high_contrast']
 
 const MOOD_STYLES = {
   tense:    'bg-red-500/[0.07] text-red-400/60 border-red-500/[0.14]',
@@ -342,6 +345,53 @@ function SceneCard({
                 </button>
               )}
             </>
+          )}
+
+          {/* ════ CINEMATIC SELECTORS (image scenes) ════════════════════════════ */}
+          {scene.shot_type === 'image' && (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+              <GradeSelector
+                value={scene.grade || 'cool_blue'}
+                onChange={grade => onChange({ grade })}
+              />
+              <MotionSelector
+                value={scene.motion?.type || 'push_in'}
+                intensity={scene.motion?.intensity || 'subtle'}
+                mood={scene.mood}
+                onChange={type => onChange({ motion: { ...scene.motion, type } })}
+                onIntensityChange={intensity => onChange({ motion: { ...scene.motion, intensity } })}
+              />
+              <CompositionSelector
+                value={scene.composition || 'medium'}
+                onChange={composition => onChange({ composition })}
+              />
+              <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Letterbox</span>
+                <button
+                  onClick={() => onChange({ letterbox: !(scene.letterbox !== false) })}
+                  style={{
+                    padding: '2px 9px', fontSize: 10, borderRadius: 4, cursor: 'pointer',
+                    border: `1px solid ${scene.letterbox !== false ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.07)'}`,
+                    background: scene.letterbox !== false ? 'rgba(255,255,255,0.07)' : 'transparent',
+                    color: scene.letterbox !== false ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.2)',
+                    transition: 'all 0.12s',
+                  }}
+                >
+                  {scene.letterbox !== false ? 'On' : 'Off'}
+                </button>
+                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)' }}>Cinematic black bars</span>
+              </div>
+            </div>
+          )}
+
+          {/* ════ GRADE SELECTOR (real_footage scenes) ══════════════════════════ */}
+          {scene.shot_type === 'real_footage' && (
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+              <GradeSelector
+                value={scene.grade || 'cool_blue'}
+                onChange={grade => onChange({ grade })}
+              />
+            </div>
           )}
 
           {/* ════ GENERATED IMAGE ═══════════════════════════════════════════════ */}

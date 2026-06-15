@@ -208,6 +208,13 @@ COLOR GRADE
 - warm_amber: past events, nostalgia, archive feel, anything pre-2000
 - desaturated: crisis, failure, bankruptcy, dismissal, bleak outcomes
 - neutral: product shots, data/graph context, clean visual reveals
+- magnates: teal shadows + orange highlights — high-impact MagnatesMedia style, use for peak narrative moments only
+- high_contrast: punchy, confrontational — breaking revelations, urgency, climax scenes
+
+LETTERBOX
+
+- Set letterbox: true for image and real_footage scenes (cinematic 12% black bars)
+- Set letterbox: false for motion_graphic scenes (bars would obscure chart data and text)
 
 FIELD RULES
 
@@ -404,6 +411,7 @@ function postProcessScenes(scenes, defaults = {}) {
       overlays:          [],
       transition_out:    scene.transition_out || style.transition || 'dissolve',
       grade:             scene.shot_type === 'image' ? (scene.grade || style.grade || 'cool_blue') : null,
+      letterbox:         scene.shot_type !== 'motion_graphic',
       duration_seconds:  scene.duration_seconds || style.durationSeconds || 5,
       higgsfield_prompt: finalPrompt,
       real_footage_flag: scene.shot_type === 'real_footage',

@@ -1,16 +1,18 @@
 import { useState } from 'react'
 import { Video, staticFile, AbsoluteFill } from 'remotion'
-import FilmLook from './overlays/FilmLook'
+import { FilmGrain, Vignette, ColorGrade, LightLeak, LetterboxBars, SceneFade } from './effects/CinematicEffects'
 import PlaceholderScene from './PlaceholderScene'
 
-export default function FootageScene({ clip, scene }) {
+export const FootageScene = ({ clip, scene }) => {
   const [error, setError] = useState(false)
 
-  // Extract just the filename so staticFile() can resolve it from remotion/public/clips/.
-  // clip.file may arrive as /library/clips/name.mp4 or http://localhost:3001/library/clips/name.mp4
   const filename = clip?.file
     ? clip.file.split('/').pop().split('\\').pop()
     : null
+
+  const grade   = scene?.grade   || 'cool_blue'
+  const mood    = scene?.mood    || 'neutral'
+  const letterbox = scene?.letterbox !== false
 
   if (error || !filename) {
     return (
@@ -32,7 +34,14 @@ export default function FootageScene({ clip, scene }) {
           setError(true)
         }}
       />
-      <FilmLook grade="neutral" grainIntensity={0.04} vignetteIntensity={0.35} />
+      <ColorGrade grade={grade} />
+      <Vignette intensity={0.35} mood={mood} />
+      <FilmGrain intensity={0.04} />
+      <LightLeak mood={mood} enabled />
+      <SceneFade fadeInFrames={6} fadeOutFrames={6} />
+      <LetterboxBars enabled={letterbox} />
     </AbsoluteFill>
   )
 }
+
+export default FootageScene

@@ -47,7 +47,7 @@ function SceneRenderer({ scene, imagePath, selectedClip, globalSettings }) {
   }
   if (scene.shot_type === 'real_footage') {
     if (!selectedClip) return <PlaceholderScene scene={scene} />
-    return <FootageScene clip={selectedClip} />
+    return <FootageScene clip={selectedClip} scene={scene} />
   }
   return <PlaceholderScene scene={scene} />
 }
