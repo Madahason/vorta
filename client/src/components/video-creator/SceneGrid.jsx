@@ -5,9 +5,10 @@ import {
   X, Mic,
 } from 'lucide-react'
 import { buildPreviewHTML } from '../../utils/buildPreviewHTML'
-import GradeSelector from '../ui/GradeSelector'
-import MotionSelector from '../ui/MotionSelector'
-import CompositionSelector from '../ui/CompositionSelector'
+import { GradeSelector } from '../ui/GradeSelector'
+import { MotionSelector } from '../ui/MotionSelector'
+import { CompositionSelector } from '../ui/CompositionSelector'
+import { InfoTip } from '../ui/Tooltip'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -349,47 +350,60 @@ function SceneCard({
 
           {/* ════ CINEMATIC SELECTORS (image scenes) ════════════════════════════ */}
           {scene.shot_type === 'image' && (
-            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '12px 0', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+
               <GradeSelector
                 value={scene.grade || 'cool_blue'}
-                onChange={grade => onChange({ grade })}
+                onChange={(grade) => onChange({ grade })}
               />
+
               <MotionSelector
-                value={scene.motion?.type || 'push_in'}
-                intensity={scene.motion?.intensity || 'subtle'}
+                motion={scene.motion || { type: 'push_in', intensity: 'subtle' }}
                 mood={scene.mood}
-                onChange={type => onChange({ motion: { ...scene.motion, type } })}
-                onIntensityChange={intensity => onChange({ motion: { ...scene.motion, intensity } })}
+                onChange={(motion) => onChange({ motion })}
               />
+
               <CompositionSelector
                 value={scene.composition || 'medium'}
-                onChange={composition => onChange({ composition })}
+                onChange={(composition) => onChange({ composition })}
               />
-              <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Letterbox</span>
-                <button
-                  onClick={() => onChange({ letterbox: !(scene.letterbox !== false) })}
-                  style={{
-                    padding: '2px 9px', fontSize: 10, borderRadius: 4, cursor: 'pointer',
-                    border: `1px solid ${scene.letterbox !== false ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.07)'}`,
-                    background: scene.letterbox !== false ? 'rgba(255,255,255,0.07)' : 'transparent',
-                    color: scene.letterbox !== false ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.2)',
-                    transition: 'all 0.12s',
-                  }}
-                >
-                  {scene.letterbox !== false ? 'On' : 'Off'}
-                </button>
-                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)' }}>Cinematic black bars</span>
+
+              {/* Letterbox toggle */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                      Letterbox Bars
+                    </span>
+                    <InfoTip position="right" content={
+                      <div>
+                        <div style={{ color: 'white', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Letterbox Bars</div>
+                        <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, lineHeight: 1.5 }}>Black bars create a 2.35:1 cinematic ratio — used in feature films and high-end documentaries.</div>
+                        <div style={{ color: '#4ade80', fontSize: 10, marginTop: 6 }}>✓ Keep ON for image and footage scenes</div>
+                        <div style={{ color: '#f87171', fontSize: 10, marginTop: 2 }}>✗ Turn OFF for motion graphics — bars cut off chart data</div>
+                      </div>
+                    } />
+                  </div>
+                  <button
+                    onClick={() => onChange({ letterbox: !(scene.letterbox !== false) })}
+                    style={{ width: 36, height: 20, borderRadius: 10, border: 'none', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', background: scene.letterbox !== false ? '#3b82f6' : 'rgba(255,255,255,0.15)' }}
+                  >
+                    <div style={{ width: 14, height: 14, borderRadius: '50%', background: 'white', position: 'absolute', top: 3, left: scene.letterbox !== false ? 18 : 3, transition: 'left 0.2s' }} />
+                  </button>
+                </div>
+                <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: 10 }}>
+                  {scene.letterbox !== false ? '✓ Cinematic 2.35:1 bars active' : 'Bars hidden — full frame'}
+                </div>
               </div>
             </div>
           )}
 
           {/* ════ GRADE SELECTOR (real_footage scenes) ══════════════════════════ */}
           {scene.shot_type === 'real_footage' && (
-            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+            <div style={{ padding: '12px 0', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
               <GradeSelector
                 value={scene.grade || 'cool_blue'}
-                onChange={grade => onChange({ grade })}
+                onChange={(grade) => onChange({ grade })}
               />
             </div>
           )}

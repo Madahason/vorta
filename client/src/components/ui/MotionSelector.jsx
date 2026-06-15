@@ -1,101 +1,82 @@
-import { useState } from 'react'
-import { MOTION_TIPS, INTENSITY_TIPS } from '../../config/effectTips'
-import { InfoTip } from './Tooltip'
+import { useState } from 'react';
+import { MOTION_TIPS, INTENSITY_TIPS } from '../../config/effectTips';
+import { InfoTip, Tooltip } from './Tooltip';
 
-const MOTIONS = Object.keys(MOTION_TIPS)
-
-export default function MotionSelector({ value, intensity, mood, onChange, onIntensityChange }) {
-  const [hovered, setHovered] = useState(null)
+export const MotionSelector = ({ motion = { type: 'push_in', intensity: 'subtle' }, mood, onChange }) => {
+  const [hovered, setHovered] = useState(null);
+  const activeTip = MOTION_TIPS[hovered || motion.type];
+  const isMoodMatch = (type) => MOTION_TIPS[type]?.moodMatch?.includes(mood);
 
   return (
-    <div style={{ marginTop: 8 }}>
-      {/* Motion type */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 5 }}>
-        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Motion</span>
-        <InfoTip content="Ken Burns effect applied to the image. Mood-matched options are highlighted." position="right" />
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
+        <label style={{ color: 'rgba(255,255,255,0.4)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Camera Motion</label>
+        <InfoTip position="right" content={
+          <div>
+            <div style={{ color: 'white', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Camera Motion</div>
+            <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, lineHeight: 1.5 }}>Green options are recommended for this scene's mood.</div>
+          </div>
+        } />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
-        {MOTIONS.map(m => {
-          const t = MOTION_TIPS[m]
-          const active    = m === value
-          const moodMatch = mood && t.moodMatch?.includes(mood)
-          const isHovered = m === hovered
-
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 4, marginBottom: 8 }}>
+        {Object.entries(MOTION_TIPS).map(([key, tip]) => {
+          const isActive = motion.type === key;
+          const moodMatch = isMoodMatch(key);
           return (
             <button
-              key={m}
-              onClick={() => onChange(m)}
-              onMouseEnter={() => setHovered(m)}
+              key={key}
+              onClick={() => onChange({ ...motion, type: key })}
+              onMouseEnter={() => setHovered(key)}
               onMouseLeave={() => setHovered(null)}
-              title={t.description}
               style={{
-                padding: '5px 6px',
-                fontSize: 10,
-                borderRadius: 5,
-                border: `1px solid ${active ? '#22c55e' : moodMatch ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.08)'}`,
-                background: active
-                  ? 'rgba(34,197,94,0.12)'
-                  : isHovered ? 'rgba(255,255,255,0.05)'
-                  : moodMatch ? 'rgba(34,197,94,0.04)'
-                  : 'rgba(255,255,255,0.02)',
-                color: active ? '#4ade80' : moodMatch ? 'rgba(74,222,128,0.65)' : 'rgba(255,255,255,0.4)',
-                cursor: 'pointer',
-                transition: 'all 0.12s',
-                fontWeight: active ? 600 : 400,
-                textAlign: 'center',
+                padding: '5px 4px', borderRadius: 5, cursor: 'pointer', fontSize: 10, textAlign: 'center', lineHeight: 1.2, transition: 'all 0.15s',
+                border: `1px solid ${isActive ? '#3b82f6' : moodMatch ? 'rgba(74,222,128,0.3)' : 'rgba(255,255,255,0.08)'}`,
+                background: isActive ? 'rgba(59,130,246,0.15)' : moodMatch ? 'rgba(74,222,128,0.04)' : 'rgba(255,255,255,0.02)',
+                color: isActive ? '#60a5fa' : moodMatch ? '#4ade80' : 'rgba(255,255,255,0.4)'
               }}
             >
-              {t.label}
-              {moodMatch && !active && <span style={{ display: 'block', fontSize: 8, color: 'rgba(74,222,128,0.45)', marginTop: 1 }}>mood match</span>}
+              {tip.label}
+              {moodMatch && !isActive && <div style={{ fontSize: 7, color: '#4ade80', marginTop: 1 }}>✓ mood match</div>}
             </button>
-          )
+          );
         })}
       </div>
 
-      {/* proTip for static */}
-      {value === 'static' && MOTION_TIPS.static.proTip && (
-        <div style={{
-          marginTop: 6, padding: '6px 8px',
-          background: 'rgba(139,92,246,0.08)',
-          border: '1px solid rgba(139,92,246,0.2)',
-          borderRadius: 5, fontSize: 10,
-          color: 'rgba(167,139,250,0.8)',
-        }}>
-          💡 {MOTION_TIPS.static.proTip}
+      {activeTip && (
+        <div style={{ padding: '8px 10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 6, marginBottom: 8 }}>
+          <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11, lineHeight: 1.4, marginBottom: 4 }}>{activeTip.description}</div>
+          <div style={{ color: '#4ade80', fontSize: 10 }}>✓ {activeTip.bestFor}</div>
+          {activeTip.proTip && (
+            <div style={{ marginTop: 6, padding: '5px 8px', background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: 4, color: '#a78bfa', fontSize: 10, lineHeight: 1.4 }}>
+              💡 {activeTip.proTip}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Intensity row */}
-      {value !== 'static' && onIntensityChange && (
-        <div style={{ marginTop: 8 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
-            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Intensity</span>
-          </div>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {INTENSITY_TIPS.map(({ value: v, label, tip }) => {
-              const active = intensity === v
-              return (
-                <button
-                  key={v}
-                  onClick={() => onIntensityChange(v)}
-                  title={tip}
-                  style={{
-                    flex: 1, padding: '4px 6px', fontSize: 10, borderRadius: 4,
-                    border: `1px solid ${active ? '#3b82f6' : 'rgba(255,255,255,0.08)'}`,
-                    background: active ? 'rgba(59,130,246,0.12)' : 'rgba(255,255,255,0.02)',
-                    color: active ? '#93c5fd' : 'rgba(255,255,255,0.35)',
-                    cursor: 'pointer', transition: 'all 0.12s',
-                    fontWeight: active ? 600 : 400,
-                  }}
-                >
-                  {label}
-                </button>
-              )
-            })}
-          </div>
+      <div>
+        <label style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10, display: 'block', marginBottom: 4 }}>Intensity</label>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {INTENSITY_TIPS.map(opt => (
+            <Tooltip key={opt.value} position="top" content={<div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11 }}>{opt.tip}</div>}>
+              <button
+                onClick={() => onChange({ ...motion, intensity: opt.value })}
+                style={{
+                  flex: 1, padding: '4px 6px', borderRadius: 4, fontSize: 10, cursor: 'pointer',
+                  border: `1px solid ${motion.intensity === opt.value ? '#3b82f6' : 'rgba(255,255,255,0.08)'}`,
+                  background: motion.intensity === opt.value ? 'rgba(59,130,246,0.15)' : 'transparent',
+                  color: motion.intensity === opt.value ? '#60a5fa' : 'rgba(255,255,255,0.35)'
+                }}
+              >
+                {opt.label}
+              </button>
+            </Tooltip>
+          ))}
         </div>
-      )}
+      </div>
     </div>
-  )
-}
+  );
+};
+
+export default MotionSelector;

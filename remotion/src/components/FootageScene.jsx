@@ -1,47 +1,36 @@
-import { useState } from 'react'
-import { Video, staticFile, AbsoluteFill } from 'remotion'
-import { FilmGrain, Vignette, ColorGrade, LightLeak, LetterboxBars, SceneFade } from './effects/CinematicEffects'
-import PlaceholderScene from './PlaceholderScene'
+import { Video, staticFile, AbsoluteFill } from 'remotion';
+import { useState } from 'react';
+import { FilmGrain, Vignette, ColorGrade, LightLeak, LetterboxBars, SceneFade } from './effects/CinematicEffects';
 
 export const FootageScene = ({ clip, scene }) => {
-  const [error, setError] = useState(false)
-
-  const filename = clip?.file
-    ? clip.file.split('/').pop().split('\\').pop()
-    : null
-
-  const grade   = scene?.grade   || 'cool_blue'
-  const mood    = scene?.mood    || 'neutral'
-  const letterbox = scene?.letterbox !== false
+  const [error, setError] = useState(false);
+  const mood = scene?.mood || 'neutral';
+  const grade = scene?.grade || 'cool_blue';
+  const filename = clip?.file ? clip.file.split('/').pop().split('\\').pop() : null;
 
   if (error || !filename) {
     return (
-      <PlaceholderScene
-        label={filename ? 'Clip not found' : 'No clip selected'}
-        sublabel={filename}
-        scene={scene}
-      />
-    )
+      <AbsoluteFill style={{ backgroundColor: '#0a0a0a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: 14 }}>{!filename ? 'No clip selected' : 'Clip unavailable'}</div>
+      </AbsoluteFill>
+    );
   }
 
   return (
-    <AbsoluteFill style={{ background: '#000' }}>
+    <AbsoluteFill style={{ backgroundColor: '#0a0a0a' }}>
       <Video
         src={staticFile(`clips/${filename}`)}
         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-        onError={() => {
-          console.error('[FootageScene] failed to load:', filename)
-          setError(true)
-        }}
+        onError={() => setError(true)}
       />
       <ColorGrade grade={grade} />
-      <Vignette intensity={0.35} mood={mood} />
+      <Vignette intensity={0.40} mood={mood} />
       <FilmGrain intensity={0.04} />
-      <LightLeak mood={mood} enabled />
+      <LightLeak mood={mood} enabled={true} />
       <SceneFade fadeInFrames={6} fadeOutFrames={6} />
-      <LetterboxBars enabled={letterbox} />
+      <LetterboxBars enabled={scene?.letterbox !== false} />
     </AbsoluteFill>
-  )
-}
+  );
+};
 
-export default FootageScene
+export default FootageScene;

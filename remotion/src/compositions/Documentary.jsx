@@ -38,8 +38,9 @@ function SceneRenderer({ scene, imagePath, selectedClip, globalSettings }) {
   if (!scene) return <PlaceholderScene scene={{ scene_id: 'unknown' }} />
 
   if (scene.shot_type === 'image') {
-    if (!imagePath) return <PlaceholderScene scene={scene} />
-    return <ImageScene scene={scene} imagePath={imagePath} globalSettings={globalSettings} />
+    const sceneWithImage = imagePath ? { ...scene, image_path: imagePath } : scene
+    if (!sceneWithImage.image_path) return <PlaceholderScene scene={scene} />
+    return <ImageScene scene={sceneWithImage} />
   }
   if (scene.shot_type === 'motion_graphic') {
     if (!scene.motion_component) return <PlaceholderScene scene={scene} />

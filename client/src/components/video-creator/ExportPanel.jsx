@@ -721,50 +721,33 @@ function FairUseModal({ clips, onConfirm, onCancel, loading }) {
 
 function VisualProfileSummary({ scenes }) {
   if (!scenes?.length) return null
-  const imageScenes = scenes.filter(s => s.shot_type === 'image')
-  if (!imageScenes.length) return null
 
-  const gradeBreakdown = imageScenes.reduce((acc, s) => {
+  const gradeBreakdown = scenes.reduce((acc, s) => {
     const g = s.grade || 'cool_blue'
     acc[g] = (acc[g] || 0) + 1
     return acc
   }, {})
-
-  const tensionCount = scenes.filter(s => ['tense', 'dramatic', 'anticipatory'].includes(s.mood)).length
-  const sortedGrades = Object.entries(gradeBreakdown).sort(([, a], [, b]) => b - a)
+  const tensionScenes = scenes.filter(s => ['tense', 'dramatic', 'anticipatory'].includes(s.mood)).length
 
   return (
-    <div style={{
-      marginBottom: 14,
-      padding: '10px 12px',
-      background: 'rgba(255,255,255,0.02)',
-      border: '1px solid rgba(255,255,255,0.07)',
-      borderRadius: 8,
-    }}>
-      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+    <div style={{ padding: '12px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 8, marginBottom: 16 }}>
+      <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>
         Visual Profile
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {sortedGrades.map(([grade, count]) => {
-          const tip = GRADE_TIPS[grade]
-          if (!tip) return null
-          return (
-            <div key={grade} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{
-                width: 8, height: 8, borderRadius: '50%',
-                background: tip.tagColor, flexShrink: 0,
-              }} />
-              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)' }}>
-                {tip.label}
-              </span>
-              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>×{count}</span>
-            </div>
-          )
-        })}
-      </div>
-      {tensionCount > 0 && (
-        <div style={{ marginTop: 6, fontSize: 10, color: 'rgba(239,68,68,0.5)' }}>
-          {tensionCount} scene{tensionCount !== 1 ? 's' : ''} with camera shake (tense / dramatic / anticipatory mood)
+      {Object.entries(gradeBreakdown).map(([grade, count]) => {
+        const tip = GRADE_TIPS[grade]
+        if (!tip) return null
+        return (
+          <div key={grade} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: tip.tagColor, flexShrink: 0 }} />
+            <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11 }}>{tip.label}</span>
+            <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 11 }}>{count} scene{count > 1 ? 's' : ''}</span>
+          </div>
+        )
+      })}
+      {tensionScenes > 0 && (
+        <div style={{ marginTop: 6, color: 'rgba(255,255,255,0.25)', fontSize: 10 }}>
+          🎥 Camera shake active on {tensionScenes} tense/dramatic scene{tensionScenes > 1 ? 's' : ''}
         </div>
       )}
     </div>

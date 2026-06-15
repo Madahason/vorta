@@ -1,79 +1,67 @@
-import { useState } from 'react'
-import { GRADE_TIPS } from '../../config/effectTips'
-import { InfoTip } from './Tooltip'
+import { useState } from 'react';
+import { GRADE_TIPS } from '../../config/effectTips';
+import { InfoTip } from './Tooltip';
 
-const GRADES = Object.keys(GRADE_TIPS)
-
-export default function GradeSelector({ value, onChange }) {
-  const [hovered, setHovered] = useState(null)
-  const tip = GRADE_TIPS[hovered || value]
+export const GradeSelector = ({ value, onChange }) => {
+  const [hovered, setHovered] = useState(null);
+  const activeTip = GRADE_TIPS[hovered || value];
 
   return (
-    <div style={{ marginTop: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 5 }}>
-        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Grade</span>
-        <InfoTip content="Color grade shapes the emotional tone of the scene. Different grades work for different narrative moods." position="right" />
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
+        <label style={{ color: 'rgba(255,255,255,0.4)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+          Color Grade
+        </label>
+        <InfoTip position="right" content={
+          <div>
+            <div style={{ color: 'white', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Color Grade</div>
+            <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, lineHeight: 1.5 }}>Hover each option to see when to use it.</div>
+          </div>
+        } />
       </div>
 
-      {/* Button row */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-        {GRADES.map(g => {
-          const t = GRADE_TIPS[g]
-          const active = g === value
-          const isHovered = g === hovered
-          return (
-            <button
-              key={g}
-              onClick={() => onChange(g)}
-              onMouseEnter={() => setHovered(g)}
-              onMouseLeave={() => setHovered(null)}
-              style={{
-                padding: '3px 9px',
-                fontSize: 10,
-                borderRadius: 4,
-                border: `1px solid ${active || isHovered ? t.tagColor : 'rgba(255,255,255,0.1)'}`,
-                background: active
-                  ? `${t.tagColor}22`
-                  : isHovered
-                    ? `${t.tagColor}11`
-                    : 'rgba(255,255,255,0.03)',
-                color: active ? t.tagColor : isHovered ? t.tagColor : 'rgba(255,255,255,0.45)',
-                cursor: 'pointer',
-                transition: 'all 0.12s',
-                fontWeight: active ? 600 : 400,
-              }}
-            >
-              {t.label}
-            </button>
-          )
-        })}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+        {Object.entries(GRADE_TIPS).map(([key, tip]) => (
+          <button
+            key={key}
+            onClick={() => onChange(key)}
+            onMouseEnter={() => setHovered(key)}
+            onMouseLeave={() => setHovered(null)}
+            style={{
+              padding: '3px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 10, fontWeight: value === key ? 600 : 400, transition: 'all 0.15s',
+              border: `1px solid ${value === key ? tip.tagColor : 'rgba(255,255,255,0.1)'}`,
+              background: value === key ? `${tip.tagColor}22` : 'rgba(255,255,255,0.03)',
+              color: value === key ? tip.tagColor : 'rgba(255,255,255,0.4)'
+            }}
+          >
+            {tip.label}
+          </button>
+        ))}
       </div>
 
-      {/* Live tip card */}
-      {tip && (
-        <div style={{
-          marginTop: 7,
-          padding: '8px 10px',
-          background: 'rgba(255,255,255,0.025)',
-          border: `1px solid ${tip.tagColor}33`,
-          borderRadius: 6,
-          animation: 'slideIn 0.15s ease-out',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-            <span style={{
-              fontSize: 9, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
-              color: tip.tagColor, padding: '1px 5px', borderRadius: 3,
-              background: `${tip.tagColor}18`, border: `1px solid ${tip.tagColor}30`,
-            }}>
-              {tip.tag}
+      {activeTip && (
+        <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.03)', border: `1px solid ${activeTip.tagColor}30`, borderLeft: `3px solid ${activeTip.tagColor}`, borderRadius: 6, transition: 'all 0.15s' }}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 5 }}>
+            <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: `${activeTip.tagColor}22`, color: activeTip.tagColor }}>
+              {activeTip.tag}
             </span>
           </div>
-          <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', lineHeight: 1.4, margin: 0 }}>{tip.description}</p>
-          <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.28)', marginTop: 3, margin: '3px 0 0' }}>
-            Best for: {tip.bestFor}
-          </p>
+          <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11, lineHeight: 1.5, marginBottom: 5 }}>{activeTip.description}</div>
+          <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, lineHeight: 1.4 }}>
+            <span style={{ color: '#4ade80' }}>✓ Best for:</span> {activeTip.bestFor}
+          </div>
+          {activeTip.avoid && (
+            <div style={{ color: 'rgba(255,255,255,0.25)', fontSize: 10, marginTop: 3 }}>
+              <span style={{ color: '#f87171' }}>✗ Avoid:</span> {activeTip.avoid}
+            </div>
+          )}
+          {activeTip.example && (
+            <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: 10, marginTop: 3, fontStyle: 'italic' }}>{activeTip.example}</div>
+          )}
         </div>
       )}
     </div>
-  )
-}
+  );
+};
+
+export default GradeSelector;
