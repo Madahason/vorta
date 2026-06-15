@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { Mic, ChevronDown, ChevronUp, Play, Pause, Loader2, RefreshCw, CheckCircle, AlertTriangle } from 'lucide-react'
+import { Mic, ChevronDown, ChevronUp, Play, Pause, Loader2, RefreshCw, CheckCircle, AlertTriangle, Settings, Eye, EyeOff, Sparkles } from 'lucide-react'
+import { preprocessForTTSDisplay } from '../../utils/voiceoverPreprocessorClient'
 
 const SERVER_URL = 'http://localhost:3001'
 
@@ -9,12 +10,54 @@ const MODELS = [
   { id: 'eleven_v3',              name: 'v3 (Alpha)',         desc: 'Most expressive, best for documentary' },
 ]
 
+const MOODS = [
+  { id: 'tense',         emoji: '⚡', label: 'Tense',         desc: 'Urgent, clipped' },
+  { id: 'dramatic',      emoji: '🎭', label: 'Dramatic',      desc: 'Peaks and valleys' },
+  { id: 'triumphant',    emoji: '🏆', label: 'Triumphant',    desc: 'Rising confidence' },
+  { id: 'somber',        emoji: '🌧', label: 'Somber',        desc: 'Weight, mourning' },
+  { id: 'reflective',    emoji: '🌙', label: 'Reflective',    desc: 'Quiet, introspective' },
+  { id: 'neutral',       emoji: '📖', label: 'Neutral',       desc: 'Clear, professional' },
+  { id: 'anticipatory',  emoji: '🔍', label: 'Anticipatory',  desc: 'Breath-held tension' },
+  { id: 'institutional', emoji: '🏛', label: 'Institutional', desc: 'Authoritative' },
+]
+
 const sectionLabel = {
   fontSize: 11, color: 'rgba(255,255,255,0.35)',
   textTransform: 'uppercase', letterSpacing: '0.08em',
   marginBottom: 8,
 }
 
+// ── SettingRow ────────────────────────────────────────────────────────────────
+function SettingRow({ label, description, checked, onChange, badge }) {
+  return (
+    <label style={{
+      display: 'flex', alignItems: 'flex-start', gap: 10,
+      padding: '9px 0', borderBottom: '1px solid rgba(255,255,255,0.04)',
+      cursor: 'pointer',
+    }}>
+      <div style={{ paddingTop: 1 }}>
+        <input
+          type="checkbox" checked={checked}
+          onChange={e => onChange(e.target.checked)}
+          style={{ accentColor: '#7c3aed', width: 13, height: 13 }}
+        />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)' }}>{label}</span>
+          {badge && (
+            <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, background: 'rgba(124,58,237,0.15)', color: 'rgba(124,58,237,0.80)', border: '1px solid rgba(124,58,237,0.20)' }}>
+              {badge}
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', marginTop: 2 }}>{description}</div>
+      </div>
+    </label>
+  )
+}
+
+// ── VoiceoverPanel ────────────────────────────────────────────────────────────
 export default function VoiceoverPanel({
   scenes,
   projectId,
@@ -31,19 +74,38 @@ export default function VoiceoverPanel({
   const [voicesLoading,   setVoicesLoading]   = useState(false)
   const [voiceSearch,     setVoiceSearch]     = useState('')
   const [model,           setModel]           = useState('eleven_multilingual_v2')
-  const [settings,        setSettings]        = useState({ stability: 0.71, similarityBoost: 0.75, style: 0.0 })
+  const [settings,        setSettings]        = useState({ stability: 0.71, similarityBoost: 0.75, style: 0.0, speed: 1.0 })
   const [generating,      setGenerating]      = useState(false)
   const [genProgress,     setGenProgress]     = useState({ current: 0, total: 0, startTime: null })
   const [sceneStatuses,   setSceneStatuses]   = useState({})
   const [previewLoading,  setPreviewLoading]  = useState({})
   const [playingSceneId,  setPlayingSceneId]  = useState(null)
-  const [elStatus,        setElStatus]        = useState(null) // null = not checked, object = result
+  const [elStatus,        setElStatus]        = useState(null) // null = not checked
+
+  // Professional settings
+  const [voiceProfile, setVoiceProfile] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('vorta_voice_profile')) } catch {}
+    return { useMoodSettings: false, usePreprocessing: false, normaliseVolume: false }
+  })
+  const [showSettings,   setShowSettings]   = useState(false)
+  const [processedTexts, setProcessedTexts] = useState({})  // { [scene_id]: string }
+  const [showProcessed,  setShowProcessed]  = useState({})  // { [scene_id]: bool }
+  const [isAddingPauses, setIsAddingPauses] = useState(false)
 
   const activeAudioRef = useRef(null)
   const panelRef       = useRef(null)
   const sceneRefs      = useRef({})
 
-  // ── Sync when parent opens panel (mic icon click) ────────────────────────
+  // ── Persist voice profile preference ─────────────────────────────────────
+  const updateVoiceProfile = (patch) => {
+    setVoiceProfile(prev => {
+      const next = { ...prev, ...patch }
+      try { localStorage.setItem('vorta_voice_profile', JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
+
+  // ── Sync when parent opens panel ──────────────────────────────────────────
   useEffect(() => { if (isOpen) setOpen(true) }, [isOpen])
 
   const handleClose = () => { setOpen(false); onClose?.() }
@@ -110,6 +172,51 @@ export default function VoiceoverPanel({
   })
 
   const canGenerate = !!selectedVoiceId && !!projectId && !generating && elStatus?.connected !== false
+
+  // Count scenes by mood for the mood distribution display
+  const moodCounts = realScenes.reduce((acc, s) => {
+    const m = s.mood || 'neutral'
+    acc[m] = (acc[m] || 0) + 1
+    return acc
+  }, {})
+
+  // ── Preview processed text (local, instant) ───────────────────────────────
+  const handlePreviewProcessed = (scene) => {
+    const processed = preprocessForTTSDisplay(scene.script_excerpt, {
+      expandNums: true,
+      addPauses:  voiceProfile.usePreprocessing,
+    })
+    setProcessedTexts(prev => ({ ...prev, [scene.scene_id]: processed }))
+    setShowProcessed(prev => ({ ...prev, [scene.scene_id]: !prev[scene.scene_id] }))
+  }
+
+  // ── Add pauses via server endpoint ────────────────────────────────────────
+  const handleAddPauses = async () => {
+    setIsAddingPauses(true)
+    try {
+      const res = await fetch(`${SERVER_URL}/api/voiceover/add-pauses`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scenes: realScenes.map(s => ({ scene_id: s.scene_id, script_excerpt: s.script_excerpt, mood: s.mood })),
+        }),
+      })
+      const data = await res.json()
+      if (data.scenes) {
+        const map      = {}
+        const openMap  = {}
+        data.scenes.forEach(s => {
+          map[s.scene_id]     = s.processed_text
+          openMap[s.scene_id] = true
+        })
+        setProcessedTexts(map)
+        setShowProcessed(openMap)
+      }
+    } catch (err) {
+      console.error('[voiceover] add-pauses failed:', err.message)
+    } finally {
+      setIsAddingPauses(false)
+    }
+  }
 
   // ── Voice preview ─────────────────────────────────────────────────────────
   const handlePreview = async (voice) => {
@@ -183,11 +290,14 @@ export default function VoiceoverPanel({
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           projectId,
-          scenes:        toGenerate,
-          voiceId:       selectedVoiceId,
-          modelId:       model,
-          mode:          scenesToProcess ? 'scene' : 'full',
-          voiceSettings: settings,
+          scenes:           toGenerate,
+          voiceId:          selectedVoiceId,
+          modelId:          model,
+          mode:             scenesToProcess ? 'scene' : 'full',
+          voiceSettings:    settings,
+          useMoodSettings:  voiceProfile.useMoodSettings,
+          usePreprocessing: voiceProfile.usePreprocessing,
+          normaliseVolume:  voiceProfile.normaliseVolume,
         }),
       })
       if (!response.body) throw new Error('No response stream')
@@ -366,6 +476,11 @@ export default function VoiceoverPanel({
             {doneCount} / {realScenes.length} ready
           </span>
         )}
+        {(voiceProfile.useMoodSettings || voiceProfile.usePreprocessing || voiceProfile.normaliseVolume) && (
+          <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: 'rgba(124,58,237,0.12)', color: 'rgba(124,58,237,0.70)', border: '1px solid rgba(124,58,237,0.18)' }}>
+            PRO
+          </span>
+        )}
         <span style={{ marginLeft: 'auto', color: 'rgba(255,255,255,0.25)', display: 'flex' }}>
           {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
         </span>
@@ -391,6 +506,124 @@ export default function VoiceoverPanel({
               </span>
             </div>
           )}
+
+          {/* ── Professional settings panel ── */}
+          <div style={{
+            background: 'rgba(255,255,255,0.02)',
+            border: '1px solid rgba(255,255,255,0.07)',
+            borderRadius: 8,
+            overflow: 'hidden',
+          }}>
+            <button
+              onClick={() => setShowSettings(s => !s)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                width: '100%', padding: '10px 14px',
+                background: 'none', border: 'none', cursor: 'pointer',
+                borderBottom: showSettings ? '1px solid rgba(255,255,255,0.07)' : 'none',
+              }}
+            >
+              <Settings size={11} style={{ color: 'rgba(255,255,255,0.35)' }} />
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.50)' }}>Production Settings</span>
+              {(voiceProfile.useMoodSettings || voiceProfile.usePreprocessing || voiceProfile.normaliseVolume) && (
+                <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: 'rgba(124,58,237,0.15)', color: 'rgba(124,58,237,0.80)' }}>
+                  {[voiceProfile.useMoodSettings && 'mood', voiceProfile.usePreprocessing && 'preprocessing', voiceProfile.normaliseVolume && 'loudnorm'].filter(Boolean).join(' · ')}
+                </span>
+              )}
+              <span style={{ marginLeft: 'auto', color: 'rgba(255,255,255,0.20)', display: 'flex' }}>
+                {showSettings ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+              </span>
+            </button>
+
+            {showSettings && (
+              <div style={{ padding: '4px 14px 14px' }}>
+
+                {/* Toggles */}
+                <SettingRow
+                  label="Per-mood voice delivery"
+                  description="Adjusts stability, style, and pace based on each scene's mood tag (tense, somber, triumphant, etc.)"
+                  badge="AI"
+                  checked={voiceProfile.useMoodSettings}
+                  onChange={v => updateVoiceProfile({ useMoodSettings: v })}
+                />
+                <SettingRow
+                  label="Smart text preprocessing"
+                  description="Expands $2.4B → '2.4 billion dollars', inserts natural pause markers at em-dashes and ellipses"
+                  checked={voiceProfile.usePreprocessing}
+                  onChange={v => updateVoiceProfile({ usePreprocessing: v })}
+                />
+                <SettingRow
+                  label="Loudness normalisation"
+                  description="Applies ffmpeg loudnorm to -16 LUFS (YouTube standard) after generation. Adds ~2s per scene."
+                  badge="-16 LUFS"
+                  checked={voiceProfile.normaliseVolume}
+                  onChange={v => updateVoiceProfile({ normaliseVolume: v })}
+                />
+
+                {/* Mood distribution */}
+                {voiceProfile.useMoodSettings && (
+                  <div style={{ marginTop: 14 }}>
+                    <div style={{ ...sectionLabel, marginBottom: 10 }}>Scene mood distribution</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
+                      {MOODS.map(mood => {
+                        const count    = moodCounts[mood.id] || 0
+                        const hasScenes = count > 0
+                        return (
+                          <div
+                            key={mood.id}
+                            title={mood.desc}
+                            style={{
+                              padding: '6px 8px', borderRadius: 6, textAlign: 'center',
+                              background: hasScenes ? 'rgba(124,58,237,0.10)' : 'rgba(255,255,255,0.02)',
+                              border: `1px solid ${hasScenes ? 'rgba(124,58,237,0.20)' : 'rgba(255,255,255,0.06)'}`,
+                            }}
+                          >
+                            <div style={{ fontSize: 13, marginBottom: 2 }}>{mood.emoji}</div>
+                            <div style={{ fontSize: 9, color: hasScenes ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.25)', fontWeight: 500 }}>
+                              {mood.label}
+                            </div>
+                            {hasScenes && (
+                              <div style={{ fontSize: 9, color: 'rgba(124,58,237,0.75)', marginTop: 1 }}>
+                                {count} scene{count > 1 ? 's' : ''}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {Object.keys(moodCounts).length === 0 && (
+                      <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', margin: '8px 0 0' }}>
+                        No mood tags found on scenes. Add a <code style={{ fontSize: 10, background: 'rgba(255,255,255,0.05)', padding: '1px 4px', borderRadius: 3 }}>mood</code> field to each scene object to enable per-mood delivery.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Preview preprocessing button */}
+                {voiceProfile.usePreprocessing && (
+                  <div style={{ marginTop: 12 }}>
+                    <button
+                      onClick={handleAddPauses}
+                      disabled={isAddingPauses || realScenes.length === 0}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        padding: '6px 12px',
+                        background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.10)',
+                        borderRadius: 6, color: 'rgba(255,255,255,0.55)', fontSize: 11, cursor: 'pointer',
+                      }}
+                    >
+                      {isAddingPauses ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
+                      Preview processed text for all scenes
+                    </button>
+                    <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', margin: '5px 0 0' }}>
+                      Shows how text will be transformed before sending to ElevenLabs. Toggle per scene with the eye icon.
+                    </p>
+                  </div>
+                )}
+
+              </div>
+            )}
+          </div>
 
           {/* ── Scene rows ── */}
           {realScenes.length > 0 && (
@@ -478,97 +711,148 @@ export default function VoiceoverPanel({
                   const isGenerating = status === 'generating'
                   const hasAudio     = status === 'done' || !!scene.audio_path
                   const isFocused    = focusSceneId === scene.scene_id
+                  const isProcessedOpen = showProcessed[scene.scene_id]
 
                   return (
-                    <div
-                      key={scene.scene_id}
-                      ref={el => { sceneRefs.current[scene.scene_id] = el }}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 8,
-                        padding: '6px 10px', borderRadius: 6,
-                        background: isFocused ? 'rgba(124,58,237,0.08)' : 'rgba(255,255,255,0.02)',
-                        border: `1px solid ${isFocused ? 'rgba(124,58,237,0.20)' : 'rgba(255,255,255,0.04)'}`,
-                        transition: 'background 0.2s, border-color 0.2s',
-                      }}
-                    >
-                      {/* Scene badge */}
-                      <span style={{
-                        fontSize: 9, fontFamily: 'monospace', fontWeight: 600,
-                        color: 'rgba(255,255,255,0.35)', flexShrink: 0,
-                        padding: '1px 5px', borderRadius: 3, background: 'rgba(255,255,255,0.05)',
-                      }}>
-                        {scene.scene_id}
-                      </span>
+                    <div key={scene.scene_id}>
+                      <div
+                        ref={el => { sceneRefs.current[scene.scene_id] = el }}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          padding: '6px 10px', borderRadius: isProcessedOpen ? '6px 6px 0 0' : 6,
+                          background: isFocused ? 'rgba(124,58,237,0.08)' : 'rgba(255,255,255,0.02)',
+                          border: `1px solid ${isFocused ? 'rgba(124,58,237,0.20)' : 'rgba(255,255,255,0.04)'}`,
+                          borderBottom: isProcessedOpen ? 'none' : undefined,
+                          transition: 'background 0.2s, border-color 0.2s',
+                        }}
+                      >
+                        {/* Scene badge */}
+                        <span style={{
+                          fontSize: 9, fontFamily: 'monospace', fontWeight: 600,
+                          color: 'rgba(255,255,255,0.35)', flexShrink: 0,
+                          padding: '1px 5px', borderRadius: 3, background: 'rgba(255,255,255,0.05)',
+                        }}>
+                          {scene.scene_id}
+                        </span>
 
-                      {/* Excerpt */}
-                      <span style={{
-                        flex: 1, fontSize: 11, color: 'rgba(255,255,255,0.40)',
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
-                        {scene.script_excerpt?.slice(0, 65)}
-                      </span>
+                        {/* Mood badge */}
+                        {scene.mood && (
+                          <span style={{
+                            fontSize: 9, padding: '1px 5px', borderRadius: 3, flexShrink: 0,
+                            background: 'rgba(124,58,237,0.08)', color: 'rgba(124,58,237,0.65)',
+                            border: '1px solid rgba(124,58,237,0.15)', fontStyle: 'italic',
+                          }}>
+                            {scene.mood}
+                          </span>
+                        )}
 
-                      {/* Status actions */}
-                      {isGenerating && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                          <Loader2 size={11} className="animate-spin" style={{ color: '#3b82f6' }} />
-                          <span style={{ fontSize: 10, color: 'rgba(59,130,246,0.70)' }}>Generating…</span>
-                        </div>
-                      )}
+                        {/* Excerpt */}
+                        <span style={{
+                          flex: 1, fontSize: 11, color: 'rgba(255,255,255,0.40)',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {scene.script_excerpt?.slice(0, 65)}
+                        </span>
 
-                      {!isGenerating && hasAudio && (
-                        <>
+                        {/* Preview processed text toggle */}
+                        {voiceProfile.usePreprocessing && (
                           <button
-                            onClick={() => handlePlayScene(scene)}
+                            onClick={() => handlePreviewProcessed(scene)}
+                            title={isProcessedOpen ? 'Hide processed text' : 'Preview processed text'}
                             style={{
-                              display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0,
-                              padding: '3px 8px', borderRadius: 4,
-                              background: isPlaying ? 'rgba(74,222,128,0.10)' : 'rgba(255,255,255,0.05)',
-                              border: `1px solid ${isPlaying ? 'rgba(74,222,128,0.20)' : 'rgba(255,255,255,0.10)'}`,
-                              color: isPlaying ? 'rgba(74,222,128,0.80)' : 'rgba(255,255,255,0.45)',
-                              fontSize: 10, cursor: 'pointer',
+                              display: 'flex', alignItems: 'center', flexShrink: 0,
+                              padding: '3px 5px', borderRadius: 4,
+                              background: isProcessedOpen ? 'rgba(124,58,237,0.12)' : 'none',
+                              border: `1px solid ${isProcessedOpen ? 'rgba(124,58,237,0.25)' : 'rgba(255,255,255,0.08)'}`,
+                              color: isProcessedOpen ? 'rgba(124,58,237,0.80)' : 'rgba(255,255,255,0.25)',
+                              cursor: 'pointer',
                             }}
                           >
-                            {isPlaying ? <Pause size={9} /> : <Play size={9} />}
-                            {duration ? `${duration.toFixed(1)}s` : '●'}
+                            {isProcessedOpen ? <EyeOff size={9} /> : <Eye size={9} />}
                           </button>
+                        )}
+
+                        {/* Status actions */}
+                        {isGenerating && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                            <Loader2 size={11} className="animate-spin" style={{ color: '#3b82f6' }} />
+                            <span style={{ fontSize: 10, color: 'rgba(59,130,246,0.70)' }}>Generating…</span>
+                          </div>
+                        )}
+
+                        {!isGenerating && hasAudio && (
+                          <>
+                            <button
+                              onClick={() => handlePlayScene(scene)}
+                              style={{
+                                display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0,
+                                padding: '3px 8px', borderRadius: 4,
+                                background: isPlaying ? 'rgba(74,222,128,0.10)' : 'rgba(255,255,255,0.05)',
+                                border: `1px solid ${isPlaying ? 'rgba(74,222,128,0.20)' : 'rgba(255,255,255,0.10)'}`,
+                                color: isPlaying ? 'rgba(74,222,128,0.80)' : 'rgba(255,255,255,0.45)',
+                                fontSize: 10, cursor: 'pointer',
+                              }}
+                            >
+                              {isPlaying ? <Pause size={9} /> : <Play size={9} />}
+                              {duration ? `${duration.toFixed(1)}s` : '●'}
+                            </button>
+                            <button
+                              onClick={() => handleGenerate('scene', [scene])}
+                              disabled={generating}
+                              style={{
+                                padding: '3px 6px', borderRadius: 4, flexShrink: 0,
+                                background: 'none', border: '1px solid rgba(255,255,255,0.08)',
+                                color: generating ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.30)',
+                                cursor: generating ? 'not-allowed' : 'pointer',
+                                display: 'flex', alignItems: 'center',
+                              }}
+                              title="Regenerate audio for this scene"
+                            >
+                              <RefreshCw size={9} />
+                            </button>
+                          </>
+                        )}
+
+                        {!isGenerating && !hasAudio && (
                           <button
                             onClick={() => handleGenerate('scene', [scene])}
-                            disabled={generating}
+                            disabled={!canGenerate}
                             style={{
-                              padding: '3px 6px', borderRadius: 4, flexShrink: 0,
-                              background: 'none', border: '1px solid rgba(255,255,255,0.08)',
-                              color: generating ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.30)',
-                              cursor: generating ? 'not-allowed' : 'pointer',
-                              display: 'flex', alignItems: 'center',
+                              padding: '3px 10px', borderRadius: 4, flexShrink: 0, fontSize: 10,
+                              background: canGenerate ? 'rgba(124,58,237,0.15)' : 'rgba(255,255,255,0.03)',
+                              border: `1px solid ${canGenerate ? 'rgba(124,58,237,0.25)' : 'rgba(255,255,255,0.06)'}`,
+                              color: canGenerate ? 'rgba(124,58,237,0.90)' : 'rgba(255,255,255,0.20)',
+                              cursor: canGenerate ? 'pointer' : 'not-allowed',
                             }}
-                            title="Regenerate audio for this scene"
                           >
-                            <RefreshCw size={9} />
+                            Generate
                           </button>
-                        </>
-                      )}
+                        )}
 
-                      {!isGenerating && !hasAudio && (
-                        <button
-                          onClick={() => handleGenerate('scene', [scene])}
-                          disabled={!canGenerate}
-                          style={{
-                            padding: '3px 10px', borderRadius: 4, flexShrink: 0, fontSize: 10,
-                            background: canGenerate ? 'rgba(124,58,237,0.15)' : 'rgba(255,255,255,0.03)',
-                            border: `1px solid ${canGenerate ? 'rgba(124,58,237,0.25)' : 'rgba(255,255,255,0.06)'}`,
-                            color: canGenerate ? 'rgba(124,58,237,0.90)' : 'rgba(255,255,255,0.20)',
-                            cursor: canGenerate ? 'pointer' : 'not-allowed',
-                          }}
-                        >
-                          Generate
-                        </button>
-                      )}
+                        {status === 'error' && !isGenerating && (
+                          <span style={{ fontSize: 9, color: 'rgba(248,113,113,0.60)', flexShrink: 0 }} title={st?.error}>
+                            error
+                          </span>
+                        )}
+                      </div>
 
-                      {status === 'error' && !isGenerating && (
-                        <span style={{ fontSize: 9, color: 'rgba(248,113,113,0.60)', flexShrink: 0 }} title={st?.error}>
-                          error
-                        </span>
+                      {/* Processed text preview */}
+                      {isProcessedOpen && processedTexts[scene.scene_id] && (
+                        <div style={{
+                          padding: '8px 10px',
+                          background: 'rgba(124,58,237,0.05)',
+                          border: '1px solid rgba(124,58,237,0.15)',
+                          borderTop: 'none',
+                          borderRadius: '0 0 6px 6px',
+                          fontSize: 10,
+                          color: 'rgba(255,255,255,0.50)',
+                          fontFamily: 'monospace',
+                          lineHeight: 1.6,
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                        }}>
+                          {processedTexts[scene.scene_id]}
+                        </div>
                       )}
                     </div>
                   )
@@ -688,13 +972,21 @@ export default function VoiceoverPanel({
 
           {/* ── Voice settings ── */}
           <div>
-            <div style={sectionLabel}>Voice Settings</div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <div style={sectionLabel}>Voice Settings</div>
+              {voiceProfile.useMoodSettings && (
+                <span style={{ fontSize: 9, color: 'rgba(124,58,237,0.55)' }}>
+                  Sliders override mood defaults
+                </span>
+              )}
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {[
-                { key: 'stability',       label: 'Stability',          tip: 'Lower = more expressive · Higher = more consistent' },
-                { key: 'similarityBoost', label: 'Similarity Boost',   tip: 'How closely to match the original voice sample' },
-                { key: 'style',           label: 'Style Exaggeration', tip: 'Amplify the voice style — increase cautiously' },
-              ].map(({ key, label, tip }) => (
+                { key: 'stability',       label: 'Stability',          min: 0, max: 1, step: 0.01, tip: 'Lower = more expressive · Higher = more consistent' },
+                { key: 'similarityBoost', label: 'Similarity Boost',   min: 0, max: 1, step: 0.01, tip: 'How closely to match the original voice sample' },
+                { key: 'style',           label: 'Style Exaggeration', min: 0, max: 1, step: 0.01, tip: 'Amplify the voice style — increase cautiously' },
+                { key: 'speed',           label: 'Speed',              min: 0.7, max: 1.3, step: 0.01, tip: 'Speaking pace (1.0 = normal)' },
+              ].map(({ key, label, min, max, step, tip }) => (
                 <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>{label}</span>
@@ -703,7 +995,7 @@ export default function VoiceoverPanel({
                     </span>
                   </div>
                   <input
-                    type="range" min={0} max={1} step={0.01}
+                    type="range" min={min} max={max} step={step}
                     value={settings[key]}
                     onChange={e => setSettings(p => ({ ...p, [key]: parseFloat(e.target.value) }))}
                     className="vorta-slider"

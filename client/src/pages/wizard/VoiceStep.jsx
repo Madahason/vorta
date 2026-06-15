@@ -63,7 +63,7 @@ export function VoiceStep({
         <div>
           <h2 style={{ color: 'white', fontSize: 22, fontWeight: 700, margin: 0 }}>Voice Generation</h2>
           <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: 14, marginTop: 6 }}>
-            Generate narration for all {scenes.length} scenes using ElevenLabs.
+            {scenes.length} scenes · ElevenLabs Multilingual v2 · Per-mood delivery
           </p>
         </div>
         <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>

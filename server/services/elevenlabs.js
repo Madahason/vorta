@@ -4,6 +4,8 @@ const { promisify } = require('util')
 const fs   = require('fs')
 const path = require('path')
 const { preprocessForTTS, validateTTSText, splitIntoChunks } = require('./textPreprocessor')
+const { preprocessForTTS: voicePreprocess } = require('./voiceoverPreprocessor')
+const { getMoodSettings }                   = require('../config/voiceProfiles')
 
 const execAsync = promisify(exec)
 
@@ -53,6 +55,7 @@ async function generateSingleAudio({ text, voiceId, modelId, outputPath, voiceSe
     stability:       voiceSettings.stability       ?? DOCUMENTARY_VOICE_SETTINGS.stability,
     similarityBoost: voiceSettings.similarityBoost ?? DOCUMENTARY_VOICE_SETTINGS.similarityBoost,
     style:           voiceSettings.style           ?? DOCUMENTARY_VOICE_SETTINGS.style,
+    speed:           voiceSettings.speed           ?? 1.0,
     useSpeakerBoost: true,
   }
 
@@ -139,21 +142,57 @@ async function addSilencePadding(filePath, startMs = 500, endMs = 800) {
   }
 }
 
-async function generateAudio({ text, voiceId, modelId = DEFAULT_MODEL, outputPath, voiceSettings = {} }) {
-  const cleanText = preprocessForTTS(text)
+async function generateAudio({
+  text,
+  voiceId,
+  modelId          = DEFAULT_MODEL,
+  outputPath,
+  voiceSettings    = {},  // manual UI slider overrides — highest priority
+  mood             = 'neutral',
+  usePreprocessing = false,  // run voiceoverPreprocessor (number expansion + pause markers)
+  useMoodSettings  = false,  // apply per-mood voice settings as base
+  normalise        = false,  // loudnorm to -16 LUFS after generation
+}) {
+  // Step 1: Voiceover preprocessing (number expansion, abbreviations, pause markers)
+  let inputText = text
+  if (usePreprocessing) {
+    inputText = voicePreprocess(text, { mood })
+  }
+
+  // Step 2: Existing text preprocessing (markdown removal, whitespace, etc.)
+  const cleanText = preprocessForTTS(inputText)
 
   const { valid, issues } = validateTTSText(cleanText)
   if (!valid) throw new Error(`TTS validation failed: ${issues.join(', ')}`)
 
+  // Step 3: Build effective voice settings — mood base, then UI overrides on top
+  const moodBase = useMoodSettings ? getMoodSettings(mood) : {}
+  const effectiveSettings = {
+    stability:       voiceSettings.stability       ?? moodBase.stability       ?? DOCUMENTARY_VOICE_SETTINGS.stability,
+    similarityBoost: voiceSettings.similarityBoost ?? moodBase.similarityBoost ?? DOCUMENTARY_VOICE_SETTINGS.similarityBoost,
+    style:           voiceSettings.style           ?? moodBase.style           ?? DOCUMENTARY_VOICE_SETTINGS.style,
+    speed:           voiceSettings.speed           ?? moodBase.speed           ?? 1.0,
+    useSpeakerBoost: true,
+  }
+
   const textChunks = splitIntoChunks(cleanText)
 
   if (textChunks.length === 1) {
-    await generateSingleAudio({ text: textChunks[0], voiceId, modelId, outputPath, voiceSettings })
+    await generateSingleAudio({ text: textChunks[0], voiceId, modelId, outputPath, voiceSettings: effectiveSettings })
   } else {
-    await generateAndConcatenate({ chunks: textChunks, voiceId, modelId, outputPath, voiceSettings })
+    await generateAndConcatenate({ chunks: textChunks, voiceId, modelId, outputPath, voiceSettings: effectiveSettings })
   }
 
   await addSilencePadding(outputPath) // 500ms at start, 800ms at end
+
+  if (normalise) {
+    try {
+      const { normaliseAudio } = require('./audioNormaliser')
+      await normaliseAudio(outputPath)
+    } catch (normErr) {
+      console.warn('[elevenlabs] loudnorm failed (non-fatal):', normErr.message)
+    }
+  }
 
   return outputPath
 }

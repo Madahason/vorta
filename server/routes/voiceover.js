@@ -4,6 +4,7 @@ const path    = require('path')
 const fs      = require('fs')
 const { ElevenLabsClient } = require('@elevenlabs/elevenlabs-js')
 const { getVoices, generateAudio, getAudioDuration } = require('../services/elevenlabs')
+const { insertPauseMarkers, expandNumbers }           = require('../services/voiceoverPreprocessor')
 
 const PROJECTS_DIR = path.resolve(__dirname, '../../projects')
 
@@ -67,10 +68,17 @@ router.get('/voices', async (req, res) => {
 })
 
 // POST /api/voiceover/generate
-// Body: { projectId, scenes, voiceId, modelId, mode: 'full'|'scene', sceneId?, voiceSettings? }
+// Body: { projectId, scenes, voiceId, modelId, mode: 'full'|'scene', sceneId?,
+//         voiceSettings?, useMoodSettings?, usePreprocessing?, normaliseVolume? }
 // SSE stream of scene_done / scene_error / done events
 router.post('/generate', async (req, res) => {
-  const { projectId, scenes, voiceId, modelId, mode = 'full', sceneId, voiceSettings } = req.body
+  const {
+    projectId, scenes, voiceId, modelId,
+    mode = 'full', sceneId, voiceSettings,
+    useMoodSettings  = false,
+    usePreprocessing = false,
+    normaliseVolume  = false,
+  } = req.body
 
   if (!voiceId)    return res.status(400).json({ error: 'voiceId required' })
   if (!projectId)  return res.status(400).json({ error: 'projectId required' })
@@ -104,11 +112,15 @@ router.post('/generate', async (req, res) => {
 
       try {
         await generateAudio({
-          text:          scene.script_excerpt,
+          text:            scene.script_excerpt,
           voiceId,
-          modelId:       modelId || 'eleven_multilingual_v2',
+          modelId:         modelId || 'eleven_multilingual_v2',
           outputPath,
-          voiceSettings: voiceSettings || {},
+          voiceSettings:   voiceSettings || {},
+          mood:            scene.mood || 'neutral',
+          useMoodSettings,
+          usePreprocessing,
+          normalise:       normaliseVolume,
         })
 
         const audioDuration = await getAudioDuration(outputPath)
@@ -219,6 +231,24 @@ router.post('/repad', async (req, res) => {
   console.log(`[repad] complete — ${repadded} / ${scenes.length} files updated`)
   send({ type: 'complete', repadded, updatedScenes })
   res.end()
+})
+
+// POST /api/voiceover/add-pauses
+// Body: { scenes: [{ scene_id, script_excerpt, mood? }] }
+// Returns: { scenes: [{ scene_id, processed_text }] }
+// Runs expandNumbers + insertPauseMarkers locally (no AI cost, instant).
+router.post('/add-pauses', (req, res) => {
+  const { scenes } = req.body
+  if (!Array.isArray(scenes)) {
+    return res.status(400).json({ error: 'scenes array required' })
+  }
+
+  const processed = scenes.map(scene => ({
+    scene_id:       scene.scene_id,
+    processed_text: insertPauseMarkers(expandNumbers(scene.script_excerpt || '')),
+  }))
+
+  res.json({ scenes: processed })
 })
 
 // POST /api/voiceover/preview
