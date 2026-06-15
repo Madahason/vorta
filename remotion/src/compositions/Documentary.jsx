@@ -1,5 +1,5 @@
 import { useMemo }                                                      from 'react'
-import { AbsoluteFill, Audio, interpolate, useVideoConfig, useCurrentFrame } from 'remotion'
+import { AbsoluteFill, Audio, Sequence, interpolate, useVideoConfig, useCurrentFrame } from 'remotion'
 import { TransitionSeries, springTiming }                              from '@remotion/transitions'
 import { fade }                                                        from '@remotion/transitions/fade'
 import ImageScene             from '../components/ImageScene'
@@ -142,20 +142,26 @@ export function Documentary({
             />
           </ErrorBoundaryScene>
 
-          {/* Per-scene narration — fades out in final 9 frames */}
+          {/* Per-scene narration.
+              Scene 1 (index 0): no incoming crossfade → start at frame 0.
+              Scenes 2+ (index > 0): delay by TRANSITION_FRAMES so the narration
+              begins only after the cross-fade completes, preventing the first
+              syllable from being buried under the outgoing scene. */}
           {isValidUrl(narrationUrl) && (
-            <Audio
-              src={narrationUrl}
-              volume={(frame) => {
-                const fadeStart = durationFrames - 9
-                if (frame >= fadeStart) {
-                  return interpolate(frame, [fadeStart, durationFrames], [1.0, 0], {
-                    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
-                  })
-                }
-                return 1.0
-              }}
-            />
+            <Sequence from={index === 0 ? 0 : TRANSITION_FRAMES}>
+              <Audio
+                src={narrationUrl}
+                volume={(frame) => {
+                  const fadeStart = durationFrames - TRANSITION_FRAMES - 9
+                  if (frame >= fadeStart) {
+                    return interpolate(frame, [fadeStart, durationFrames], [1.0, 0], {
+                      extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
+                    })
+                  }
+                  return 1.0
+                }}
+              />
+            </Sequence>
           )}
         </AbsoluteFill>
       </TransitionSeries.Sequence>

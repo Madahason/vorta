@@ -2099,3 +2099,26 @@ MP4 with:
 - `client/src/pages/wizard/ExportStep.jsx` — removed audioSpecs prop
 - `client/src/components/video-creator/SceneGrid.jsx` — removed OverlayEditorPanel, OverlayRow, card footer Overlay Studio section, overlay-related constants and props
 - `client/src/components/video-creator/ExportPanel.jsx` — removed music/ambient/sting checklist items and audioSpecs prop
+
+---
+
+### Fix 12 — Narration cutoff at scene start ✅ Complete
+
+**Problem:** First syllable of narration was being clipped on every scene. Two root causes.
+
+**Root causes:**
+1. **Crossfade overlap**: `TransitionSeries` crossfade is 12 frames (0.4s). During those frames the outgoing scene is still visible and its audio can mask the incoming narration starting at frame 0.
+2. **Start silence too short**: `addSilencePadding` used 100ms start delay — not enough to survive the crossfade overlap and browser audio init.
+
+**Fixes:**
+- `server/services/elevenlabs.js` — `addSilencePadding` default `startMs` raised from **100ms → 500ms**, `endMs` from **600ms → 800ms**. Added `-loglevel quiet`, timeout, and temp-file existence check.
+- `remotion/src/compositions/Documentary.jsx` — Narration `<Audio>` wrapped in `<Sequence from={index === 0 ? 0 : TRANSITION_FRAMES}>`. Scene 1 starts at frame 0 (no incoming crossfade); scenes 2+ start at frame 12, after the cross-fade completes. Volume fade-out adjusted to `durationFrames - TRANSITION_FRAMES - 9` to match.
+- `server/routes/voiceover.js` (generate + sync-timings) — Scene duration formula updated: `audio_duration + CROSSFADE_SECONDS (0.4) + END_BUFFER (0.8) = audio_duration + 1.2s`. Ensures the scene is long enough to play the full narration after the delayed start.
+- `server/routes/voiceover.js` — Added `POST /api/voiceover/repad` SSE endpoint. Re-applies ffmpeg padding to existing `.mp3` files without re-calling ElevenLabs. Returns `updatedScenes` with corrected `audio_duration` and `duration_seconds`.
+- `client/src/pages/wizard/VoiceStep.jsx` — Added "Fix narration start timing" button. Calls `/api/voiceover/repad`, merges `updatedScenes` into state and localStorage. Only visible when audio files exist.
+
+**Audio padding summary:**
+- Start silence: 500ms (covers 12-frame crossfade at 30fps = 400ms + 100ms init margin)
+- End silence: 800ms (natural breath before next scene begins)
+- Narration in Remotion: starts at `TRANSITION_FRAMES` (frame 12) for scenes 2+
+- Scene duration = `audio_duration + 0.4 (crossfade) + 0.8 (end buffer)`

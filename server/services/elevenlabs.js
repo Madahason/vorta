@@ -119,19 +119,23 @@ async function generateAndConcatenate({ chunks, voiceId, modelId, outputPath, vo
   return outputPath
 }
 
-async function addSilencePadding(filePath, startMs = 100, endMs = 600) {
+async function addSilencePadding(filePath, startMs = 500, endMs = 800) {
   const endSecs  = endMs / 1000
   const tempPath = filePath.replace(/\.mp3$/, `_pad_${Date.now()}.mp3`)
 
   try {
+    // 500ms start covers 12-frame crossfade (0.4s) + browser audio init overhead.
+    // 800ms end gives a natural breath gap before the next scene begins.
     await execAsync(
-      `ffmpeg -i "${filePath}" -af "adelay=${startMs}|${startMs},apad=pad_dur=${endSecs}" -c:a libmp3lame "${tempPath}" -y`
+      `ffmpeg -i "${filePath}" -af "adelay=${startMs}|${startMs},apad=pad_dur=${endSecs}" -c:a libmp3lame -q:a 2 "${tempPath}" -y -loglevel quiet`,
+      { timeout: 30000 }
     )
+    if (!fs.existsSync(tempPath)) throw new Error('Padded file not created')
     fs.renameSync(tempPath, filePath)
-    console.log('[elevenlabs] silence padding added:', filePath)
+    console.log(`[elevenlabs] padding added: ${startMs}ms start, ${endMs}ms end →`, path.basename(filePath))
   } catch (err) {
     console.warn('[elevenlabs] silence padding failed (non-fatal):', err.message)
-    try { fs.unlinkSync(tempPath) } catch {}
+    try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath) } catch {}
   }
 }
 
@@ -149,7 +153,7 @@ async function generateAudio({ text, voiceId, modelId = DEFAULT_MODEL, outputPat
     await generateAndConcatenate({ chunks: textChunks, voiceId, modelId, outputPath, voiceSettings })
   }
 
-  await addSilencePadding(outputPath) // 100ms at start, 600ms at end
+  await addSilencePadding(outputPath) // 500ms at start, 800ms at end
 
   return outputPath
 }

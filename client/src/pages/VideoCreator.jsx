@@ -636,7 +636,7 @@ export default function VideoCreator() {
 
   // ─── Voiceover — called by VoiceoverPanel on scene_done SSE event ────────
   const handleAudioGenerated = (sceneId, audioPath, audioDuration, sceneDuration) => {
-    console.log('[voiceover] updating scene', sceneId, 'audio_path:', audioPath)
+    console.log('[voiceover] handleAudioGenerated called — scene:', sceneId, 'path:', audioPath)
     setScenes(prev => {
       const updated = prev.map(s => {
         if (s.scene_id !== sceneId) return s
@@ -648,7 +648,9 @@ export default function VideoCreator() {
         }
         return base
       })
-      // Persist immediately so audio_path survives a page refresh before autosave fires
+      const audioCount = updated.filter(s => s.audio_path).length
+      console.log('[voiceover] scenes with audio_path:', audioCount, '/', updated.length)
+      // Persist immediately so audio_path survives a page refresh before the useEffect fires
       try { localStorage.setItem(LS.scenes, JSON.stringify(updated)) } catch { /* quota */ }
       return updated
     })

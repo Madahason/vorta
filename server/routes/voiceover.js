@@ -112,9 +112,14 @@ router.post('/generate', async (req, res) => {
         })
 
         const audioDuration = await getAudioDuration(outputPath)
+        // 0.4s = 12-frame crossfade delay (narration starts after crossfade completes)
+        // 0.8s = end buffer so the last word isn't clipped by the next transition
+        const CROSSFADE_SECONDS = 12 / 30
+        const END_BUFFER        = 0.8
         const sceneDuration = audioDuration
-          ? parseFloat((audioDuration + 0.8).toFixed(2))
+          ? parseFloat((audioDuration + CROSSFADE_SECONDS + END_BUFFER).toFixed(2))
           : (scene.duration_seconds || 5)
+        console.log(`[voiceover] scene ${scene.scene_id}: audio=${audioDuration}s scene=${sceneDuration}s (includes ${CROSSFADE_SECONDS.toFixed(2)}s crossfade buffer)`)
         const audio_path = `/projects/${projectId}/audio/scene_${scene.scene_id}.mp3`
 
         const absolutePath = path.resolve(outputPath)
@@ -142,6 +147,78 @@ router.post('/generate', async (req, res) => {
     send({ type: 'error', message: err.message })
     res.end()
   }
+})
+
+// POST /api/voiceover/repad
+// Re-applies silence padding to existing audio files without re-generating from ElevenLabs.
+// Use when padding defaults have changed (e.g. increasing startMs to fix cutoff words).
+router.post('/repad', async (req, res) => {
+  const { scenes, projectId } = req.body
+  if (!Array.isArray(scenes) || !projectId) {
+    return res.status(400).json({ error: 'scenes array and projectId required' })
+  }
+
+  const { exec } = require('child_process')
+  const { promisify } = require('util')
+  const execAsync = promisify(exec)
+
+  res.setHeader('Content-Type',  'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection',    'keep-alive')
+  res.flushHeaders()
+
+  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`)
+
+  const CROSSFADE_SECONDS = 12 / 30
+  const START_MS  = 500
+  const END_MS    = 800
+  const END_SECS  = END_MS / 1000
+
+  const updatedScenes = []
+  let repadded = 0
+
+  for (const scene of scenes) {
+    const audioPath = path.resolve(PROJECTS_DIR, projectId, 'audio', `scene_${scene.scene_id}.mp3`)
+
+    if (!fs.existsSync(audioPath)) {
+      updatedScenes.push(scene)
+      continue
+    }
+
+    const tempPath = audioPath.replace('.mp3', `_repad_${Date.now()}.mp3`)
+
+    try {
+      const cmd = `ffmpeg -i "${audioPath}" -af "adelay=${START_MS}|${START_MS},apad=pad_dur=${END_SECS}" -c:a libmp3lame -q:a 2 "${tempPath}" -y -loglevel quiet`
+      await execAsync(cmd, { timeout: 30000 })
+
+      if (!fs.existsSync(tempPath) || fs.statSync(tempPath).size < 10000) {
+        throw new Error('Repadded file missing or too small')
+      }
+
+      fs.renameSync(tempPath, audioPath)
+      repadded++
+
+      const { stdout } = await execAsync(
+        `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${audioPath}"`
+      )
+      const newDuration = parseFloat(stdout.trim())
+      const newSceneDuration = isNaN(newDuration)
+        ? scene.duration_seconds
+        : parseFloat((newDuration + CROSSFADE_SECONDS).toFixed(2))
+
+      updatedScenes.push({ ...scene, audio_duration: newDuration, duration_seconds: newSceneDuration })
+      send({ type: 'done', scene_id: scene.scene_id, duration: newDuration })
+    } catch (err) {
+      try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath) } catch {}
+      updatedScenes.push(scene)
+      send({ type: 'error', scene_id: scene.scene_id, message: err.message })
+      console.warn(`[repad] scene ${scene.scene_id} failed:`, err.message)
+    }
+  }
+
+  console.log(`[repad] complete — ${repadded} / ${scenes.length} files updated`)
+  send({ type: 'complete', repadded, updatedScenes })
+  res.end()
 })
 
 // POST /api/voiceover/preview
@@ -176,11 +253,13 @@ router.post('/sync-timings', async (req, res) => {
     if (!fs.existsSync(audioPath)) return scene
     const duration = await getAudioDuration(audioPath)
     if (!duration) return scene
+    const CROSSFADE_SECONDS = 12 / 30
+    const END_BUFFER        = 0.8
     return {
       ...scene,
       audio_path:       `/projects/${projectId}/audio/scene_${scene.scene_id}.mp3`,
       audio_duration:   duration,
-      duration_seconds: parseFloat((duration + 0.8).toFixed(2)),
+      duration_seconds: parseFloat((duration + CROSSFADE_SECONDS + END_BUFFER).toFixed(2)),
     }
   }))
 

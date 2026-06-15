@@ -209,33 +209,38 @@ export default function VoiceoverPanel({
             if (event.type === 'scene_done') {
               const { scene_id, audio_path, audio_duration, scene_duration } = event
               console.log('[voiceover] scene_done received:', scene_id, 'audio_path:', audio_path)
-              setSceneStatuses(prev => {
-                const next = { ...prev, [scene_id]: { status: 'done', duration: audio_duration, error: null } }
-                onVoiceoverStatusChange?.(next)
-                return next
-              })
+
+              // Keep setState updaters pure — never call external setState inside an updater.
+              // React 18 throws when you do, and the inner catch would silently swallow it,
+              // preventing onAudioGenerated from ever being called.
+              const doneEntry = { status: 'done', duration: audio_duration, error: null }
+              setSceneStatuses(prev => ({ ...prev, [scene_id]: doneEntry }))
               setGenProgress(p => ({ ...p, current: p.current + 1 }))
-              onAudioGenerated?.(scene_id, audio_path, audio_duration, scene_duration)
+              onVoiceoverStatusChange?.(prev => ({ ...prev, [scene_id]: doneEntry }))
+
+              if (onAudioGenerated) {
+                onAudioGenerated(scene_id, audio_path, audio_duration, scene_duration)
+              } else {
+                console.error('[voiceover] onAudioGenerated is undefined — prop not passed to VoiceoverPanel!')
+              }
             } else if (event.type === 'scene_error') {
               const { scene_id, error } = event
-              setSceneStatuses(prev => {
-                const next = { ...prev, [scene_id]: { status: 'error', duration: null, error } }
-                onVoiceoverStatusChange?.(next)
-                return next
-              })
+              const errEntry = { status: 'error', duration: null, error }
+              setSceneStatuses(prev => ({ ...prev, [scene_id]: errEntry }))
               setGenProgress(p => ({ ...p, current: p.current + 1 }))
+              onVoiceoverStatusChange?.(prev => ({ ...prev, [scene_id]: errEntry }))
             }
-          } catch { /* skip malformed */ }
+          } catch (parseErr) {
+            console.warn('[voiceover] SSE parse error:', parseErr.message)
+          }
         }
       }
     } catch (err) {
       console.error('[voiceover] generation failed:', err.message)
       toGenerate.forEach(s => {
-        setSceneStatuses(prev => {
-          const next = { ...prev, [s.scene_id]: { status: 'error', duration: null, error: err.message } }
-          onVoiceoverStatusChange?.(next)
-          return next
-        })
+        const errEntry = { status: 'error', duration: null, error: err.message }
+        setSceneStatuses(prev => ({ ...prev, [s.scene_id]: errEntry }))
+        onVoiceoverStatusChange?.(prev => ({ ...prev, [s.scene_id]: errEntry }))
       })
     } finally {
       setGenerating(false)
@@ -250,19 +255,27 @@ export default function VoiceoverPanel({
           })
           const syncData = await syncRes.json()
           if (syncData.updatedScenes) {
-            // Merge sync-timings updates into the current state.
-            // Using functional update to access the latest state (which has audio_path
-            // from the per-scene SSE events) rather than the stale closure value.
+            // Merge sync-timings results into current state (which already has audio_path
+            // set by the per-scene SSE handlers). Always prefer audio_path from prev so
+            // a failed ffprobe in sync-timings can't erase a path that was already saved.
             onScenesChange(prev => {
               const syncMap = {}
               syncData.updatedScenes.forEach(s => { syncMap[s.scene_id] = s })
-              return prev.map(s => syncMap[s.scene_id]
-                ? { ...s, ...syncMap[s.scene_id] }
-                : s
-              )
+              const result = prev.map(s => {
+                const synced = syncMap[s.scene_id]
+                if (!synced) return s
+                return {
+                  ...s,
+                  ...synced,
+                  audio_path:     synced.audio_path     || s.audio_path,
+                  audio_duration: synced.audio_duration ?? s.audio_duration,
+                }
+              })
+              try { localStorage.setItem('vorta_scenes', JSON.stringify(result)) } catch {}
+              const audioCount = result.filter(s => s.audio_path).length
+              console.log('[voiceover] timings synced — audio scenes:', audioCount, '/', result.length)
+              return result
             })
-            const total = syncData.updatedScenes.reduce((s, sc) => s + (sc.duration_seconds || 5), 0)
-            console.log('[voiceover] timings synced — total:', total.toFixed(1), 'seconds')
           }
         } catch (err) {
           console.warn('[voiceover] sync-timings failed:', err.message)
@@ -286,7 +299,18 @@ export default function VoiceoverPanel({
           onScenesChange(prev => {
             const syncMap = {}
             data.updatedScenes.forEach(s => { syncMap[s.scene_id] = s })
-            return prev.map(s => syncMap[s.scene_id] ? { ...s, ...syncMap[s.scene_id] } : s)
+            const result = prev.map(s => {
+              const synced = syncMap[s.scene_id]
+              if (!synced) return s
+              return {
+                ...s,
+                ...synced,
+                audio_path:     synced.audio_path     || s.audio_path,
+                audio_duration: synced.audio_duration ?? s.audio_duration,
+              }
+            })
+            try { localStorage.setItem('vorta_scenes', JSON.stringify(result)) } catch {}
+            return result
           })
           const count = data.updatedScenes.filter(s => s.audio_duration).length
           console.log('[voiceover] sync-timings — synced', count, 'scenes')
