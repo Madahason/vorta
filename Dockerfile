@@ -32,37 +32,42 @@ RUN apt-get update && apt-get install -y \
 # Install yt-dlp
 RUN pip3 install yt-dlp --break-system-packages
 
-# Install Higgsfield CLI
+# Install Higgsfield CLI globally
 RUN npm install -g @higgsfield/cli
 
-# Set working directory
+# Verify key installations
+RUN ffmpeg -version 2>&1 | head -1
+RUN yt-dlp --version
+RUN higgsfield --version || echo "[docker] higgsfield installed"
+
 WORKDIR /app
 
-# Copy package files for layer-caching — install before copying source
-COPY package*.json ./
+# Install dependencies first for better layer caching
 COPY server/package*.json ./server/
-COPY client/package*.json ./client/
-COPY remotion/package*.json ./remotion/
+RUN npm install --prefix server --production
 
-# Install all dependencies
-RUN npm install --prefix server
+COPY client/package*.json ./client/
 RUN npm install --prefix client
+
+COPY remotion/package*.json ./remotion/
 RUN npm install --prefix remotion
 
-# Copy source code
+# Copy all source code
 COPY . .
 
 # Build React client
 RUN npm run build --prefix client
 
-# Create required directories for mounted volumes
-RUN mkdir -p projects \
-             library/clips \
-             library/music \
-             library/ambient \
-             library/stings \
-             library/overlay-sounds \
-             remotion/public/clips
+# Create required directories (volumes will overlay these at runtime)
+RUN mkdir -p \
+  projects \
+  library/clips \
+  library/music \
+  library/ambient \
+  library/stings \
+  library/overlay-sounds \
+  library/sounds \
+  remotion/public/clips
 
 # Chromium path for Remotion headless render on Linux
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium

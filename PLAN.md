@@ -2104,28 +2104,33 @@ MP4 with:
 
 ### Deployment — Railway ✅ Complete
 
-**Goal:** Ship Vorta as a single Docker container on Railway with persistent volumes for projects and library assets.
+**Platform:** Railway · **Domain:** upsolvy.com
 
 **Architecture:**
-- Single container: Express serves both the API and the built React client (`client/dist`)
-- Railway persistent volumes: `/app/projects` and `/app/library` survive redeployments
-- Health check: `GET /health` returns `{ status: 'ok', uptime, env, timestamp }` — used by Railway to confirm readiness (no auth required)
-- Basic auth: `BASIC_AUTH_USER` / `BASIC_AUTH_PASS` env vars protect all routes in production; dev bypasses auth entirely
+- Single Docker container: Express serves both the API and the built React client (`client/dist`)
+- Persistent volumes: `projects-volume` → `/app/projects`, `library-volume` → `/app/library` (survive redeployments)
+- Health check: `GET /health` — no auth required; Railway probes this to confirm readiness
+- Basic auth: `BASIC_AUTH_USER` / `BASIC_AUTH_PASS` protect all routes in production; dev bypasses entirely
+- Same-origin in production: client and server on the same domain, no CORS issues
 
 **Files added:**
-- `Dockerfile` — `node:20-slim` base; installs ffmpeg, yt-dlp, Chromium, Higgsfield CLI; builds React client; exposes port 3001
-- `railway.toml` — builder: dockerfile; healthcheck `/health`; persistent mounts for `/app/projects` and `/app/library`
-- `server/middleware/basicAuth.js` — HTTP Basic Auth middleware; skips `/health`; no-op in development
-- `.env.production.example` — template for Railway environment variables
-- `.dockerignore` — excludes node_modules, .env, .git, built output
+- `Dockerfile` — `node:20-slim`; ffmpeg, yt-dlp, Chromium (Remotion headless), Higgsfield CLI; builds React client; exposes 3001
+- `railway.toml` — dockerfile builder; `/health` healthcheck; persistent volume mounts
+- `server/middleware/basicAuth.js` — HTTP Basic Auth; skips `/health`; no-op in dev
+- `server/scripts/setupHiggsfield.js` — writes `~/.config/higgsfield/credentials.json` from env vars on Linux
+- `server/scripts/startup.js` — `ensureDirectories`, `syncClipsToRemotion`, `checkDependencies` — run before any routes
+- `client/src/config/api.js` — `API_BASE = ''` utility; relative paths work same-origin in production
+- `.env.production.example` — Railway variable template (includes Higgsfield tokens)
+- `.dockerignore` — excludes node_modules, .env, .git, output dirs
 
 **Files modified:**
-- `server/index.js` — added `GET /health` endpoint (before basicAuth); registered basicAuth middleware; added React SPA static serving in production (after all API routes)
-- `server/routes/render.js` — detects Linux platform and passes `--browser-executable /usr/bin/chromium` to Remotion CLI so headless render works in Docker
-- `client/vite.config.js` — added `build` section (`outDir: dist`, `emptyOutDir: true`, `chunkSizeWarningLimit: 2000`)
-- `package.json` — added `build` (`npm run build --prefix client`) and `start` (`node server/index.js`) scripts for Railway
+- `server/index.js` — startup scripts called first; `/health` before basicAuth; basicAuth before routes; `/output` adds `Content-Disposition: attachment` for MP4 downloads; React SPA served from `client/dist` after all API routes
+- `server/services/higgsfield.js` — `quoteCmdArg` now uses single-quote escaping on Linux; Windows path unchanged
+- `server/routes/render.js` — passes `--browser-executable /usr/bin/chromium` on Linux for Remotion headless render
+- `client/vite.config.js` — `build.rollupOptions.manualChunks` splits remotion + react chunks; `server.proxy` uses object form with `changeOrigin: true`; `port: 5173` explicit
+- `package.json` — `build` and `start` scripts for Railway
 
-**Environment variables (set in Railway):**
+**Environment variables (set in Railway dashboard):**
 ```
 ANTHROPIC_API_KEY=sk-ant-...
 ELEVENLABS_API_KEY=sk_...
@@ -2133,13 +2138,18 @@ PEXELS_API_KEY=...
 PIXABAY_API_KEY=...
 BASIC_AUTH_USER=admin
 BASIC_AUTH_PASS=<strong password>
+HIGGSFIELD_ACCESS_TOKEN=<from ~/.config/higgsfield/credentials.json on Windows>
+HIGGSFIELD_REFRESH_TOKEN=<from ~/.config/higgsfield/credentials.json on Windows>
 NODE_ENV=production
 PORT=3001
 PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ```
 
+**Higgsfield on Linux:**
+The CLI stores auth in `~/.config/higgsfield/credentials.json`. On Windows this is written by `higgsfield login`. On the Railway container there's no browser OAuth, so `server/scripts/setupHiggsfield.js` reads `HIGGSFIELD_ACCESS_TOKEN` and `HIGGSFIELD_REFRESH_TOKEN` from env vars and writes the credentials file at server startup.
+
 **Chromium on Linux:**
-Remotion CLI spawns headless Chrome for rendering. On Linux the executable must be specified explicitly. `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium` is set in the Dockerfile and read by `server/routes/render.js` when `process.platform === 'linux'`.
+Remotion CLI spawns headless Chrome. `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium` is set in the Dockerfile. `server/routes/render.js` reads this when `process.platform === 'linux'` and passes it as `--browser-executable` to the Remotion CLI.
 
 ---
 

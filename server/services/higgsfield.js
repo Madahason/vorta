@@ -16,11 +16,14 @@ const MODELS = {
 // 6 min covers both job creation + wait for worst-case generation times
 const TIMEOUT = 360_000;
 
-// cmd.exe-safe quoting: wrap in double quotes, escape internal " as ""
-// exec() on Windows runs via cmd.exe; bash-style \" is wrong here.
-// & % | < > are all literal inside cmd.exe double-quoted strings.
+// Platform-safe argument quoting.
+// Windows/cmd.exe: double-quote, escape internal " as "".
+// Linux/bash: single-quote, escape internal ' as '\'' (end-quote, literal, re-open).
 function quoteCmdArg(str) {
-  return '"' + str.replace(/"/g, '""') + '"';
+  if (process.platform === 'win32') {
+    return '"' + str.replace(/"/g, '""') + '"';
+  }
+  return "'" + str.replace(/'/g, "'\\''") + "'";
 }
 
 /**

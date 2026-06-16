@@ -11,8 +11,8 @@ restartPolicyMaxRetries = 3
 
 [[mounts]]
 mountPath = "/app/projects"
-source = "projects"
+source = "projects-volume"
 
 [[mounts]]
 mountPath = "/app/library"
-source = "library"
+source = "library-volume"

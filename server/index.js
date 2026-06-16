@@ -1,15 +1,24 @@
 require('dotenv').config({ path: '../.env' });
-const express   = require('express');
-const cors      = require('cors');
-const path      = require('path');
-const fs        = require('fs');
+
+// Startup tasks — must run before any middleware or routes load
+const { setupHiggsfieldCredentials }                      = require('./scripts/setupHiggsfield');
+const { ensureDirectories, syncClipsToRemotion, checkDependencies } = require('./scripts/startup');
+setupHiggsfieldCredentials();
+ensureDirectories();
+syncClipsToRemotion();
+checkDependencies();
+
+const express      = require('express');
+const cors         = require('cors');
+const path         = require('path');
+const fs           = require('fs');
 const { execSync } = require('child_process');
 
+// Lightweight deps check — return value used by /api/health and /api/deps
 function checkDeps() {
   let ytdlp = false, ffmpeg = false;
   try { execSync('yt-dlp --version', { stdio: 'pipe' }); ytdlp = true; } catch {}
   try { execSync('ffmpeg -version',  { stdio: 'pipe' }); ffmpeg = true; } catch {}
-  console.log(`[deps] yt-dlp: ${ytdlp} | ffmpeg: ${ffmpeg}`);
   return { ytdlp, ffmpeg };
 }
 const DEPS = checkDeps();
@@ -34,30 +43,15 @@ app.use('/library', express.static(libraryPath));
 // Remotion <Player> (browser preview) resolves correctly via the Vite proxy.
 app.use('/clips', express.static(libraryClipsPath));
 
-// One-time startup: sync all existing library clips to remotion/public/clips/
-// so the Remotion CLI bundle server can serve them via staticFile().
-function syncAllClipsToRemotion() {
-  const remotionClipsDir = path.join(__dirname, '../remotion/public/clips');
-  if (!fs.existsSync(libraryClipsPath)) return;
-  if (!fs.existsSync(remotionClipsDir)) fs.mkdirSync(remotionClipsDir, { recursive: true });
-
-  const clips = fs.readdirSync(libraryClipsPath)
-    .filter(f => /\.(mp4|webm|mov)$/i.test(f));
-
-  let synced = 0;
-  clips.forEach(filename => {
-    const src  = path.join(libraryClipsPath, filename);
-    const dest = path.join(remotionClipsDir, filename);
-    if (!fs.existsSync(dest)) {
-      try { fs.copyFileSync(src, dest); synced++; } catch { /* skip on error */ }
+// /output — clean URL for MP4 downloads; forces browser download for .mp4 files
+app.use('/output', express.static(path.join(__dirname, '../projects'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.mp4')) {
+      res.setHeader('Content-Disposition', 'attachment; filename="documentary.mp4"');
+      res.setHeader('Content-Type', 'video/mp4');
     }
-  });
-  console.log(`[startup] synced ${synced} new clips to remotion/public/clips (${clips.length} total)`);
-}
-syncAllClipsToRemotion();
-
-// /output also serves the projects folder — clean URL for MP4 downloads
-app.use('/output', express.static(path.join(__dirname, '../projects')));
+  },
+}));
 
 // Confirm env loaded
 const apiKeyLoaded = !!process.env.ANTHROPIC_API_KEY;

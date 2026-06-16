@@ -9,6 +9,14 @@ export default defineConfig({
     emptyOutDir: true,
     // Remotion player bundle is large; raise the warning threshold to avoid noise.
     chunkSizeWarningLimit: 2000,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          remotion: ['remotion', '@remotion/player'],
+          react:    ['react', 'react-dom'],
+        },
+      },
+    },
   },
   resolve: {
     alias: {
@@ -25,12 +33,13 @@ export default defineConfig({
     dedupe: ['react', 'react-dom', 'remotion', '@remotion/player', '@remotion/transitions'],
   },
   server: {
+    port: 5173,
     proxy: {
-      '/api':      'http://localhost:3001',
-      '/projects': 'http://localhost:3001',
-      '/library':  'http://localhost:3001',
-      '/output':   'http://localhost:3001',
-      '/clips':    'http://localhost:3001',  // staticFile('clips/...') in Remotion Player
+      '/api':      { target: 'http://localhost:3001', changeOrigin: true },
+      '/projects': { target: 'http://localhost:3001', changeOrigin: true },
+      '/library':  { target: 'http://localhost:3001', changeOrigin: true },
+      '/output':   { target: 'http://localhost:3001', changeOrigin: true },
+      '/clips':    { target: 'http://localhost:3001', changeOrigin: true },
     },
   },
 })
