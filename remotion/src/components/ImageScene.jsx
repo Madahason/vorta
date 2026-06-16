@@ -1,5 +1,6 @@
 import { useCurrentFrame, useVideoConfig, interpolate } from 'remotion';
 import { LetterboxBars, FilmGrain, Vignette, ColorGrade, LightLeak, Halation, DustParticles, SceneFade } from './effects/CinematicEffects';
+import { easeOut } from '../utils/easings';
 
 function extractYear(text) {
   const match = (text || '').match(/\b(19[0-9]{2}|20[0-2][0-9])\b/);
@@ -14,11 +15,10 @@ export const ImageScene = ({ scene, brand }) => {
   const mood = scene.mood || 'neutral';
   const grade = scene.grade || brand?.colorGrade || 'cool_blue';
 
-  // Eased Ken Burns
-  const progress = interpolate(frame, [0, durationInFrames], [0, 1], {
-    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
-    easing: (t) => t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2
-  });
+  // Ken Burns — GSAP power2.out gives fast-start/heavy-deceleration for a more
+  // cinematic feel than the symmetric cubic ease-in-out used previously.
+  const linearT  = interpolate(frame, [0, durationInFrames], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+  const progress = easeOut(linearT);
 
   const SCALE_RANGES = {
     subtle:   { push_in: [1.0, 1.06], pull_out: [1.06, 1.0] },

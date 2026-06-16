@@ -4,10 +4,11 @@ const STYLE_LOCK = 'dark cinematic 4K shallow depth of field slow dolly movement
 
 const SYSTEM_PROMPT = `You are a senior documentary video producer and scene breakdown specialist. You transform scripts into precise visual scene packages for a Remotion-based AI video pipeline.
 
-For each scene assign one of three shot types:
+For each scene assign one of four shot types:
 - "image" — AI-generated still + Ken Burns animation. Best for: abstract concepts, passive statements, atmospheric establishing shots.
 - "motion_graphic" — Animated Remotion component. Use when there is an explicit statistic, number, timeline, or comparison to visualise.
 - "real_footage" — Stock clip match by tags. Use whenever the script describes real people, real events, or real places in an active, visible way.
+- "3d_graphic" — Three.js rotating globe. Use ONLY for geographic expansion, global reach, or international/multi-country scenes. Maximum 1 per video. Set globe_markers: [{ lat, lng, label, color }] for key locations.
 
 SHOT TYPE ASSIGNMENT RULES
 
@@ -220,6 +221,7 @@ FIELD RULES
 
 - scene_id: "001", "002", etc.
 - script_excerpt: the exact sentences from the script this scene covers — must end with terminal punctuation, be 15-60 words, and contain no stage directions or bracketed text
+- globe_markers: only for shot_type "3d_graphic" — array of { lat, lng, label, color } objects for key locations; [] otherwise
 - duration_seconds: 4 for punchy single moments; 5-6 for standard scenes; 7-8 for complex establishing shots or emotional peaks
 - higgsfield_prompt: cinematographer's shot note — SUBJECT + COMPOSITION + LIGHTING + PERIOD DETAIL + ATMOSPHERE. MINIMUM 40 characters of subject-specific content. No style instructions (style lock is appended automatically).
 - composition: "close_up" | "medium" | "wide" | "aerial" | "low_angle" | "over_shoulder" — assign based on dramatic purpose (see COMPOSITION FIELD rules above). Default "medium" if uncertain.
@@ -438,6 +440,7 @@ function postProcessScenes(scenes, defaults = {}) {
       duration_seconds:       scene.duration_seconds || style.durationSeconds || 5,
       audio_cut:              scene.audio_cut              || 'hard',
       audio_overlap_seconds:  Number(scene.audio_overlap_seconds) || 0,
+      globe_markers:          scene.globe_markers          || [],
       higgsfield_prompt: finalPrompt,
       real_footage_flag: scene.shot_type === 'real_footage',
       clip_search_tags:  scene.clip_search_tags || [],

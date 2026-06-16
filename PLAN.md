@@ -2258,3 +2258,65 @@ Two parallel upgrades to the Remotion audio pipeline:
 ### Files changed
 - `remotion/src/compositions/Documentary.jsx` — complete rewrite with all above features
 - `server/services/claude.js` — AUDIO CUT RULES in system prompt + postProcessScenes fields
+
+---
+
+## Session 19 — GSAP Easings, Three.js Globe, Framer Motion UI Animations
+**Commit:** `feature: GSAP easings, Three.js globe, Framer Motion UI animations`
+**Date:** 2026-06-16
+
+### Step 1 — GSAP easing utility
+
+**Install:** `cd remotion && npm install gsap`
+
+**`remotion/src/utils/easings.js`** (NEW):
+- `gsapEase(easeName, progress)` — clamps 0–1, calls `gsap.parseEase(easeName)(p)`, fully deterministic
+- Pre-bound helpers: `easeOut` (power2.out), `easeIn`, `easeInOut`, `elastic`, `back`, `expo`
+- GSAP used as pure math — NO timeline playback, NO side effects
+- CRITICAL: must use named import `import { gsap } from 'gsap'` — default import lacks `parseEase`
+
+**`remotion/src/components/ImageScene.jsx`** — Ken Burns easing:
+- Old: symmetric cubic ease-in-out via `interpolate(frame, ..., { easing })`
+- New: `const linearT = interpolate(frame, ...); const progress = easeOut(linearT)`
+- `power2.out` gives fast-start/heavy-deceleration — camera glides to natural stop; at t=0.5 → 0.875
+
+### Step 2 — Three.js 3D Globe
+
+**Install:** `cd remotion && npm install three`
+
+**`remotion/src/components/ThreeGlobe.jsx`** (NEW):
+- DETERMINISM: rotation = `frame / fps * rotationSpeed`; no requestAnimationFrame; renderer in `useRef`; no Date.now() or Math.random()
+- Fibonacci sphere dot cloud (1600 pts, deterministic) suggests land masses
+- Lat/lng grid lines (5 parallels, 4 meridians); atmosphere glow via additive BackSide shell
+- `globe_markers: [{ lat, lng, label, color }]` rendered as glowing sphere + halo ring on surface
+- `renderer.setPixelRatio(1)` — no devicePixelRatio variance between renders
+
+**Wiring:**
+- `MotionGraphicScene.jsx` — `if (scene.motion_graphic_type === 'globe') return <ThreeGlobe scene={scene} />`
+- `Documentary.jsx` — `shot_type: "3d_graphic"` dispatches to `<ThreeGlobe>` via SceneRenderer
+
+**`server/services/claude.js`:**
+- `"3d_graphic"` added as 4th shot_type (max 1 per video, geographic/global scenes only)
+- `globe_markers` field rule in FIELD RULES
+- `globe_markers: []` default in `postProcessScenes`
+
+### Step 3 — Framer Motion UI animations
+
+**Install:** `cd client && npm install framer-motion`
+
+**3a — `SceneGrid.jsx`:** Motion graphic code block expand/collapse animated with `AnimatePresence` + `motion.div` (`height: 0→auto`, `opacity: 0→1`, `duration: 0.2, ease: 'easeOut'`).
+
+**3b — `VideoCreator.jsx`:** Wizard step container wrapped in `AnimatePresence mode="wait"` + `motion.div key={wizard.currentStep}`. Slides in from right (`x: 20→0`), exits to left (`x: 0→-20`). `duration: 0.18`.
+
+**3c — `VisualsStep.jsx`:** Clip sourcing progress card rows are `motion.div` with `opacity: 0→1, scale: 0.97→1, duration: 0.15` as each card appears during auto-sourcing.
+
+### Files changed
+- `remotion/src/utils/easings.js` — NEW (GSAP easing utility)
+- `remotion/src/components/ImageScene.jsx` — Ken Burns uses `easeOut()` from easings.js
+- `remotion/src/components/ThreeGlobe.jsx` — NEW (Three.js deterministic globe)
+- `remotion/src/components/MotionGraphicScene.jsx` — globe fallback for `motion_graphic_type: "globe"`
+- `remotion/src/compositions/Documentary.jsx` — `3d_graphic` shot type dispatch + ThreeGlobe import
+- `server/services/claude.js` — `3d_graphic` shot type, `globe_markers` field
+- `client/src/components/video-creator/SceneGrid.jsx` — Framer Motion code expand/collapse
+- `client/src/pages/VideoCreator.jsx` — Framer Motion wizard step transition
+- `client/src/pages/wizard/VisualsStep.jsx` — Framer Motion clip progress card appear

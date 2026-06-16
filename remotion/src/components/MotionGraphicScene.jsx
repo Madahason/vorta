@@ -6,11 +6,12 @@ import {
   interpolate,
   spring,
 } from 'remotion'
-import AnimatedCounter from './AnimatedCounter'
-import TimelineBar     from './TimelineBar'
-import ComparisonChart from './ComparisonChart'
-import QuoteCard       from './QuoteCard'
-import MapHighlight    from './MapHighlight'
+import AnimatedCounter  from './AnimatedCounter'
+import TimelineBar      from './TimelineBar'
+import ComparisonChart  from './ComparisonChart'
+import QuoteCard        from './QuoteCard'
+import MapHighlight     from './MapHighlight'
+import { ThreeGlobe }  from './ThreeGlobe'
 
 const TEMPLATE_MAP = { AnimatedCounter, TimelineBar, ComparisonChart, QuoteCard, MapHighlight }
 
@@ -88,6 +89,9 @@ export function MotionGraphicScene({ scene }) {
       )
     }
   }
+
+  // Globe fallback — motion_graphic_type: "globe" renders ThreeGlobe
+  if (scene.motion_graphic_type === 'globe') return <ThreeGlobe scene={scene} />
 
   // Template fallback — used when no custom component has been built yet
   const Template = TEMPLATE_MAP[scene.motion_graphic_type]

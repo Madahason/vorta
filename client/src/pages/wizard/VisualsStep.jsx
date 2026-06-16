@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { motion } from 'framer-motion'
 import { Loader2, Zap } from 'lucide-react'
 import SceneGrid from '../../components/video-creator/SceneGrid'
 
@@ -175,13 +176,19 @@ export function VisualsStep({
               const config   = progress ? STATUS_CONFIG[progress.type] : null
 
               return (
-                <div key={scene.scene_id} style={{
-                  display: 'flex', alignItems: 'flex-start', gap: 10,
-                  padding: '8px 10px',
-                  background: 'rgba(255,255,255,0.03)',
-                  borderRadius: 6,
-                  border: `1px solid ${config ? config.color + '30' : 'rgba(255,255,255,0.06)'}`,
-                }}>
+                <motion.div
+                  key={scene.scene_id}
+                  initial={{ opacity: 0, scale: 0.97 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.15, ease: 'easeOut' }}
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 10,
+                    padding: '8px 10px',
+                    background: 'rgba(255,255,255,0.03)',
+                    borderRadius: 6,
+                    border: `1px solid ${config ? config.color + '30' : 'rgba(255,255,255,0.06)'}`,
+                  }}
+                >
                   <span style={{ fontSize: 14, flexShrink: 0 }}>
                     {config?.icon || '⏳'}
                   </span>
@@ -203,7 +210,7 @@ export function VisualsStep({
                       </div>
                     )}
                   </div>
-                </div>
+                </motion.div>
               )
             })}
           </div>

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { Trash2, Library, X, ChevronDown, ChevronUp } from 'lucide-react'
 import { VideoPlayer } from '../components/video-creator/VideoPlayer'
 import ClipLibrary from '../components/video-creator/ClipLibrary'
@@ -863,9 +864,20 @@ export default function VideoCreator() {
           </div>
         )}
 
-        {/* Step content */}
-        <div style={{ flex: 1, overflowY: 'auto' }}>
-          {renderStep()}
+        {/* Step content — Framer Motion slide transition between wizard steps */}
+        <div style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={wizard.currentStep}
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
+              style={{ height: '100%' }}
+            >
+              {renderStep()}
+            </motion.div>
+          </AnimatePresence>
         </div>
       </div>
 

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
   Loader2, RefreshCw, CheckCircle, XCircle,
   ChevronDown, ChevronUp, Copy, Code2, Eye, ImageIcon, Film,
@@ -291,11 +292,31 @@ function SceneCard({
                       fontFamily: '"JetBrains Mono","Fira Code","Cascadia Code","Consolas",monospace',
                       fontSize: '11px', lineHeight: '1.6', padding: '12px',
                       color: 'rgba(178,255,236,0.5)', overflowX: 'auto',
-                      overflowY: codeExpanded ? 'auto' : 'hidden',
-                      maxHeight: codeExpanded ? '480px' : 'none', whiteSpace: 'pre',
+                      whiteSpace: 'pre',
                     }}>
-                      {codeExpanded ? scene.motion_component : scene.motion_component.split('\n').slice(0, 5).join('\n')}
+                      {scene.motion_component.split('\n').slice(0, 5).join('\n')}
                     </pre>
+                    <AnimatePresence>
+                      {codeExpanded && (
+                        <motion.div
+                          key="code-expand"
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.2, ease: 'easeOut' }}
+                          style={{ overflow: 'hidden' }}
+                        >
+                          <pre style={{
+                            fontFamily: '"JetBrains Mono","Fira Code","Cascadia Code","Consolas",monospace',
+                            fontSize: '11px', lineHeight: '1.6', padding: '0 12px 12px',
+                            color: 'rgba(178,255,236,0.5)', overflowX: 'auto',
+                            maxHeight: '480px', overflowY: 'auto', whiteSpace: 'pre',
+                          }}>
+                            {scene.motion_component.split('\n').slice(5).join('\n')}
+                          </pre>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
                 </div>
               )}

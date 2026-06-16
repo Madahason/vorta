@@ -7,6 +7,7 @@ import FootageScene           from '../components/FootageScene'
 import PlaceholderScene       from '../components/PlaceholderScene'
 import { MotionGraphicScene } from '../components/MotionGraphicScene'
 import { ErrorBoundaryScene } from '../components/ErrorBoundaryScene'
+import { ThreeGlobe }         from '../components/ThreeGlobe'
 
 // ── Transition frame constants ────────────────────────────────────────────────
 const TRANSITION_FRAMES = 12  // dissolve — crossfade overlap (0.4 s at 30 fps)
@@ -87,6 +88,9 @@ const isValidUrl = (src) => !!src && (src.startsWith('/') || src.startsWith('htt
 // ── SceneRenderer — per-scene visual dispatch ─────────────────────────────────
 function SceneRenderer({ scene, imagePath, selectedClip, globalSettings }) {
   if (!scene) return <PlaceholderScene scene={{ scene_id: 'unknown' }} />
+  if (scene.shot_type === '3d_graphic') {
+    return <ThreeGlobe scene={scene} />
+  }
   if (scene.shot_type === 'image') {
     const s = imagePath ? { ...scene, image_path: imagePath } : scene
     if (!s.image_path) return <PlaceholderScene scene={scene} />
