@@ -63,6 +63,21 @@ app.use('/output', express.static(path.join(__dirname, '../projects')));
 const apiKeyLoaded = !!process.env.ANTHROPIC_API_KEY;
 console.log(`ANTHROPIC_API_KEY loaded: ${apiKeyLoaded}`);
 
+// Health check — Railway uses this to verify the container is ready.
+// Must be registered BEFORE basicAuth so the probe works without credentials.
+app.get('/health', (req, res) => {
+  res.json({
+    status:    'ok',
+    uptime:    process.uptime(),
+    env:       process.env.NODE_ENV,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Basic auth — protects all routes in production (skips /health automatically)
+const basicAuth = require('./middleware/basicAuth');
+app.use(basicAuth);
+
 // Routes (stubs — wired in Phase 1)
 app.use('/api/settings',      require('./routes/settings'));
 app.use('/api/analyze',       require('./routes/analyze'));
@@ -80,6 +95,23 @@ app.get('/api/health', (req, res) => {
 app.get('/api/deps', (req, res) => {
   res.json(DEPS);
 });
+
+// Serve built React client in production — must come AFTER all API routes so
+// /api/* requests are handled by the routers above, not caught by the SPA fallback.
+const CLIENT_BUILD = path.resolve(__dirname, '../client/dist');
+if (process.env.NODE_ENV === 'production' && fs.existsSync(CLIENT_BUILD)) {
+  app.use(express.static(CLIENT_BUILD));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') ||
+        req.path.startsWith('/projects') ||
+        req.path.startsWith('/library') ||
+        req.path.startsWith('/output')) {
+      return next();
+    }
+    res.sendFile(path.join(CLIENT_BUILD, 'index.html'));
+  });
+  console.log('[server] serving React client from:', CLIENT_BUILD);
+}
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {

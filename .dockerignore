@@ -1,0 +1,12 @@
+node_modules
+client/node_modules
+server/node_modules
+remotion/node_modules
+client/dist
+.env
+.env.local
+.git
+.gitignore
+*.log
+projects/*/output
+library/clips/*.mp4

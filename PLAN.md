@@ -2102,6 +2102,47 @@ MP4 with:
 
 ---
 
+### Deployment — Railway ✅ Complete
+
+**Goal:** Ship Vorta as a single Docker container on Railway with persistent volumes for projects and library assets.
+
+**Architecture:**
+- Single container: Express serves both the API and the built React client (`client/dist`)
+- Railway persistent volumes: `/app/projects` and `/app/library` survive redeployments
+- Health check: `GET /health` returns `{ status: 'ok', uptime, env, timestamp }` — used by Railway to confirm readiness (no auth required)
+- Basic auth: `BASIC_AUTH_USER` / `BASIC_AUTH_PASS` env vars protect all routes in production; dev bypasses auth entirely
+
+**Files added:**
+- `Dockerfile` — `node:20-slim` base; installs ffmpeg, yt-dlp, Chromium, Higgsfield CLI; builds React client; exposes port 3001
+- `railway.toml` — builder: dockerfile; healthcheck `/health`; persistent mounts for `/app/projects` and `/app/library`
+- `server/middleware/basicAuth.js` — HTTP Basic Auth middleware; skips `/health`; no-op in development
+- `.env.production.example` — template for Railway environment variables
+- `.dockerignore` — excludes node_modules, .env, .git, built output
+
+**Files modified:**
+- `server/index.js` — added `GET /health` endpoint (before basicAuth); registered basicAuth middleware; added React SPA static serving in production (after all API routes)
+- `server/routes/render.js` — detects Linux platform and passes `--browser-executable /usr/bin/chromium` to Remotion CLI so headless render works in Docker
+- `client/vite.config.js` — added `build` section (`outDir: dist`, `emptyOutDir: true`, `chunkSizeWarningLimit: 2000`)
+- `package.json` — added `build` (`npm run build --prefix client`) and `start` (`node server/index.js`) scripts for Railway
+
+**Environment variables (set in Railway):**
+```
+ANTHROPIC_API_KEY=sk-ant-...
+ELEVENLABS_API_KEY=sk_...
+PEXELS_API_KEY=...
+PIXABAY_API_KEY=...
+BASIC_AUTH_USER=admin
+BASIC_AUTH_PASS=<strong password>
+NODE_ENV=production
+PORT=3001
+PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+```
+
+**Chromium on Linux:**
+Remotion CLI spawns headless Chrome for rendering. On Linux the executable must be specified explicitly. `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium` is set in the Dockerfile and read by `server/routes/render.js` when `process.platform === 'linux'`.
+
+---
+
 ### Fix 12 — Narration cutoff at scene start ✅ Complete
 
 **Problem:** First syllable of narration was being clipped on every scene. Two root causes.

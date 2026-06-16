@@ -4,6 +4,12 @@ import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    // Remotion player bundle is large; raise the warning threshold to avoid noise.
+    chunkSizeWarningLimit: 2000,
+  },
   resolve: {
     alias: {
       '@remotion-compositions': path.resolve(__dirname, '../remotion/src'),

@@ -4,9 +4,13 @@
   "description": "AI-powered content production platform",
   "private": true,
   "scripts": {
+    "build": "npm run build --prefix client",
+    "start": "node server/index.js",
     "client": "cd client && npm run dev",
     "server": "cd server && npm run dev",
-    "dev": "concurrently \"npm run client\" \"npm run server\""
+    "dev": "concurrently \"npm run client\" \"npm run server\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev"
   },
   "devDependencies": {
     "concurrently": "^9.0.1"

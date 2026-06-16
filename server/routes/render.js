@@ -191,7 +191,14 @@ router.post('/', async (req, res) => {
   try { renderDefaults = require('../config/defaults.json').render || {}; } catch {}
   const concurrency = Math.max(1, parseInt(renderDefaults.concurrency) || 1);
 
-  const cmd = `npx remotion render src/index.jsx Documentary ${q(outputPath)} --props ${q(propsPath)} --overwrite --concurrency=${concurrency}`;
+  // On Linux (Docker/Railway) Remotion needs the system Chromium path explicitly.
+  // PUPPETEER_EXECUTABLE_PATH is set in the Dockerfile and Railway env vars.
+  const chromeExecutable = process.platform === 'linux'
+    ? (process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium')
+    : undefined;
+  const chromeFlag = chromeExecutable ? `--browser-executable ${q(chromeExecutable)}` : '';
+
+  const cmd = `npx remotion render src/index.jsx Documentary ${q(outputPath)} --props ${q(propsPath)} --overwrite --concurrency=${concurrency} ${chromeFlag}`.trimEnd();
 
   console.log(`[render] Starting render for project ${projectId}`);
   console.log(`[render] ${cmd}`);
