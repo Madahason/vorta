@@ -11,9 +11,13 @@ export default defineConfig({
     chunkSizeWarningLimit: 2000,
     rollupOptions: {
       output: {
-        manualChunks: {
-          remotion: ['remotion', '@remotion/player'],
-          react:    ['react', 'react-dom'],
+        // Function form required by Vite 8 / rolldown — object form throws
+        // "manualChunks is not a function — Expected Function but received Object"
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('remotion') || id.includes('@remotion')) return 'remotion'
+            if (id.includes('react-dom') || id.includes('react/'))   return 'react'
+          }
         },
       },
     },
