@@ -2102,9 +2102,30 @@ MP4 with:
 
 ---
 
+### Deployment Strategy
+
+#### Branches
+- `main` — development; push freely, never auto-deploys
+- `production` — Railway watches this branch; only merge when ready to go live
+
+#### Deploy command (from root folder)
+```bash
+npm run deploy
+```
+Merges `main` into `production` and pushes — triggers Railway rebuild automatically.
+
+#### Quick deploy checklist
+1. Test locally: `npm run build` then `NODE_ENV=production node server/index.js`
+2. Commit all changes to `main`
+3. Run: `npm run deploy`
+4. Watch Railway dashboard for build status (5–10 min)
+5. Verify at `https://bizcontently.com/health`
+
+---
+
 ### Deployment — Railway ✅ Complete
 
-**Platform:** Railway · **Domain:** upsolvy.com
+**Platform:** Railway · **Domain:** bizcontently.com
 
 **Architecture:**
 - Single Docker container: Express serves both the API and the built React client (`client/dist`)

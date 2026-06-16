@@ -10,7 +10,8 @@
     "server": "cd server && npm run dev",
     "dev": "concurrently \"npm run client\" \"npm run server\"",
     "dev:server": "cd server && npm run dev",
-    "dev:client": "cd client && npm run dev"
+    "dev:client": "cd client && npm run dev",
+    "deploy": "git checkout production && git merge main && git push origin production && git checkout main && echo 'Deployed to production'"
   },
   "devDependencies": {
     "concurrently": "^9.0.1"
