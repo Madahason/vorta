@@ -232,6 +232,29 @@ Generate between 8 and 20 scenes maximum regardless of script length.
 For long scripts, combine related paragraphs into single scenes rather than splitting every sentence.
 Never exceed 20 scenes total — this is a hard limit.
 
+AUDIO CUT RULES
+
+Every scene carries two audio edit fields:
+- "audio_cut": "hard" | "j_cut" | "l_cut"     — default "hard"
+- "audio_overlap_seconds": 0 | 0.8–2.5         — 0 for hard, 0.8–2.5 for j/l cuts
+
+Definitions:
+  hard    — narration starts cleanly after the visual transition completes (default)
+  j_cut   — the NEXT scene's narration begins playing while the CURRENT scene's image is still visible.
+             Use when the next scene's words directly continue or answer a thought in the current scene.
+             The audio pulls the viewer forward before the cut arrives.
+  l_cut   — the CURRENT scene's narration continues playing after the NEXT scene's image has appeared.
+             Use when the current narration introduces or explains what the next scene shows.
+             The audio lingers as the new image confirms it.
+
+Assignment rules:
+- Default to "hard" for all scenes unless one of the above patterns clearly applies
+- Maximum 1 j_cut or l_cut per 4 consecutive scenes — they lose impact if overused
+- Never assign j_cut or l_cut to a scene with transition_out "dip_black" or "dip_white"
+  (dips are deliberate dramatic pauses — audio continuity would undercut them)
+- Never assign j_cut or l_cut to the last scene of the video
+- audio_overlap_seconds must be 0 for "hard"; set 0.8–1.5 for j_cut; 0.8–2.0 for l_cut
+
 COMPACT JSON RULES — CRITICAL FOR RESPONSE LENGTH
 
 Keep each scene JSON compact to avoid truncation. Hard limits per field:
@@ -409,10 +432,12 @@ function postProcessScenes(scenes, defaults = {}) {
         ? (scene.motion || { type: style.motionType || 'push_in', intensity: 'subtle' })
         : null,
       overlays:          [],
-      transition_out:    scene.transition_out || style.transition || 'dissolve',
-      grade:             scene.shot_type === 'image' ? (scene.grade || style.grade || 'cool_blue') : null,
-      letterbox:         scene.shot_type !== 'motion_graphic',
-      duration_seconds:  scene.duration_seconds || style.durationSeconds || 5,
+      transition_out:         scene.transition_out || style.transition || 'dissolve',
+      grade:                  scene.shot_type === 'image' ? (scene.grade || style.grade || 'cool_blue') : null,
+      letterbox:              scene.shot_type !== 'motion_graphic',
+      duration_seconds:       scene.duration_seconds || style.durationSeconds || 5,
+      audio_cut:              scene.audio_cut              || 'hard',
+      audio_overlap_seconds:  Number(scene.audio_overlap_seconds) || 0,
       higgsfield_prompt: finalPrompt,
       real_footage_flag: scene.shot_type === 'real_footage',
       clip_search_tags:  scene.clip_search_tags || [],
@@ -481,6 +506,8 @@ Return ONLY a valid JSON array. Maximum 15 scenes. Each scene object needs ONLY 
 - grade ("cool_blue")
 - use_sting (false)
 - clip_search_tags (array, max 3 strings)
+- audio_cut ("hard")
+- audio_overlap_seconds (0)
 
 Distribution: 15% real_footage, 45% image, 40% motion_graphic.
 Return ONLY the JSON array, no markdown, no explanation.`,

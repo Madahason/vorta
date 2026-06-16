@@ -2194,3 +2194,67 @@ Remotion CLI spawns headless Chrome. `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromiu
 - End silence: 800ms (natural breath before next scene begins)
 - Narration in Remotion: starts at `TRANSITION_FRAMES` (frame 12) for scenes 2+
 - Scene duration = `audio_duration + 0.4 (crossfade) + 0.8 (end buffer)`
+
+---
+
+## Session 18 — J-cut and L-cut Narration Transitions + Full transition_out System
+**Commit:** `feature: J-cut and L-cut narration audio transitions`
+**Date:** 2026-06-16
+
+### Overview
+Two parallel upgrades to the Remotion audio pipeline:
+1. **Full `transition_out` system** — dissolve / cut / dip_black / dip_white per-scene with correct narration timing and duration calculation
+2. **J-cut and L-cut narration** — editorial audio transitions where narration crosses scene boundaries
+
+### transition_out system (Session 17 continuation)
+
+**`remotion/src/compositions/Documentary.jsx`** — complete rewrite:
+- `CUT_FRAMES=1`, `DIP_FRAMES=18`, `DIP_FADE=9`, `DIP_MID=8` constants
+- `getTransition(scene)` pure fn — returns `{ type, frames, outgoingFade, narrationIn, color }`
+- `calculateDocumentaryDuration` deducts per-boundary net cost (dip = 9+9-8=10, dissolve=12, cut=1)
+- `seriesChildren` flatMap handles all 4 transition types; dip uses 3-element pattern: fade9 → solid8 → fade9
+- Narration `from` delay uses previous scene's `inT.narrationIn` (not hardcoded 12)
+- Volume fade-out uses `outT.outgoingFade` per scene
+
+### J-cut and L-cut narration
+
+**Architecture change:** narration `<Audio>` elements moved OUT of `TransitionSeries.Sequence` children and rendered as `<Sequence from={absoluteFrame}>` siblings alongside `<TransitionSeries>`. This gives full control over when each narration starts/ends regardless of scene boundaries.
+
+**New function `computeSceneStartFrames(scenes, fps)`:**
+- Returns absolute global start frame for each scene
+- Uses same per-boundary deduction logic as `calculateDocumentaryDuration`
+- Used to compute `narrationStart` in global frame space
+
+**New scene JSON fields:**
+```json
+{
+  "audio_cut": "hard" | "j_cut" | "l_cut",  // default: "hard"
+  "audio_overlap_seconds": 1.2               // default: 0; range 0.8–2.5 for j/l cuts
+}
+```
+
+**narrationStart calculation:**
+- `"hard"` → `sceneStart + incomingTransitionFrames` (preserves existing behaviour)
+- `"j_cut"` → `Math.max(0, sceneStart - overlapFrames)` — starts before visual cut; no inDelay
+- `"l_cut"` → `sceneStart + inDelay` — normal start, but sequenceDuration extends past sceneEnd
+
+**Volume envelopes (frame = sequence-local, 0 = narrationStart):**
+- `hard`: fade out `durationFrames - inDelay - outgoingFade - 9` → `durationFrames - inDelay`
+- `j_cut`: fade IN 0→6 fr (narration under prev scene), fade out same as hard relative to sceneEnd
+- `l_cut`: sustain through visual transition, fade out over 6 fr at `sceneEnd + overlapFrames`
+
+**Validation / fallback:**
+- Missing `audio_cut` → `"hard"`
+- Missing `audio_overlap_seconds` on j/l → 1.0s default
+- `narrationStart < 0` (j_cut on scene 0) → clamped to 0
+- `audio_cut` on dip transitions → forced to `"hard"` (dips are deliberate pauses)
+- `audio_cut` on last scene → forced to `"hard"`
+
+**`server/services/claude.js`** — system prompt additions:
+- `AUDIO CUT RULES` section added before COMPACT JSON RULES
+- Rules: max 1 j/l per 4 scenes; never on dip transitions; never on last scene; overlap 0.8–1.5 for j_cut, 0.8–2.0 for l_cut
+- `postProcessScenes` now outputs `audio_cut: 'hard'` and `audio_overlap_seconds: 0` as defaults
+
+### Files changed
+- `remotion/src/compositions/Documentary.jsx` — complete rewrite with all above features
+- `server/services/claude.js` — AUDIO CUT RULES in system prompt + postProcessScenes fields
