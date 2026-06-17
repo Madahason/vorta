@@ -60,8 +60,8 @@ router.post('/profile/existing', async (req, res) => {
     res.json(profile);
   } catch (err) {
     console.error('[research/existing] error:', err.message);
-    if (err.message.includes('not found') || err.message.includes('404')) {
-      return res.status(404).json({ error: 'Channel not found. Check the URL and try again.' });
+    if (err.message.includes('not found') || err.message.includes('404') || err.message.includes('YouTube API error')) {
+      return res.status(404).json({ error: 'Channel not found or YouTube API error. Check the URL and try again.' });
     }
     res.status(500).json({ error: err.message });
   }

@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
-import { Search, Plus, X, Loader2, AlertCircle, ChevronRight, RefreshCw, Sparkles, Globe, TrendingUp, Target, Users, BarChart3 } from 'lucide-react'
+import { useState } from 'react'
+import { Search, X, Loader2, AlertCircle, ChevronRight, RefreshCw, Sparkles, Globe, TrendingUp, Target, Users, BarChart3 } from 'lucide-react'
 
 const LS_KEY = 'vr_channel_profile'
 
@@ -42,7 +42,7 @@ function TagInput({ tags, onChange, max = 5, placeholder }) {
   return (
     <div className="vorta-input" style={{ padding: '6px 8px', display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', minHeight: 40 }}>
       {tags.map((tag, i) => (
-        <span key={i} className="vorta-tag inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium" style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}>
+        <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium" style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}>
           {tag}
           <button onClick={() => removeTag(i)} className="hover:text-white ml-0.5">
             <X size={12} />
