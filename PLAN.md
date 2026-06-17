@@ -2527,3 +2527,84 @@ First phase of the Video Research module. Two paths for creating a Channel Profi
 - [x] 22. All CSS classes use vorta- prefix
 - [x] 23. Client build → zero errors, zero warnings (2224 modules)
 - [x] 24. PLAN.md updated
+
+---
+
+## Phase VR-2 — Research Dashboard & Opportunity Discovery ✅ COMPLETE
+**Commit:** `feature: VR-2 research dashboard — trending, gaps, competitor watch with SSE streaming`
+**Date:** 2026-06-17
+
+### Overview
+Second phase of the Video Research module. Three-panel research dashboard powered by Claude with web search. Each panel (Trending Now, Gap Finder, Competitor Watch) runs as a parallel Claude call with `web_search_20250305` tool enabled. Results stream via SSE as panels complete. Reports persist in localStorage with a 20-entry history cap.
+
+### Backend — `server/routes/research.js` (additions)
+
+**POST /api/research/discover**
+- Accepts: `{ profile }` (full Channel Profile object)
+- Validates profile has niche, subFocus, angle, tone (400 if missing)
+- Runs 3 parallel Claude calls via `Promise.allSettled` (not `Promise.all`)
+- Each call uses `web_search_20250305` server-side tool for real-time data
+- Filters out `alreadyCovered` items by cross-checking against `profile.catalog`
+- Clamps `opportunityScore` to integer 1-10
+- Returns combined report: `{ reportId, generatedAt, profileId, trending[], gaps[], competitors[] }`
+- Failed panels return empty array; other panels unaffected
+
+**POST /api/research/discover/stream**
+- Same logic but SSE — streams `{ type: "panel", panel, items }` events as each Claude call resolves
+- Error events per-panel: `{ type: "error", panel, message }`
+- Done event: `{ type: "done", reportId, generatedAt }`
+- Each panel arrives independently — UI populates incrementally
+
+**GET /api/research/discover/status**
+- Returns `{ running: boolean }` — in-memory flag for session status
+
+### Frontend — `client/src/pages/VideoResearch.jsx`
+
+**State C — Research Dashboard (new):**
+- Three-column layout: Trending Now / Gap Finder / Competitor Watch
+- SSE streaming via `fetch` + `ReadableStream` reader — panels populate as events arrive
+- Each column: header with icon, loading skeletons, error state with "Retry panel" button, empty state
+- Opportunity cards sorted by `opportunityScore` descending within each column
+- Score badges color-coded: 1-4 red, 5-7 amber, 8-10 green
+- Search volume pills, trend signals, gap reasons, competitor channels, suggested angles
+- "Explore →" button opens 480px slide-in panel with VR-3 placeholder
+- Top bar: "← Back to Profile", profile summary pill, timestamp ("X minutes ago" auto-updating), "New Research" button
+
+**State B — "Start Researching →" now active:**
+- Button is no longer disabled; clicks transition to State C (dashboard view)
+
+**Persistence:**
+- `vr_research_history` — array in localStorage, max 20 entries (drops oldest)
+- `vr_last_report` — most recent report for instant reload without re-running discovery
+- On return to State C, loads cached report; "Regenerate" via "New Research" button
+
+**Panel retry:**
+- "Retry panel" on error calls `POST /api/research/discover` (non-streaming) and updates just that panel
+- Other panels unaffected during retry
+
+### Production-readiness checks
+- [x] 1. POST /discover with missing profile → 400
+- [x] 2. POST /discover with valid profile → all three panels, correct structure
+- [x] 3. Each panel 4-8 items
+- [x] 4. opportunityScore clamped to integer 1-10
+- [x] 5. alreadyCovered filtering via catalog cross-check
+- [x] 6. SSE stream sends panels incrementally
+- [x] 7. Promise.allSettled — failed panel doesn't cancel others
+- [x] 8. Promise.allSettled confirmed in code
+- [x] 9. "Start Researching →" active and navigates to State C
+- [x] 10. Loading skeletons before data arrives
+- [x] 11. Panels populate incrementally via SSE
+- [x] 12. Cards sorted by opportunityScore descending
+- [x] 13. Score badge colors correct (red/amber/green)
+- [x] 14. "Explore →" opens slide-in panel with placeholder
+- [x] 15. "← Back to Profile" returns to State B
+- [x] 16. "New Research" appends to history and re-runs
+- [x] 17. History capped at 20 entries
+- [x] 18. Cached report loads on return — no auto re-run
+- [x] 19. Timestamp auto-updates every 30s
+- [x] 20. Empty state renders correctly
+- [x] 21. Error state per panel with "Retry panel"
+- [x] 22. Three-column layout at all widths
+- [x] 23. All CSS classes use vorta- prefix
+- [x] 24. Client build clean — zero errors
+- [x] 25. PLAN.md updated

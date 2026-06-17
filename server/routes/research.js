@@ -423,4 +423,233 @@ Return this exact JSON structure:
   };
 }
 
+// --- Discovery endpoints ---
+
+let discoveryRunning = false;
+
+function validateProfile(profile) {
+  if (!profile || typeof profile !== 'object') return 'profile is required and must be an object';
+  if (!profile.niche?.trim()) return 'profile.niche is required';
+  if (!profile.subFocus?.trim()) return 'profile.subFocus is required';
+  if (!profile.angle?.trim()) return 'profile.angle is required';
+  if (!profile.tone?.trim()) return 'profile.tone is required';
+  return null;
+}
+
+function parseClaudeJson(text) {
+  const trimmed = text.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const match = trimmed.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+    if (match) return JSON.parse(match[0]);
+    throw new Error('Claude returned invalid JSON');
+  }
+}
+
+function clampScore(val) {
+  const n = parseInt(val, 10);
+  if (isNaN(n)) return 5;
+  return Math.max(1, Math.min(10, n));
+}
+
+function filterCovered(items, catalog) {
+  if (!catalog || catalog.length === 0) return items;
+  const lower = catalog.map(t => t.toLowerCase());
+  return items.filter(item => {
+    if (item.alreadyCovered) return false;
+    const title = (item.title || '').toLowerCase();
+    return !lower.some(c => c.includes(title) || title.includes(c));
+  });
+}
+
+function buildTrendingPrompt(profile) {
+  return `Find 6-8 topics gaining momentum RIGHT NOW in this YouTube niche. Use web search to find current trends, news, and viral content.
+
+Channel niche: ${profile.niche}
+Sub-focus: ${profile.subFocus}
+Channel angle: ${profile.angle}
+Channel tone: ${profile.tone}
+${profile.catalog?.length ? `\nExisting catalog (${profile.catalog.length} titles) — exclude any topic already covered:\n${profile.catalog.slice(0, 100).join('\n')}` : ''}
+
+For each topic return:
+- title (string)
+- summary (1-2 sentences on why it's trending)
+- trendSignal (what's driving the momentum — news event, viral video, earnings report, etc.)
+- opportunityScore (1-10 integer, weight toward the channel's angle: "${profile.angle}")
+- estimatedSearchVolume ("low" | "medium" | "high")
+- alreadyCovered (boolean — true if the channel's catalog already has this topic)
+
+Return ONLY valid JSON array. No markdown, no preamble.
+[{"title":"...","summary":"...","trendSignal":"...","opportunityScore":8,"estimatedSearchVolume":"high","alreadyCovered":false}]`;
+}
+
+function buildGapsPrompt(profile) {
+  return `Find 6-8 topics with genuine search demand but weak or outdated YouTube coverage in this niche. Use web search to verify current coverage quality.
+
+Channel niche: ${profile.niche}
+Sub-focus: ${profile.subFocus}
+Channel angle: ${profile.angle}
+Channel tone: ${profile.tone}
+${profile.catalog?.length ? `\nExisting catalog (${profile.catalog.length} titles) — exclude any topic already covered:\n${profile.catalog.slice(0, 100).join('\n')}` : ''}
+
+For each topic return:
+- title (string)
+- summary (1-2 sentences on the gap)
+- gapReason (why existing coverage is weak — outdated, wrong angle, oversimplified, no coverage at all)
+- opportunityScore (1-10 integer, weight toward the channel's angle: "${profile.angle}")
+- estimatedSearchVolume ("low" | "medium" | "high")
+- lastCoveredYear (integer or null if never covered well)
+- alreadyCovered (boolean)
+
+Return ONLY valid JSON array. No markdown, no preamble.
+[{"title":"...","summary":"...","gapReason":"...","opportunityScore":8,"estimatedSearchVolume":"high","lastCoveredYear":2023,"alreadyCovered":false}]`;
+}
+
+function buildCompetitorsPrompt(profile) {
+  const competitors = (profile.competitors || []).join(', ') || 'popular channels in this niche';
+  return `Find 4-6 videos from these competitor YouTube channels that are currently overperforming. Use web search to find their recent high-performing content.
+
+Competitor channels: ${competitors}
+Channel niche: ${profile.niche}
+Sub-focus: ${profile.subFocus}
+Our channel angle: ${profile.angle}
+Our channel tone: ${profile.tone}
+${profile.catalog?.length ? `\nOur existing catalog (${profile.catalog.length} titles) — mark alreadyCovered true if we have similar content:\n${profile.catalog.slice(0, 100).join('\n')}` : ''}
+
+For each video return:
+- title (string)
+- channel (string)
+- summary (1-2 sentences on why it's performing)
+- performanceReason (what made it work — timing, angle, format, topic gap)
+- opportunityScore (1-10 integer, weight toward how well our angle "${profile.angle}" could differentiate)
+- suggestedAngle (how our channel could cover the same topic differently)
+- alreadyCovered (boolean)
+
+Return ONLY valid JSON array. No markdown, no preamble.
+[{"title":"...","channel":"...","summary":"...","performanceReason":"...","opportunityScore":8,"suggestedAngle":"...","alreadyCovered":false}]`;
+}
+
+async function runDiscoveryPanel(panelName, prompt, catalog) {
+  const client = new Anthropic();
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 4096,
+    tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+    messages: [{ role: 'user', content: prompt }],
+  });
+
+  let jsonText = '';
+  for (const block of message.content) {
+    if (block.type === 'text') jsonText += block.text;
+  }
+
+  const parsed = parseClaudeJson(jsonText);
+  const items = Array.isArray(parsed) ? parsed : (parsed[panelName] || parsed.items || []);
+
+  const cleaned = items.map(item => ({
+    ...item,
+    opportunityScore: clampScore(item.opportunityScore),
+  }));
+
+  return filterCovered(cleaned, catalog);
+}
+
+// POST /api/research/discover
+router.post('/discover', async (req, res) => {
+  const { profile } = req.body;
+  const err = validateProfile(profile);
+  if (err) return res.status(400).json({ error: err });
+
+  if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'your_key_here') {
+    return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  }
+
+  try {
+    const results = await Promise.allSettled([
+      runDiscoveryPanel('trending', buildTrendingPrompt(profile), profile.catalog),
+      runDiscoveryPanel('gaps', buildGapsPrompt(profile), profile.catalog),
+      runDiscoveryPanel('competitors', buildCompetitorsPrompt(profile), profile.catalog),
+    ]);
+
+    const report = {
+      reportId: `report_${Date.now()}`,
+      generatedAt: new Date().toISOString(),
+      profileId: profile.profileId || null,
+      trending: results[0].status === 'fulfilled' ? results[0].value : [],
+      gaps: results[1].status === 'fulfilled' ? results[1].value : [],
+      competitors: results[2].status === 'fulfilled' ? results[2].value : [],
+    };
+
+    if (results[0].status === 'rejected') console.error('[discover/trending]', results[0].reason?.message);
+    if (results[1].status === 'rejected') console.error('[discover/gaps]', results[1].reason?.message);
+    if (results[2].status === 'rejected') console.error('[discover/competitors]', results[2].reason?.message);
+
+    res.json(report);
+  } catch (err) {
+    console.error('[discover] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/research/discover/stream
+router.post('/discover/stream', async (req, res) => {
+  const { profile } = req.body;
+  const err = validateProfile(profile);
+  if (err) {
+    res.status(400).json({ error: err });
+    return;
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'your_key_here') {
+    res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+    return;
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+
+  discoveryRunning = true;
+  const reportId = `report_${Date.now()}`;
+  const generatedAt = new Date().toISOString();
+
+  function send(data) {
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    }
+  }
+
+  const panels = [
+    { name: 'trending', prompt: buildTrendingPrompt(profile) },
+    { name: 'gaps', prompt: buildGapsPrompt(profile) },
+    { name: 'competitors', prompt: buildCompetitorsPrompt(profile) },
+  ];
+
+  const promises = panels.map(async ({ name, prompt }) => {
+    try {
+      const items = await runDiscoveryPanel(name, prompt, profile.catalog);
+      send({ type: 'panel', panel: name, items });
+      return { name, items };
+    } catch (error) {
+      console.error(`[discover/stream/${name}]`, error.message);
+      send({ type: 'error', panel: name, message: error.message });
+      return { name, items: [], error: error.message };
+    }
+  });
+
+  await Promise.allSettled(promises);
+
+  send({ type: 'done', reportId, generatedAt });
+  discoveryRunning = false;
+  res.end();
+});
+
+// GET /api/research/discover/status
+router.get('/discover/status', (req, res) => {
+  res.json({ running: discoveryRunning });
+});
+
 module.exports = router;
