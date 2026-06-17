@@ -10,20 +10,42 @@ import { ErrorBoundaryScene } from '../components/ErrorBoundaryScene'
 import { ThreeGlobe }         from '../components/ThreeGlobe'
 
 // ── Transition frame constants ────────────────────────────────────────────────
-const TRANSITION_FRAMES = 12  // dissolve — crossfade overlap (0.4 s at 30 fps)
-const CUT_FRAMES        = 1   // cut — near-instant
-const DIP_FRAMES        = 18  // dip_black / dip_white — total overlap budget
-const DIP_FADE          = Math.round(DIP_FRAMES / 2)  // 9 — each fade arm
-const DIP_MID           = 8   // solid colour plate frames between the two fade arms
+const TRANSITION_FRAMES  = 12  // dissolve — crossfade overlap (0.4 s at 30 fps)
+const CUT_FRAMES         = 1   // cut — near-instant
+const DIP_FRAMES         = 18  // dip_black / dip_white — total overlap budget
+const DIP_FADE           = Math.round(DIP_FRAMES / 2)  // 9 — each fade arm
+// DIP_MID must be > DIP_FADE: TransitionSeries requires each sequence to be longer
+// than its adjacent transition. Old value was 8 (< DIP_FADE 9) → always crashed.
+const DIP_MID            = DIP_FADE + 1  // 10 — plate longer than fade arm
+// MIN_SCENE_FRAMES must exceed the longest transition arm (TRANSITION_FRAMES = 12).
+// Any scene sequence shorter than its adjacent transition causes a Remotion crash.
+const MIN_SCENE_FRAMES   = TRANSITION_FRAMES + 1  // 13 — safely longer than any transition
 
-// ── getTransition(scene) ──────────────────────────────────────────────────────
+// ── getTransition(scene, sceneDurationFrames?) ────────────────────────────────
 // Pure fn — reads scene.transition_out, returns a descriptor used by both the
 // duration calculator and the flatMap renderer.
 //   frames       — overlap eaten from this scene's tail (TransitionSeries.Transition)
 //   outgoingFade — same for non-dip; used for narration fade-out timing
 //   narrationIn  — frames to delay narration in the NEXT scene (incoming perspective)
-function getTransition(scene) {
-  const type = scene?.transition_out || 'dissolve'
+//
+// If sceneDurationFrames is provided and the scene is too short to support a dip
+// transition (requires at least DIP_FADE frames on each side), dip automatically
+// downgrades to dissolve to avoid "sequence shorter than transition" crash.
+function getTransition(scene, sceneDurationFrames) {
+  let type = scene?.transition_out || 'dissolve'
+
+  // Downgrade dip transitions on scenes that are too short.
+  // A dip requires at least DIP_FADE frames available on this scene's tail.
+  if ((type === 'dip_black' || type === 'dip_white') &&
+      sceneDurationFrames !== undefined &&
+      sceneDurationFrames < DIP_FADE * 2) {
+    console.warn(
+      `[Documentary] scene ${scene?.scene_id} too short for dip transition ` +
+      `(${sceneDurationFrames} frames < ${DIP_FADE * 2} required) — falling back to dissolve`
+    )
+    type = 'dissolve'
+  }
+
   switch (type) {
     case 'cut':
       return { type: 'cut', frames: CUT_FRAMES, outgoingFade: CUT_FRAMES, narrationIn: CUT_FRAMES }
@@ -37,6 +59,13 @@ function getTransition(scene) {
   }
 }
 
+// ── sceneDur(scene, fps) ──────────────────────────────────────────────────────
+// Single source of truth for per-scene frame count used everywhere in this file.
+// Enforces MIN_SCENE_FRAMES so no sequence is shorter than its adjacent transition.
+function sceneDur(scene, fps) {
+  return Math.max(Math.round((scene.duration_seconds || 5) * fps), MIN_SCENE_FRAMES)
+}
+
 // ── computeSceneStartFrames ───────────────────────────────────────────────────
 // Returns the absolute global start frame for each scene in the final timeline.
 // Mirrors calculateDocumentaryDuration's per-boundary deduction logic exactly,
@@ -45,8 +74,8 @@ function computeSceneStartFrames(scenes, fps) {
   if (!scenes.length) return []
   const starts = [0]
   for (let i = 0; i < scenes.length - 1; i++) {
-    const dur  = Math.max(Math.round((scenes[i].duration_seconds || 5) * fps), 30)
-    const t    = getTransition(scenes[i])
+    const dur  = sceneDur(scenes[i], fps)
+    const t    = getTransition(scenes[i], dur)
     // Dip net deduction = DIP_FADE + DIP_FADE - DIP_MID (10 fr); dissolve/cut = t.frames
     const ded  = (t.type === 'dip_black' || t.type === 'dip_white')
       ? DIP_FADE + DIP_FADE - DIP_MID
@@ -59,10 +88,11 @@ function computeSceneStartFrames(scenes, fps) {
 // ── Duration helpers ──────────────────────────────────────────────────────────
 export function calculateDocumentaryDuration(scenes, fps = 30) {
   if (!scenes?.length) return 30
-  const base = scenes.reduce((sum, s) => sum + Math.round((s.duration_seconds || 5) * fps), 0)
+  const base = scenes.reduce((sum, s) => sum + sceneDur(s, fps), 0)
   let deduction = 0
   for (let i = 0; i < scenes.length - 1; i++) {
-    const t = getTransition(scenes[i])
+    const dur = sceneDur(scenes[i], fps)
+    const t   = getTransition(scenes[i], dur)
     deduction += (t.type === 'dip_black' || t.type === 'dip_white')
       ? DIP_FADE + DIP_FADE - DIP_MID
       : t.frames
@@ -176,8 +206,8 @@ export function Documentary({
   //   dissolve / cut: [scene] → [Transition] → [next scene]
   //   dip:           [scene] → [Transition DIP_FADE] → [solid plate DIP_MID] → [Transition DIP_FADE] → [next scene]
   const seriesChildren = uniqueScenes.flatMap((scene, index) => {
-    const durationFrames = Math.max(Math.round((scene.duration_seconds || 5) * fps), 30)
-    const outT = getTransition(scene)
+    const durationFrames = sceneDur(scene, fps)
+    const outT = getTransition(scene, durationFrames)
 
     const sequence = (
       <TransitionSeries.Sequence
@@ -249,12 +279,13 @@ export function Documentary({
     const narrationUrl = spec?.narration?.url || scene.audio_path || null
     if (!isValidUrl(narrationUrl)) return null
 
-    const durationFrames = Math.max(Math.round((scene.duration_seconds || 5) * fps), 30)
+    const durationFrames = sceneDur(scene, fps)
     const sceneStart     = sceneStartFrames[index] ?? 0
     const sceneEnd       = sceneStart + durationFrames
 
-    const outT    = getTransition(scene)
-    const inT     = index === 0 ? null : getTransition(uniqueScenes[index - 1])
+    const outT    = getTransition(scene, durationFrames)
+    const prevDur = index === 0 ? 0 : sceneDur(uniqueScenes[index - 1], fps)
+    const inT     = index === 0 ? null : getTransition(uniqueScenes[index - 1], prevDur)
     const inDelay = index === 0 ? 0 : (inT?.narrationIn ?? 0)
 
     // Determine effective audio_cut — fall back to "hard" when conditions aren't met

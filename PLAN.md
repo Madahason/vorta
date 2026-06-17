@@ -2374,3 +2374,42 @@ Not tested in this session — disk space constraint. All module imports verifie
 - **Disk space**: `remotion/public/clips/` is 293MB. Delete unused clips before running `remotion bundle` if disk is tight.
 - **WebGL in headless render**: `ThreeGlobe` requires WebGL. Railway Docker needs GPU/WebGL support for headless Chrome render; otherwise `ErrorBoundaryScene` shows error card.
 - **Visual tests for user**: In Remotion Studio — scrub transitions at scene boundaries, listen for J/L cut audio bleed, watch Ken Burns deceleration on image scenes. Set one scene to `shot_type: "3d_graphic"` + `globe_markers` in localStorage to test globe.
+
+---
+
+## Session 21 — Fix: TransitionSeries sequence shorter than transition duration
+**Commit:** `fix: clamp minimum scene duration to prevent TransitionSeries crash`
+**Date:** 2026-06-17
+
+### Error
+```
+The duration of a <TransitionSeries.Sequence /> must not be shorter than the duration
+of the next <TransitionSeries.Transition />. The transition is 9 frames long, but the
+sequence is only 8 frames long (index = 6, duration = 8)
+```
+
+### Root causes (two bugs, both fixed)
+
+**Bug 1 — DIP_MID (8) < DIP_FADE (9) — structural crash on every dip transition:**
+Flatmap pattern: `[scene] → [Transition 9fr] → [dip_plate 8fr] → [Transition 9fr] → [next_scene]`
+Remotion requires each sequence >= its adjacent transition. dip_plate (8fr) < Transition (9fr) → always crashes on any dip transition.
+**Fix:** `DIP_MID = DIP_FADE + 1 = 10` (was 8). Net dip deduction now `9+9−10 = 8fr` (was 10fr).
+
+**Bug 2 — MIN_SCENE_FRAMES (30) could produce scenes shorter than TRANSITION_FRAMES (12):**
+Voiceover sync can produce scenes with `duration_seconds < 0.4s` → fewer than 12 frames → crash on adjacent dissolve.
+**Fix:** Introduced `sceneDur(scene, fps)` — single frame-count source of truth:
+```js
+const MIN_SCENE_FRAMES = TRANSITION_FRAMES + 1  // 13 — > any transition arm
+function sceneDur(scene, fps) {
+  return Math.max(Math.round((scene.duration_seconds || 5) * fps), MIN_SCENE_FRAMES)
+}
+```
+
+**Defensive dip downgrade:**
+`getTransition(scene, sceneDurationFrames)` now accepts scene's computed frame count. If dip scene < `DIP_FADE * 2 = 18fr`, auto-downgrades to dissolve with console warning.
+
+### Files changed
+- `remotion/src/compositions/Documentary.jsx` — `DIP_MID` fixed (8→10), `MIN_SCENE_FRAMES` constant added (13), `sceneDur()` helper, `getTransition()` downgrade logic
+
+### Note: ENOSPC disk warning
+`ENOSPC: no space left on device` from webpack is harmless — cache write fails, next Studio start rebuilds from scratch. Free space by removing unneeded files from `remotion/public/clips/`.
