@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Search, X, Loader2, AlertCircle, ChevronRight, ChevronLeft, RefreshCw, Sparkles, Globe, TrendingUp, Target, Users, BarChart3, Flame, Compass, Eye, Clock, ArrowRight, RotateCcw, Check, ChevronDown, Star, PenLine, BookOpen } from 'lucide-react'
+import { Search, X, Loader2, AlertCircle, ChevronRight, ChevronLeft, RefreshCw, Sparkles, Globe, TrendingUp, Target, Users, BarChart3, Flame, Compass, Eye, Clock, ArrowRight, RotateCcw, Check, ChevronDown, Star, PenLine, BookOpen, History, Trash2, Edit3 } from 'lucide-react'
 
 const LS_KEY = 'vr_channel_profile'
 const LS_HISTORY = 'vr_research_history'
@@ -19,14 +19,24 @@ function saveJson(key, val) {
 function loadProfile() { return loadJson(LS_KEY) }
 function saveProfile(p) { return saveJson(LS_KEY, p) }
 
-function appendHistory(report) {
+function appendHistory(report, profile) {
   try {
+    const entry = { ...report }
+    if (profile && !entry.profileSnapshot) {
+      entry.profileSnapshot = { channelName: profile.channelName || '', niche: profile.niche || '', subFocus: profile.subFocus || '' }
+    }
     let history = loadJson(LS_HISTORY) || []
-    history.push(report)
+    history.push(entry)
     if (history.length > MAX_HISTORY) history = history.slice(history.length - MAX_HISTORY)
     saveJson(LS_HISTORY, history)
-    saveJson(LS_LAST_REPORT, report)
+    saveJson(LS_LAST_REPORT, entry)
   } catch {}
+}
+
+function formatDate(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' · ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 }
 
 function loadLastReport() { return loadJson(LS_LAST_REPORT) }
@@ -239,9 +249,7 @@ function SetupForm({ onProfileCreated }) {
 }
 
 // --- Profile Summary (State B) ---
-function ProfileSummary({ profile, onEdit, onStartResearch }) {
-  const [showConfirm, setShowConfirm] = useState(false)
-  function confirmEdit() { localStorage.removeItem(LS_KEY); setShowConfirm(false); onEdit() }
+function ProfileSummary({ profile, onEdit, onStartResearch, onOpenHistory, onEditProfile }) {
   const pf = profile.performanceFingerprint || {}
   const cd = profile.currentDirection || {}
   const catalogSize = (profile.catalog || []).length
@@ -254,7 +262,7 @@ function ProfileSummary({ profile, onEdit, onStartResearch }) {
           <h1 className="text-xl font-semibold text-white">{profile.channelName || 'Channel Profile'}</h1>
           <p className="text-xs text-white/30 mt-0.5">{profile.path === 'existing' ? 'Analysed from YouTube' : 'Fresh channel'} · Created {new Date(profile.createdAt).toLocaleDateString()}</p>
         </div>
-        <button onClick={() => setShowConfirm(true)} className="vorta-btn vorta-btn-ghost text-xs flex items-center gap-1.5"><RefreshCw size={12} />Edit Profile</button>
+        <button onClick={onEditProfile} className="vorta-btn vorta-btn-ghost text-xs flex items-center gap-1.5"><Edit3 size={12} />Edit Profile</button>
       </div>
       <div className="grid grid-cols-2 gap-3 mb-6">
         <InfoCard icon={Target} label="Niche" value={profile.niche} />
@@ -315,17 +323,10 @@ function ProfileSummary({ profile, onEdit, onStartResearch }) {
       <button onClick={onStartResearch} className="vorta-btn vorta-btn-primary w-full py-3 text-sm font-medium rounded-xl flex items-center justify-center gap-2">
         Start Researching <ChevronRight size={14} />
       </button>
-      {showConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)' }} onClick={() => setShowConfirm(false)}>
-          <div className="rounded-xl p-6 max-w-sm mx-4" style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }} onClick={e => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-white mb-2">Clear current profile?</h3>
-            <p className="text-xs text-white/50 mb-4">This will clear your current profile. Research history will be kept.</p>
-            <div className="flex gap-2 justify-end">
-              <button onClick={() => setShowConfirm(false)} className="vorta-btn vorta-btn-ghost text-xs">Cancel</button>
-              <button onClick={confirmEdit} className="vorta-btn vorta-btn-danger text-xs">Clear Profile</button>
-            </div>
-          </div>
-        </div>
+      {onOpenHistory && (
+        <button onClick={onOpenHistory} className="vorta-btn vorta-btn-ghost w-full mt-2 text-xs flex items-center justify-center gap-1.5 text-white/40 hover:text-white/60">
+          <History size={12} />View Research History
+        </button>
       )}
     </div>
   )
@@ -760,8 +761,209 @@ function IdeaCardPanel({ item, panelSource, profile, onClose, onSaved, onNavigat
   )
 }
 
+// --- History Panel (left slide-in) ---
+function HistoryPanel({ onClose, currentReportId, onLoadReport, onClearAll }) {
+  const [history, setHistory] = useState(() => (loadJson(LS_HISTORY) || []).slice().reverse())
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
+
+  useEffect(() => {
+    function handleKey(e) { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [onClose])
+
+  function handleClear() {
+    saveJson(LS_HISTORY, [])
+    localStorage.removeItem(LS_LAST_REPORT)
+    setHistory([])
+    setShowClearConfirm(false)
+    if (onClearAll) onClearAll()
+    onClose()
+  }
+
+  return (
+    <div className="vorta-history-panel fixed inset-y-0 left-0 z-40 w-[380px] flex flex-col" style={{ background: '#141414', borderRight: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
+      <div className="vorta-history-header shrink-0 px-5 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+        <div>
+          <h3 className="text-sm font-semibold text-white">Research History</h3>
+          <p className="text-[11px] text-white/30 mt-0.5">{history.length} session{history.length !== 1 ? 's' : ''}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {history.length > 0 && (
+            <button onClick={() => setShowClearConfirm(true)} className="vorta-btn vorta-btn-ghost text-[11px] text-red-400 flex items-center gap-1"><Trash2 size={10} />Clear All</button>
+          )}
+          <button onClick={onClose} className="vorta-btn vorta-btn-ghost p-1"><X size={16} /></button>
+        </div>
+      </div>
+      <div className="vorta-history-list flex-1 overflow-y-auto p-4 space-y-3">
+        {history.length === 0 && (
+          <div className="vorta-history-empty rounded-lg p-6 text-center" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}>
+            <p className="text-xs text-white/30">No research history yet. Run your first research session to see it here.</p>
+          </div>
+        )}
+        {history.map((entry, i) => {
+          const isCurrent = entry.reportId === currentReportId
+          const ps = entry.profileSnapshot || {}
+          const tCount = (entry.trending || []).length
+          const gCount = (entry.gaps || []).length
+          const cCount = (entry.competitors || []).length
+          return (
+            <div key={entry.reportId || i} className="vorta-history-card rounded-lg p-3" style={{ background: isCurrent ? 'rgba(139,92,246,0.06)' : 'rgba(255,255,255,0.03)', border: `1px solid ${isCurrent ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.06)'}` }}>
+              <div className="flex items-start justify-between mb-1.5">
+                <span className="text-[11px] text-white/40">{formatDate(entry.generatedAt)}</span>
+                {isCurrent ? (
+                  <span className="vorta-current-chip px-1.5 py-0.5 rounded text-[9px] font-medium" style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}>Current</span>
+                ) : (
+                  <button onClick={() => onLoadReport(entry)} className="vorta-btn vorta-btn-ghost text-[10px] flex items-center gap-1 text-purple-300">Load <ArrowRight size={8} /></button>
+                )}
+              </div>
+              {(ps.niche || ps.subFocus) && <p className="text-xs text-white/55 mb-1">{ps.niche}{ps.subFocus ? ` · ${ps.subFocus}` : ''}</p>}
+              <div className="text-[10px] text-white/30">{tCount} trending · {gCount} gaps · {cCount} competitor</div>
+              <div className="text-[10px] text-white/25 mt-0.5">{tCount + gCount + cCount} total opportunities</div>
+            </div>
+          )
+        })}
+      </div>
+      {showClearConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)' }} onClick={() => setShowClearConfirm(false)}>
+          <div className="rounded-xl p-6 max-w-sm mx-4" style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }} onClick={e => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-white mb-2">Clear all research history?</h3>
+            <p className="text-xs text-white/50 mb-4">This will permanently delete all {history.length} research session{history.length !== 1 ? 's' : ''}. Your channel profile and saved idea will not be affected.</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setShowClearConfirm(false)} className="vorta-btn vorta-btn-ghost text-xs">Cancel</button>
+              <button onClick={handleClear} className="vorta-btn vorta-btn-danger text-xs">Clear All</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// --- Edit Profile Modal ---
+function EditProfileModal({ profile, onClose, onSave }) {
+  const [tab, setTab] = useState('settings')
+  const [niche, setNiche] = useState(profile.niche || '')
+  const [subFocus, setSubFocus] = useState(profile.subFocus || '')
+  const [angle, setAngle] = useState(profile.angle || '')
+  const [tone, setTone] = useState(profile.tone || '')
+  const [competitors, setCompetitors] = useState(profile.competitors || [])
+  const [channelUrl, setChannelUrl] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [angleSuggestions, setAngleSuggestions] = useState([])
+  const [toneSuggestions, setToneSuggestions] = useState([])
+  const [selectedAngleChip, setSelectedAngleChip] = useState(null)
+  const [selectedToneChip, setSelectedToneChip] = useState(null)
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
+  const [suggestionsLoaded, setSuggestionsLoaded] = useState(false)
+  const suggestNicheRef = useRef('')
+  const suggestSubFocusRef = useRef('')
+
+  const freshValid = niche.trim() && subFocus.trim() && angle.trim() && tone.trim()
+  const canSuggest = niche.trim() && subFocus.trim() && !suggestionsLoading && !loading
+
+  useEffect(() => {
+    function handleKey(e) { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [onClose])
+
+  useEffect(() => {
+    if (!suggestionsLoaded) return
+    if (niche.trim() !== suggestNicheRef.current || subFocus.trim() !== suggestSubFocusRef.current) {
+      setAngleSuggestions([]); setToneSuggestions([]); setSelectedAngleChip(null); setSelectedToneChip(null); setSuggestionsLoaded(false)
+    }
+  }, [niche, subFocus, suggestionsLoaded])
+
+  const handleSuggest = useCallback(async () => {
+    setSuggestionsLoading(true); setError('')
+    try {
+      const resp = await fetch('/api/research/suggestions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ niche: niche.trim(), subFocus: subFocus.trim() }) })
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.error || 'Failed to get suggestions')
+      setAngleSuggestions(data.angles || []); setToneSuggestions(data.tones || [])
+      setSelectedAngleChip(null); setSelectedToneChip(null); setSuggestionsLoaded(true)
+      suggestNicheRef.current = niche.trim(); suggestSubFocusRef.current = subFocus.trim()
+    } catch (err) { setError(err.message) } finally { setSuggestionsLoading(false) }
+  }, [niche, subFocus])
+
+  async function handleSave() {
+    if (!freshValid || loading) return
+    setLoading(true); setError('')
+    try {
+      const endpoint = tab === 'source' && channelUrl.trim()
+        ? '/api/research/profile/existing'
+        : '/api/research/profile/fresh'
+      const body = tab === 'source' && channelUrl.trim()
+        ? { channelUrl, competitors }
+        : { niche, subFocus, angle, tone, competitors }
+      const resp = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.error || 'Failed to save profile')
+      saveProfile(data)
+      localStorage.removeItem(LS_LAST_REPORT)
+      onSave(data)
+    } catch (err) { setError(err.message) } finally { setLoading(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)' }} onClick={onClose}>
+      <div className="vorta-edit-modal rounded-xl w-[600px] max-h-[85vh] flex flex-col mx-4" style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }} onClick={e => e.stopPropagation()}>
+        <div className="vorta-edit-header shrink-0 px-6 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <h3 className="text-sm font-semibold text-white">Edit Profile</h3>
+          <button onClick={onClose} className="vorta-btn vorta-btn-ghost p-1"><X size={16} /></button>
+        </div>
+        {/* Tabs */}
+        <div className="vorta-edit-tabs flex px-6 pt-3 gap-1">
+          <button onClick={() => setTab('settings')} className={`vorta-edit-tab px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${tab === 'settings' ? 'text-purple-300' : 'text-white/40 hover:text-white/60'}`} style={tab === 'settings' ? { background: 'rgba(139,92,246,0.15)' } : {}}>Channel Settings</button>
+          <button onClick={() => setTab('source')} className={`vorta-edit-tab px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${tab === 'source' ? 'text-purple-300' : 'text-white/40 hover:text-white/60'}`} style={tab === 'source' ? { background: 'rgba(139,92,246,0.15)' } : {}}>Channel Source</button>
+        </div>
+        <div className="vorta-edit-body flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          {tab === 'settings' && (
+            <>
+              <div className="vorta-field"><label className="vorta-label">Niche</label><input className="vorta-input" value={niche} onChange={e => setNiche(e.target.value)} disabled={loading} /></div>
+              <div className="vorta-field"><label className="vorta-label">Sub-focus</label><input className="vorta-input" value={subFocus} onChange={e => setSubFocus(e.target.value)} disabled={loading} /></div>
+              {canSuggest && !suggestionsLoaded && (
+                <button type="button" onClick={handleSuggest} className="vorta-btn vorta-btn-ghost text-xs flex items-center gap-1.5" style={{ color: '#c4b5fd' }}><Sparkles size={12} />Suggest →</button>
+              )}
+              {suggestionsLoading && <div className="flex items-center gap-2 text-xs text-purple-300/70"><Loader2 size={12} className="animate-spin" />Generating suggestions...</div>}
+              <SmartField label="Angle" value={angle} onChange={setAngle} suggestions={angleSuggestions} selectedChip={selectedAngleChip} onChipSelect={setSelectedAngleChip} placeholder="" disabled={loading} />
+              <SmartField label="Tone" value={tone} onChange={setTone} suggestions={toneSuggestions} selectedChip={selectedToneChip} onChipSelect={setSelectedToneChip} placeholder="" disabled={loading} />
+              <div className="vorta-field"><label className="vorta-label">Competitors (max 5)</label><TagInput tags={competitors} onChange={setCompetitors} placeholder="@handle — press Enter to add" disabled={loading} /></div>
+            </>
+          )}
+          {tab === 'source' && (
+            <div className="space-y-4">
+              <div className="vorta-field">
+                <label className="vorta-label">Current source</label>
+                <p className="text-xs text-white/50">{profile.path === 'existing' ? 'Analysed from YouTube' : 'Fresh channel (manual)'}</p>
+              </div>
+              <div className="vorta-field">
+                <label className="vorta-label">{profile.path === 'existing' ? 'Re-analyse or switch to fresh' : 'Switch to existing channel'}</label>
+                <input className="vorta-input" value={channelUrl} onChange={e => setChannelUrl(e.target.value)} placeholder="https://www.youtube.com/@handle" disabled={loading} />
+                <p className="text-[10px] text-white/25 mt-1">Enter a YouTube URL to re-analyse, or leave blank to save with current settings.</p>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="vorta-edit-footer shrink-0 px-6 py-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+          <p className="text-[10px] text-amber-400/60 mb-2">Saving will clear your last research report. History is preserved.</p>
+          {error && <p className="text-[10px] text-red-400 mb-2">{error}</p>}
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="vorta-btn vorta-btn-ghost text-xs">Cancel</button>
+            <button onClick={handleSave} disabled={!freshValid || loading} className="vorta-btn vorta-btn-primary text-xs" style={{ opacity: !freshValid || loading ? 0.4 : 1 }}>
+              {loading ? <><Loader2 size={12} className="animate-spin mr-1.5" />Saving...</> : 'Save Changes'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // --- Research Dashboard (State C) ---
-function ResearchDashboard({ profile, onBack, onNavigate }) {
+function ResearchDashboard({ profile, onBack, onNavigate, onEditProfile }) {
   const [report, setReport] = useState(() => loadLastReport())
   const [panelData, setPanelData] = useState(() => {
     const r = loadLastReport()
@@ -777,10 +979,20 @@ function ResearchDashboard({ profile, onBack, onNavigate }) {
   const [timeAgoStr, setTimeAgoStr] = useState('')
   const [savedIdea, setSavedIdea] = useState(() => loadJson(LS_SELECTED_IDEA))
   const [bannerDismissed, setBannerDismissed] = useState(() => loadJson(LS_BANNER_DISMISSED) || false)
+  const [historyOpen, setHistoryOpen] = useState(false)
 
-  function handleExplore(item, panelName) { setExploreItem(item); setExplorePanel(panelName) }
+  function handleExplore(item, panelName) { setHistoryOpen(false); setExploreItem(item); setExplorePanel(panelName) }
+  function handleOpenHistory() { setExploreItem(null); setHistoryOpen(true) }
   function handleIdeaSaved(idea) { setSavedIdea(idea); setBannerDismissed(false); saveJson(LS_BANNER_DISMISSED, false) }
   function dismissBanner() { setBannerDismissed(true); saveJson(LS_BANNER_DISMISSED, true) }
+  function handleLoadReport(entry) {
+    saveJson(LS_LAST_REPORT, entry)
+    setReport(entry)
+    setPanelData({ trending: entry.trending || [], gaps: entry.gaps || [], competitors: entry.competitors || [] })
+    setGenTime(entry.generatedAt)
+    setHistoryOpen(false)
+  }
+  function handleClearAll() { onBack() }
   const savedTopic = savedIdea?.topic || null
 
   // Update relative time every 30s
@@ -840,7 +1052,7 @@ function ResearchDashboard({ profile, onBack, onNavigate }) {
 
       const fullReport = { ...finalReport, profileId: profile.profileId }
       setReport(fullReport)
-      appendHistory(fullReport)
+      appendHistory(fullReport, profile)
     } catch (err) {
       setPanelErrors({ trending: err.message, gaps: err.message, competitors: err.message })
       setPanelLoading({ trending: false, gaps: false, competitors: false })
@@ -901,9 +1113,10 @@ function ResearchDashboard({ profile, onBack, onNavigate }) {
           <button onClick={onBack} className="vorta-btn vorta-btn-ghost text-xs flex items-center gap-1.5 text-white/50 hover:text-white/80">
             <ChevronLeft size={14} />Back to Profile
           </button>
-          <div className="vorta-profile-pill px-3 py-1 rounded-full text-[11px] text-white/40" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <button onClick={onEditProfile} className="vorta-profile-pill px-3 py-1 rounded-full text-[11px] text-white/40 hover:text-white/60 transition-colors cursor-pointer flex items-center gap-1.5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
             {profile.channelName || profile.niche} · {profile.subFocus}
-          </div>
+            <Edit3 size={9} />
+          </button>
         </div>
         <div className="flex items-center gap-4">
           {timeAgoStr && (
@@ -911,6 +1124,9 @@ function ResearchDashboard({ profile, onBack, onNavigate }) {
               <Clock size={10} />Research generated {timeAgoStr}
             </span>
           )}
+          <button onClick={handleOpenHistory} className="vorta-btn vorta-btn-ghost text-xs flex items-center gap-1.5 text-white/40 hover:text-white/60">
+            <History size={12} />History
+          </button>
           <button onClick={runDiscovery} disabled={streaming} className="vorta-btn vorta-btn-primary text-xs flex items-center gap-1.5" style={{ opacity: streaming ? 0.5 : 1 }}>
             {streaming ? <><Loader2 size={12} className="animate-spin" />Researching...</> : <><RefreshCw size={12} />New Research</>}
           </button>
@@ -930,11 +1146,19 @@ function ResearchDashboard({ profile, onBack, onNavigate }) {
           panelName="competitors" onRetry={() => retryPanel('competitors')} onExplore={(item) => handleExplore(item, 'competitors')} savedTopic={savedTopic} />
       </div>
 
-      {/* Idea Card slide-in */}
+      {/* Idea Card slide-in (right) */}
       {exploreItem && (
         <>
           <div className="fixed inset-0 z-30" style={{ background: 'rgba(0,0,0,0.3)' }} onClick={() => setExploreItem(null)} />
           <IdeaCardPanel item={exploreItem} panelSource={explorePanel} profile={profile} onClose={() => setExploreItem(null)} onSaved={handleIdeaSaved} onNavigate={onNavigate} />
+        </>
+      )}
+
+      {/* History slide-in (left) */}
+      {historyOpen && (
+        <>
+          <div className="fixed inset-0 z-30" style={{ background: 'rgba(0,0,0,0.3)' }} onClick={() => setHistoryOpen(false)} />
+          <HistoryPanel onClose={() => setHistoryOpen(false)} currentReportId={report?.reportId} onLoadReport={handleLoadReport} onClearAll={handleClearAll} />
         </>
       )}
     </div>
@@ -957,13 +1181,26 @@ function InfoCard({ icon: Icon, label, value }) {
 export default function VideoResearch({ onNavigate }) {
   const [profile, setProfile] = useState(() => loadProfile())
   const [view, setView] = useState('profile')
+  const [editModalOpen, setEditModalOpen] = useState(false)
+  const [historyOpenB, setHistoryOpenB] = useState(false)
+
+  function handleProfileSaved(newProfile) {
+    setProfile(newProfile)
+    setEditModalOpen(false)
+    setView('profile')
+  }
 
   if (!profile) {
     return <div className="p-8"><SetupForm onProfileCreated={p => setProfile(p)} /></div>
   }
 
   if (view === 'dashboard') {
-    return <ResearchDashboard profile={profile} onBack={() => setView('profile')} onNavigate={onNavigate} />
+    return (
+      <>
+        <ResearchDashboard profile={profile} onBack={() => setView('profile')} onNavigate={onNavigate} onEditProfile={() => setEditModalOpen(true)} />
+        {editModalOpen && <EditProfileModal profile={profile} onClose={() => setEditModalOpen(false)} onSave={handleProfileSaved} />}
+      </>
+    )
   }
 
   return (
@@ -972,7 +1209,20 @@ export default function VideoResearch({ onNavigate }) {
         profile={profile}
         onEdit={() => setProfile(null)}
         onStartResearch={() => setView('dashboard')}
+        onOpenHistory={() => setHistoryOpenB(true)}
+        onEditProfile={() => setEditModalOpen(true)}
       />
+      {historyOpenB && (
+        <>
+          <div className="fixed inset-0 z-30" style={{ background: 'rgba(0,0,0,0.3)' }} onClick={() => setHistoryOpenB(false)} />
+          <HistoryPanel onClose={() => setHistoryOpenB(false)} currentReportId={null} onLoadReport={(entry) => {
+            saveJson(LS_LAST_REPORT, entry)
+            setHistoryOpenB(false)
+            setView('dashboard')
+          }} onClearAll={() => setHistoryOpenB(false)} />
+        </>
+      )}
+      {editModalOpen && <EditProfileModal profile={profile} onClose={() => setEditModalOpen(false)} onSave={handleProfileSaved} />}
     </div>
   )
 }

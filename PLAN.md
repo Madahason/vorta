@@ -2672,3 +2672,74 @@ Third phase of the Video Research module. When the user clicks "Explore →" on 
 - [x] 11. Panel scrolls independently, 520px wide, layout intact at all widths
 - [x] 12. Client build clean — zero errors
 - [x] 13. PLAN.md updated
+
+---
+
+## Phase VR-4 — Research History + Profile Management ✅ COMPLETE
+**Commit:** `feature: VR-4 research history panel, edit profile modal, profile snapshot`
+**Date:** 2026-06-18
+
+### Overview
+Fourth phase of the Video Research module. Two new UI surfaces: a History Panel (left slide-in, 380px) showing all past research sessions with load/clear functionality, and an Edit Profile Modal (600px centered) for modifying channel settings without destroying history. Profile snapshots are now saved alongside each history entry.
+
+### Frontend — `client/src/pages/VideoResearch.jsx`
+
+**HistoryPanel (left slide-in, 380px):**
+- Opens from State B ("View Research History" link) and State C ("History" button in top bar)
+- Lists all entries from `vr_research_history` sorted most-recent-first
+- Each card: formatted date, niche/subFocus from profileSnapshot, count summary, total opportunities
+- "Current" chip on the active report; "Load →" on others
+- Load sets report as `vr_last_report` and navigates to dashboard
+- "Clear All" with confirmation modal — clears history + last report, preserves profile + saved idea
+- Closes on Escape, outside click
+
+**EditProfileModal (600px centered):**
+- Two tabs: Channel Settings (pre-filled niche/subFocus/angle/tone/competitors with Suggest → support) and Channel Source (shows path, optional YouTube URL to switch/re-analyse)
+- Save calls existing VR-1 endpoints (fresh or existing)
+- Updates `vr_channel_profile`, clears `vr_last_report` (stale data), preserves `vr_research_history` and `vr_selected_idea`
+- Warning shown: "Saving will clear your last research report. History is preserved."
+- After save from State C: navigates to State B
+
+**Mutual exclusion:**
+- Opening History panel closes Idea Card panel and vice versa
+- Both panels cannot be open simultaneously
+
+**Profile snapshot in history:**
+- `appendHistory()` now accepts `profile` param and saves `profileSnapshot: { channelName, niche, subFocus }` alongside each report
+- History cards display snapshot data regardless of current profile state
+
+**Other changes:**
+- `App.jsx` — `onNavigate` already passed to VideoResearch (from VR-3)
+- ProfileSummary: "Edit Profile" now opens modal instead of confirm-delete; "View Research History" link added
+- Dashboard top bar: "History" button added; profile pill is clickable with edit icon → opens edit modal
+
+### Production-readiness checks
+- [x] 1. History opens from both State B and State C
+- [x] 2. History entries render with date, niche/subFocus, counts
+- [x] 3. Entries sorted most-recent-first
+- [x] 4. "Current" chip on active report
+- [x] 5. "Load →" loads correct report to dashboard
+- [x] 6. New Research after Load adds new entry, doesn't overwrite
+- [x] 7. Clear All confirmation shows correct count
+- [x] 8. Clear All removes history + last report from localStorage
+- [x] 9. Clear All preserves profile + saved idea
+- [x] 10. Clear All navigates to State B from State C
+- [x] 11. Empty history state renders correctly
+- [x] 12. History panel closes on Escape and outside click
+- [x] 13. Edit Profile opens as modal
+- [x] 14. Modal pre-fills all fields
+- [x] 15. "Suggest →" works inside modal
+- [x] 16. Cancel closes modal, no changes
+- [x] 17. Save calls correct endpoint
+- [x] 18. Save updates vr_channel_profile
+- [x] 19. Save clears vr_last_report
+- [x] 20. Save preserves history + saved idea
+- [x] 21. Warning visible in modal footer
+- [x] 22. After save from State C: navigates to State B
+- [x] 23. profileSnapshot saved with each history entry
+- [x] 24. Panels mutually exclusive
+- [x] 25. Edit Profile from profile pill in State C
+- [x] 26. All panels/modals close on Escape
+- [x] 27. Zero console errors
+- [x] 28. Layout intact at all widths
+- [x] 29. PLAN.md updated
