@@ -2608,3 +2608,67 @@ Second phase of the Video Research module. Three-panel research dashboard powere
 - [x] 23. All CSS classes use vorta- prefix
 - [x] 24. Client build clean — zero errors
 - [x] 25. PLAN.md updated
+
+---
+
+## Phase VR-3 — Idea Card + Angle Selection ✅ COMPLETE
+**Commit:** `feature: VR-3 idea card — angle selection, topic depth, competitor coverage, idea save`
+**Date:** 2026-06-18
+
+### Overview
+Third phase of the Video Research module. When the user clicks "Explore →" on a dashboard opportunity card, a 520px slide-in panel opens with three tabs: Overview (topic depth, key facts, timeline, key players), Angles (4 Claude-generated differentiated angles with fit scores, hooks, and difficulty ratings), and Competitors (how competitors covered the topic, with gap analysis). The user selects an angle and saves the idea, which persists in localStorage and triggers navigation to Script Writer.
+
+### Backend — `server/routes/research.js` (additions)
+
+**POST /api/research/angles**
+- Accepts: `{ opportunity, profile }` — both validated (400 on missing fields)
+- Claude Sonnet 4.6 call with `web_search_20250305` for real-time competitor data
+- Response sanitized server-side:
+  - Exactly 4 angles enforced (pad with placeholders if Claude returns fewer, trim if more)
+  - `sanitizeAngle()` ensures all 10 fields present with defaults
+  - `fitScore` clamped to integer 1-10 via `clampScore()`
+  - `recommendedAngleId` validated against angle array — falls back to highest fitScore if Claude hallucinates
+  - `topicDepth.keyFacts` clamped to 5-7 items
+  - `competitorCoverage` always an array (never undefined)
+  - `competitorInsight` always a non-empty string (default fallback provided)
+  - `difficulty` validated to `low|medium|high` enum
+
+**POST /api/research/idea/save**
+- Accepts: `{ opportunity, selectedAngle, profile }` — validates all three (400 on missing)
+- Returns: `{ ideaId: "idea_[timestamp]", savedAt: ISO, topic, opportunityScore, selectedAngle, profileId, status: "saved" }`
+
+### Frontend — `client/src/pages/VideoResearch.jsx`
+
+**IdeaCardPanel (replaces VR-2 placeholder):**
+- 520px fixed right panel, full viewport height, own scroll
+- Three tabs: Overview / Angles / Competitors
+- API call fires immediately on panel open; re-fires when switching cards
+- Escape key closes; outside click closes; clicking inside doesn't close
+- Tab 1 — Overview: topic summary, key facts (numbered list), timeline (vertical line), main characters (chips)
+- Tab 2 — Angles: 4 cards sorted by fitScore, recommended pre-expanded, accordion (one at a time), "Best fit" banner, approach/fitReason/competitorGap/duration/difficulty/hook in expanded state, "Use this angle →" select button, "Save Idea →" footer button gated on selection
+- Tab 3 — Competitors: cards with channel/title/angle/weakness, empty state, `competitorInsight` synthesis block
+- DifficultyChip: low=green, medium=amber, high=red
+- Save flow: POST → success state 1.5s → navigate to Script Writer
+
+**Dashboard integration:**
+- "Saved ✓" chip on the card whose topic matches `vr_selected_idea.topic`
+- Saved idea banner at top: "You have a saved idea — [topic]. Go to Script Writer →"
+- Banner X dismisses; dismissed state in `vr_idea_banner_dismissed` localStorage key
+- Switching cards while panel open resets to Tab 1 and re-fires API
+
+**App.jsx:** `onNavigate={setActivePage}` passed to `<VideoResearch />` for Script Writer navigation
+
+### Production-readiness checks
+- [x] 1. POST /angles with empty body → 400
+- [x] 2. Exactly 4 angles, all fields sanitized, fitScore 1-10, recommendedAngleId validated
+- [x] 3. POST /idea/save with missing fields → 400; valid → confirmed object
+- [x] 4. Claude malformed JSON → 500 with detail; wrong angle count → padded/trimmed
+- [x] 5. Panel open/close: Escape, outside click, inside click safe, card switch resets
+- [x] 6. Tab 1 renders all topicDepth fields; timeline conditional; keyFacts numbered
+- [x] 7. Tab 2: 4 cards, sorted, recommended pre-expanded, accordion, all fields, difficulty colors
+- [x] 8. Tab 3: competitor cards, empty state, competitorInsight block
+- [x] 9. Save flow: POST fires, success 1.5s, navigates, localStorage written, error inline
+- [x] 10. Post-save: "Saved ✓" chip, banner, dismiss persists, "Go to Script Writer" works
+- [x] 11. Panel scrolls independently, 520px wide, layout intact at all widths
+- [x] 12. Client build clean — zero errors
+- [x] 13. PLAN.md updated

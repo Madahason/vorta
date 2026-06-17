@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Search, X, Loader2, AlertCircle, ChevronRight, ChevronLeft, RefreshCw, Sparkles, Globe, TrendingUp, Target, Users, BarChart3, Flame, Compass, Eye, Clock, ArrowRight, RotateCcw } from 'lucide-react'
+import { Search, X, Loader2, AlertCircle, ChevronRight, ChevronLeft, RefreshCw, Sparkles, Globe, TrendingUp, Target, Users, BarChart3, Flame, Compass, Eye, Clock, ArrowRight, RotateCcw, Check, ChevronDown, Star, PenLine, BookOpen } from 'lucide-react'
 
 const LS_KEY = 'vr_channel_profile'
 const LS_HISTORY = 'vr_research_history'
 const LS_LAST_REPORT = 'vr_last_report'
+const LS_SELECTED_IDEA = 'vr_selected_idea'
+const LS_BANNER_DISMISSED = 'vr_idea_banner_dismissed'
 const MAX_HISTORY = 20
 
 // --- localStorage helpers ---
@@ -349,12 +351,15 @@ function VolumePill({ volume }) {
   )
 }
 
-function OpportunityCard({ item, panel, onExplore }) {
+function OpportunityCard({ item, panel, onExplore, saved }) {
   return (
     <div className="vorta-opportunity-card rounded-lg p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
       <div className="flex items-start justify-between gap-2 mb-2">
         <h4 className="text-sm font-medium text-white leading-snug flex-1">{item.title}</h4>
-        <ScoreBadge score={item.opportunityScore} />
+        <div className="flex items-center gap-1.5 shrink-0">
+          {saved && <span className="vorta-saved-chip inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ background: 'rgba(34,197,94,0.12)', color: '#86efac' }}><Check size={8} />Saved</span>}
+          <ScoreBadge score={item.opportunityScore} />
+        </div>
       </div>
       <p className="text-xs text-white/50 leading-relaxed mb-3">{item.summary}</p>
       <div className="flex flex-wrap items-center gap-2 mb-3">
@@ -402,7 +407,7 @@ function SkeletonCards() {
 }
 
 // --- Panel Column ---
-function PanelColumn({ title, subtitle, icon: Icon, items, loading, error, panelName, onRetry, onExplore }) {
+function PanelColumn({ title, subtitle, icon: Icon, items, loading, error, panelName, onRetry, onExplore, savedTopic }) {
   const sorted = useMemo(() => (items || []).slice().sort((a, b) => (b.opportunityScore || 0) - (a.opportunityScore || 0)), [items])
   return (
     <div className="vorta-panel-column flex flex-col min-w-0">
@@ -432,27 +437,323 @@ function PanelColumn({ title, subtitle, icon: Icon, items, loading, error, panel
       )}
       {!loading && !error && sorted.length > 0 && (
         <div className="space-y-3">
-          {sorted.map((item, i) => <OpportunityCard key={i} item={item} panel={panelName} onExplore={onExplore} />)}
+          {sorted.map((item, i) => <OpportunityCard key={i} item={item} panel={panelName} onExplore={onExplore} saved={savedTopic && item.title === savedTopic} />)}
         </div>
       )}
     </div>
   )
 }
 
-// --- Explore Slide-in ---
-function ExplorePanel({ item, onClose }) {
-  if (!item) return null
+// --- Difficulty chip ---
+function DifficultyChip({ difficulty }) {
+  const cfg = { low: { color: '#86efac', bg: 'rgba(34,197,94,0.1)' }, medium: { color: '#fbbf24', bg: 'rgba(245,158,11,0.1)' }, high: { color: '#f87171', bg: 'rgba(239,68,68,0.1)' } }
+  const c = cfg[difficulty] || cfg.medium
+  return <span className="vorta-difficulty-chip px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ color: c.color, background: c.bg }}>{difficulty}</span>
+}
+
+// --- Skeleton for Idea Card ---
+function IdeaSkeleton() {
   return (
-    <div className="vorta-explore-panel fixed inset-y-0 right-0 z-40 w-[480px] flex flex-col" style={{ background: '#141414', borderLeft: '1px solid rgba(255,255,255,0.08)' }}>
-      <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-        <h3 className="text-sm font-semibold text-white">Idea Card</h3>
-        <button onClick={onClose} className="vorta-btn vorta-btn-ghost p-1"><X size={16} /></button>
+    <div className="vorta-idea-skeleton space-y-4 animate-pulse p-5">
+      <div className="h-5 rounded w-2/3" style={{ background: 'rgba(255,255,255,0.06)' }} />
+      <div className="h-3 rounded w-full" style={{ background: 'rgba(255,255,255,0.04)' }} />
+      <div className="h-3 rounded w-full" style={{ background: 'rgba(255,255,255,0.04)' }} />
+      <div className="h-3 rounded w-3/4" style={{ background: 'rgba(255,255,255,0.04)' }} />
+      <div className="space-y-2 mt-6">{[1,2,3,4,5].map(i => <div key={i} className="h-3 rounded w-5/6" style={{ background: 'rgba(255,255,255,0.04)' }} />)}</div>
+    </div>
+  )
+}
+
+// --- Idea Card Panel (VR-3) ---
+function IdeaCardPanel({ item, panelSource, profile, onClose, onSaved, onNavigate }) {
+  const [tab, setTab] = useState('overview')
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [expandedAngle, setExpandedAngle] = useState(null)
+  const [selectedAngle, setSelectedAngle] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState(null)
+  const [saveSuccess, setSaveSuccess] = useState(false)
+  const panelRef = useRef(null)
+  const itemRef = useRef(item?.title)
+
+  // Fetch angles on open or when item changes
+  useEffect(() => {
+    if (!item) return
+    if (item.title === itemRef.current && data && !loading) return
+    itemRef.current = item.title
+    setTab('overview')
+    setData(null)
+    setLoading(true)
+    setError(null)
+    setExpandedAngle(null)
+    setSelectedAngle(null)
+    setSaveSuccess(false)
+    setSaveError(null)
+    let cancelled = false
+    async function fetchAngles() {
+      try {
+        const resp = await fetch('/api/research/angles', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ opportunity: item, profile }),
+        })
+        const json = await resp.json()
+        if (!resp.ok) throw new Error(json.error || 'Failed to load angles')
+        if (!cancelled) {
+          setData(json)
+          const rec = json.recommendedAngleId
+          if (rec) setExpandedAngle(rec)
+        }
+      } catch (err) {
+        if (!cancelled) setError(err.message)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    fetchAngles()
+    return () => { cancelled = true }
+  }, [item?.title])
+
+  // Escape key
+  useEffect(() => {
+    function handleKey(e) { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [onClose])
+
+  async function handleSave() {
+    if (!selectedAngle || saving) return
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const resp = await fetch('/api/research/idea/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ opportunity: item, selectedAngle, profile }),
+      })
+      const json = await resp.json()
+      if (!resp.ok) throw new Error(json.error || 'Failed to save idea')
+      saveJson(LS_SELECTED_IDEA, json)
+      setSaveSuccess(true)
+      if (onSaved) onSaved(json)
+      setTimeout(() => {
+        if (onNavigate) onNavigate('script-writer')
+      }, 1500)
+    } catch (err) {
+      setSaveError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!item) return null
+
+  const angles = data?.angles || []
+  const sortedAngles = [...angles].sort((a, b) => (b.fitScore || 0) - (a.fitScore || 0))
+  const td = data?.topicDepth || {}
+  const cc = data?.competitorCoverage || []
+  const panelLabel = { trending: 'Trending', gaps: 'Gap', competitors: 'Competitor' }[panelSource] || 'Research'
+
+  return (
+    <div ref={panelRef} className="vorta-idea-panel fixed inset-y-0 right-0 z-40 w-[520px] flex flex-col" style={{ background: '#141414', borderLeft: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
+      {/* Header */}
+      <div className="vorta-idea-header shrink-0 px-5 py-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-white">Idea Card</h3>
+          <button onClick={onClose} className="vorta-btn vorta-btn-ghost p-1"><X size={16} /></button>
+        </div>
+        {/* Tabs */}
+        <div className="vorta-idea-tabs flex gap-1">
+          {[{ id: 'overview', label: 'Overview', icon: BookOpen }, { id: 'angles', label: 'Angles', icon: Target }, { id: 'competitors', label: 'Competitors', icon: Eye }].map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className={`vorta-idea-tab flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${tab === t.id ? 'text-purple-300' : 'text-white/40 hover:text-white/60'}`}
+              style={tab === t.id ? { background: 'rgba(139,92,246,0.15)' } : {}}>
+              <t.icon size={12} />{t.label}
+            </button>
+          ))}
+        </div>
       </div>
-      <div className="flex-1 p-5 overflow-y-auto">
-        <h4 className="text-base font-medium text-white mb-3">{item.title}</h4>
-        <p className="text-sm text-white/50 mb-6">{item.summary}</p>
-        <div className="rounded-lg p-6 text-center" style={{ background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.08)' }}>
-          <p className="text-xs text-white/25">Idea Card — coming in VR-3</p>
+
+      {/* Content */}
+      <div className="vorta-idea-content flex-1 overflow-y-auto">
+        {loading && <IdeaSkeleton />}
+        {error && (
+          <div className="p-5">
+            <div className="vorta-idea-error rounded-lg p-4" style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.12)' }}>
+              <div className="flex items-start gap-2"><AlertCircle size={14} className="text-red-400 shrink-0 mt-0.5" /><p className="text-xs text-red-300">{error}</p></div>
+            </div>
+          </div>
+        )}
+        {!loading && !error && data && (
+          <>
+            {/* Tab 1 — Overview */}
+            {tab === 'overview' && (
+              <div className="vorta-idea-overview p-5 space-y-5">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <h4 className="text-base font-semibold text-white">{data.topic}</h4>
+                    <span className="vorta-panel-chip px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>{panelLabel}</span>
+                    <ScoreBadge score={item.opportunityScore} />
+                  </div>
+                  <p className="text-xs text-white/50 leading-relaxed">{item.summary}</p>
+                </div>
+                {td.summary && (
+                  <div className="vorta-topic-summary rounded-lg p-4" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <p className="text-xs text-white/60 leading-relaxed">{td.summary}</p>
+                  </div>
+                )}
+                {td.keyFacts?.length > 0 && (
+                  <div>
+                    <h5 className="text-[11px] font-medium text-white/50 uppercase tracking-wider mb-2">Key Facts</h5>
+                    <ol className="vorta-key-facts space-y-1.5 list-decimal list-inside">
+                      {td.keyFacts.map((f, i) => <li key={i} className="text-xs text-white/55 leading-relaxed">{f}</li>)}
+                    </ol>
+                  </div>
+                )}
+                {td.timeline?.length > 0 && (
+                  <div>
+                    <h5 className="text-[11px] font-medium text-white/50 uppercase tracking-wider mb-2">Timeline</h5>
+                    <div className="vorta-timeline space-y-2 pl-3" style={{ borderLeft: '2px solid rgba(139,92,246,0.2)' }}>
+                      {td.timeline.map((t, i) => <div key={i} className="text-xs text-white/55 leading-relaxed pl-2">{t}</div>)}
+                    </div>
+                  </div>
+                )}
+                {td.mainCharacters?.length > 0 && (
+                  <div>
+                    <h5 className="text-[11px] font-medium text-white/50 uppercase tracking-wider mb-2">Key Players</h5>
+                    <div className="flex flex-wrap gap-1.5">
+                      {td.mainCharacters.map((c, i) => <span key={i} className="vorta-character-chip px-2 py-0.5 rounded text-[11px] text-white/60" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>{c}</span>)}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Tab 2 — Angles */}
+            {tab === 'angles' && (
+              <div className="vorta-idea-angles p-5">
+                <div className="mb-4">
+                  <h4 className="text-sm font-semibold text-white mb-1">Choose your angle</h4>
+                  <p className="text-[11px] text-white/35">4 approaches to this topic, ranked by fit with your channel.</p>
+                </div>
+                <div className="space-y-3">
+                  {sortedAngles.map(angle => {
+                    const isExpanded = expandedAngle === angle.angleId
+                    const isSelected = selectedAngle?.angleId === angle.angleId
+                    const isRecommended = data.recommendedAngleId === angle.angleId
+                    return (
+                      <div key={angle.angleId}
+                        className="vorta-angle-card rounded-lg transition-all"
+                        style={{
+                          background: isSelected ? 'rgba(139,92,246,0.08)' : 'rgba(255,255,255,0.03)',
+                          border: `1px solid ${isSelected ? 'rgba(139,92,246,0.3)' : 'rgba(255,255,255,0.06)'}`,
+                        }}>
+                        <button className="w-full text-left p-3" onClick={() => setExpandedAngle(isExpanded ? null : angle.angleId)}>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1">
+                              {isRecommended && <span className="vorta-recommended-badge inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium mb-1.5" style={{ background: 'rgba(139,92,246,0.12)', color: '#c4b5fd' }}><Star size={8} />Best fit for your channel</span>}
+                              <h5 className="text-sm font-medium text-white">{angle.title}</h5>
+                              <p className="text-xs text-white/45 mt-0.5">{angle.pitch}</p>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <ScoreBadge score={angle.fitScore} />
+                              <ChevronDown size={14} className={`text-white/30 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                            </div>
+                          </div>
+                        </button>
+                        {isExpanded && (
+                          <div className="vorta-angle-expanded px-3 pb-3 space-y-3" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+                            <div className="pt-3">
+                              <p className="text-xs text-white/55 leading-relaxed mb-2">{angle.approach}</p>
+                              <div className="space-y-2">
+                                <div><span className="text-[10px] text-white/30 uppercase">Fit reason:</span><p className="text-xs text-white/50">{angle.fitReason}</p></div>
+                                <div><span className="text-[10px] text-white/30 uppercase">Competitor gap:</span><p className="text-xs text-white/50">{angle.competitorGap}</p></div>
+                              </div>
+                              <div className="flex items-center gap-2 mt-3">
+                                <span className="vorta-duration-chip px-1.5 py-0.5 rounded text-[10px] font-medium text-white/50" style={{ background: 'rgba(255,255,255,0.04)' }}>{angle.estimatedDuration}</span>
+                                <DifficultyChip difficulty={angle.difficulty} />
+                              </div>
+                              {angle.hook && (
+                                <div className="vorta-hook-block mt-3 rounded-lg p-3" style={{ background: 'rgba(139,92,246,0.05)', borderLeft: '3px solid rgba(139,92,246,0.3)' }}>
+                                  <span className="text-[10px] text-purple-300/50 uppercase block mb-1">Opening line</span>
+                                  <p className="text-xs text-purple-200/70 italic">"{angle.hook}"</p>
+                                </div>
+                              )}
+                              <button onClick={(e) => { e.stopPropagation(); setSelectedAngle(angle); setSaveError(null) }}
+                                className={`vorta-btn mt-3 text-xs flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${isSelected ? 'text-green-300' : 'text-purple-300 hover:text-purple-200'}`}
+                                style={{ background: isSelected ? 'rgba(34,197,94,0.1)' : 'rgba(139,92,246,0.1)' }}>
+                                {isSelected ? <><Check size={12} />Selected</> : <>Use this angle <ArrowRight size={10} /></>}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Tab 3 — Competitors */}
+            {tab === 'competitors' && (
+              <div className="vorta-idea-competitors p-5">
+                <h4 className="text-sm font-semibold text-white mb-1">How competitors covered this</h4>
+                <p className="text-[11px] text-white/35 mb-4">What's already out there and where the gaps are.</p>
+                {cc.length === 0 ? (
+                  <div className="vorta-comp-empty rounded-lg p-6 text-center" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}>
+                    <p className="text-xs text-white/30">No direct competitor coverage found — this may be an unclaimed topic.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {cc.map((c, i) => (
+                      <div key={i} className="vorta-comp-card rounded-lg p-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className="vorta-comp-channel px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>{c.channel}</span>
+                        </div>
+                        <h5 className="text-xs font-medium text-white mb-1">{c.title}</h5>
+                        <p className="text-[11px] text-white/45 mb-1.5">{c.angle}</p>
+                        {c.weakness && (
+                          <div className="vorta-comp-gap flex items-start gap-1.5 text-[11px]">
+                            <span className="text-amber-400 shrink-0">Gap:</span>
+                            <span className="text-amber-300/60">{c.weakness}</span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {data?.competitorInsight && (
+                  <div className="vorta-comp-insight mt-4 rounded-lg p-4" style={{ background: 'rgba(139,92,246,0.04)', border: '1px solid rgba(139,92,246,0.1)' }}>
+                    <h5 className="text-[11px] font-medium text-purple-300/60 uppercase tracking-wider mb-1.5">What this means for you</h5>
+                    <p className="text-xs text-white/55 leading-relaxed">{data.competitorInsight}</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="vorta-idea-footer shrink-0 px-5 py-3 flex items-center justify-between" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+        <button onClick={onClose} className="vorta-btn vorta-btn-ghost text-xs flex items-center gap-1.5 text-white/50">
+          <ChevronLeft size={12} />Back
+        </button>
+        <div className="flex items-center gap-2">
+          {saveError && <span className="text-[10px] text-red-400">{saveError}</span>}
+          {saveSuccess ? (
+            <span className="vorta-btn text-xs flex items-center gap-1.5 px-4 py-1.5 rounded-md font-medium" style={{ background: 'rgba(34,197,94,0.15)', color: '#86efac' }}>
+              <Check size={12} />Idea saved ✓
+            </span>
+          ) : (
+            <button onClick={handleSave} disabled={!selectedAngle || saving}
+              className="vorta-btn vorta-btn-primary text-xs flex items-center gap-1.5 px-4 py-1.5"
+              style={{ opacity: !selectedAngle || saving ? 0.4 : 1 }}>
+              {saving ? <><Loader2 size={12} className="animate-spin" />Saving...</> : <>Save Idea <ArrowRight size={10} /></>}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -460,7 +761,7 @@ function ExplorePanel({ item, onClose }) {
 }
 
 // --- Research Dashboard (State C) ---
-function ResearchDashboard({ profile, onBack }) {
+function ResearchDashboard({ profile, onBack, onNavigate }) {
   const [report, setReport] = useState(() => loadLastReport())
   const [panelData, setPanelData] = useState(() => {
     const r = loadLastReport()
@@ -471,8 +772,16 @@ function ResearchDashboard({ profile, onBack }) {
   const [panelErrors, setPanelErrors] = useState({ trending: null, gaps: null, competitors: null })
   const [streaming, setStreaming] = useState(false)
   const [exploreItem, setExploreItem] = useState(null)
+  const [explorePanel, setExplorePanel] = useState(null)
   const [genTime, setGenTime] = useState(report?.generatedAt || null)
   const [timeAgoStr, setTimeAgoStr] = useState('')
+  const [savedIdea, setSavedIdea] = useState(() => loadJson(LS_SELECTED_IDEA))
+  const [bannerDismissed, setBannerDismissed] = useState(() => loadJson(LS_BANNER_DISMISSED) || false)
+
+  function handleExplore(item, panelName) { setExploreItem(item); setExplorePanel(panelName) }
+  function handleIdeaSaved(idea) { setSavedIdea(idea); setBannerDismissed(false); saveJson(LS_BANNER_DISMISSED, false) }
+  function dismissBanner() { setBannerDismissed(true); saveJson(LS_BANNER_DISMISSED, true) }
+  const savedTopic = savedIdea?.topic || null
 
   // Update relative time every 30s
   useEffect(() => {
@@ -572,6 +881,20 @@ function ResearchDashboard({ profile, onBack }) {
 
   return (
     <div className="vorta-research-dashboard flex flex-col h-full">
+      {/* Saved idea banner */}
+      {savedIdea && !bannerDismissed && (
+        <div className="vorta-saved-banner flex items-center justify-between px-6 py-2.5 shrink-0" style={{ background: 'rgba(34,197,94,0.06)', borderBottom: '1px solid rgba(34,197,94,0.12)' }}>
+          <div className="flex items-center gap-2 text-xs text-green-300/80">
+            <Check size={12} />
+            <span>You have a saved idea — <strong>{savedIdea.topic}</strong>. Ready to write the script?</span>
+            <button onClick={() => onNavigate && onNavigate('script-writer')} className="vorta-btn vorta-btn-ghost text-xs text-green-300 flex items-center gap-1 ml-1">
+              Go to Script Writer <ArrowRight size={10} />
+            </button>
+          </div>
+          <button onClick={dismissBanner} className="vorta-btn vorta-btn-ghost p-0.5 text-white/30 hover:text-white/60"><X size={14} /></button>
+        </div>
+      )}
+
       {/* Top bar */}
       <div className="vorta-dashboard-topbar flex items-center justify-between px-6 py-3 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         <div className="flex items-center gap-4">
@@ -598,20 +921,20 @@ function ResearchDashboard({ profile, onBack }) {
       <div className="vorta-dashboard-grid flex-1 grid grid-cols-3 gap-6 p-6 overflow-y-auto">
         <PanelColumn title="Trending Now" subtitle="Topics gaining momentum in your niche right now" icon={Flame}
           items={panelData.trending} loading={panelLoading.trending} error={panelErrors.trending}
-          panelName="trending" onRetry={() => retryPanel('trending')} onExplore={setExploreItem} />
+          panelName="trending" onRetry={() => retryPanel('trending')} onExplore={(item) => handleExplore(item, 'trending')} savedTopic={savedTopic} />
         <PanelColumn title="Gap Finder" subtitle="High-demand topics with weak or outdated YouTube coverage" icon={Compass}
           items={panelData.gaps} loading={panelLoading.gaps} error={panelErrors.gaps}
-          panelName="gaps" onRetry={() => retryPanel('gaps')} onExplore={setExploreItem} />
+          panelName="gaps" onRetry={() => retryPanel('gaps')} onExplore={(item) => handleExplore(item, 'gaps')} savedTopic={savedTopic} />
         <PanelColumn title="Competitor Watch" subtitle="Overperforming videos from competitor channels" icon={Eye}
           items={panelData.competitors} loading={panelLoading.competitors} error={panelErrors.competitors}
-          panelName="competitors" onRetry={() => retryPanel('competitors')} onExplore={setExploreItem} />
+          panelName="competitors" onRetry={() => retryPanel('competitors')} onExplore={(item) => handleExplore(item, 'competitors')} savedTopic={savedTopic} />
       </div>
 
-      {/* Explore slide-in */}
+      {/* Idea Card slide-in */}
       {exploreItem && (
         <>
-          <div className="fixed inset-0 z-30" style={{ background: 'rgba(0,0,0,0.4)' }} onClick={() => setExploreItem(null)} />
-          <ExplorePanel item={exploreItem} onClose={() => setExploreItem(null)} />
+          <div className="fixed inset-0 z-30" style={{ background: 'rgba(0,0,0,0.3)' }} onClick={() => setExploreItem(null)} />
+          <IdeaCardPanel item={exploreItem} panelSource={explorePanel} profile={profile} onClose={() => setExploreItem(null)} onSaved={handleIdeaSaved} onNavigate={onNavigate} />
         </>
       )}
     </div>
@@ -631,16 +954,16 @@ function InfoCard({ icon: Icon, label, value }) {
 }
 
 // --- Main Page ---
-export default function VideoResearch() {
+export default function VideoResearch({ onNavigate }) {
   const [profile, setProfile] = useState(() => loadProfile())
-  const [view, setView] = useState('profile') // 'profile' | 'dashboard'
+  const [view, setView] = useState('profile')
 
   if (!profile) {
     return <div className="p-8"><SetupForm onProfileCreated={p => setProfile(p)} /></div>
   }
 
   if (view === 'dashboard') {
-    return <ResearchDashboard profile={profile} onBack={() => setView('profile')} />
+    return <ResearchDashboard profile={profile} onBack={() => setView('profile')} onNavigate={onNavigate} />
   }
 
   return (

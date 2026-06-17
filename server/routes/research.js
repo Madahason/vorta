@@ -687,4 +687,192 @@ router.get('/discover/status', (req, res) => {
   res.json({ running: discoveryRunning });
 });
 
+// --- VR-3: Idea Card endpoints ---
+
+function sanitizeAngle(angle, idx) {
+  return {
+    angleId: angle.angleId || `angle_${idx + 1}`,
+    title: angle.title || 'Untitled angle',
+    pitch: angle.pitch || '',
+    approach: angle.approach || '',
+    fitScore: clampScore(angle.fitScore),
+    fitReason: angle.fitReason || '',
+    competitorGap: angle.competitorGap || '',
+    estimatedDuration: angle.estimatedDuration || '10-15 min',
+    difficulty: ['low', 'medium', 'high'].includes(angle.difficulty) ? angle.difficulty : 'medium',
+    hook: angle.hook || '',
+  };
+}
+
+// POST /api/research/angles
+router.post('/angles', async (req, res) => {
+  const { opportunity, profile } = req.body;
+
+  if (!opportunity || typeof opportunity !== 'object' || !opportunity.title?.trim()) {
+    return res.status(400).json({ error: 'opportunity is required and must have a title' });
+  }
+  const profileErr = validateProfile(profile);
+  if (profileErr) return res.status(400).json({ error: profileErr });
+
+  if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'your_key_here') {
+    return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  }
+
+  try {
+    const client = new Anthropic();
+    const message = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 4096,
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+      messages: [{
+        role: 'user',
+        content: `Generate exactly 4 differentiated video angles for this YouTube topic, plus topic depth research and competitor analysis.
+
+TOPIC: ${opportunity.title}
+Topic summary: ${opportunity.summary || ''}
+${opportunity.trendSignal ? `Trend signal: ${opportunity.trendSignal}` : ''}
+${opportunity.gapReason ? `Gap reason: ${opportunity.gapReason}` : ''}
+${opportunity.suggestedAngle ? `Suggested angle: ${opportunity.suggestedAngle}` : ''}
+
+CHANNEL PROFILE:
+Niche: ${profile.niche}
+Sub-focus: ${profile.subFocus}
+Angle: ${profile.angle}
+Tone: ${profile.tone}
+Competitors: ${(profile.competitors || []).join(', ') || 'none specified'}
+
+RULES:
+- Generate EXACTLY 4 angles — not 3, not 5
+- Angles must be genuinely differentiated — different narrative structure, different protagonist, different conclusion
+- recommendedAngleId must be the angle that best matches the channel's angle and tone
+- fitScore is integer 1-10, weighted toward channel alignment
+- topicDepth.keyFacts must be specific and verifiable — no vague generalities
+- competitorCoverage should reflect real videos if web search finds them
+- Use web search to find real competitor videos and current information about the topic
+
+Return ONLY valid JSON. No markdown, no preamble.
+{
+  "topic": "${opportunity.title}",
+  "angles": [
+    {
+      "angleId": "angle_1",
+      "title": "short angle label (4-6 words)",
+      "pitch": "one sentence — what makes this angle compelling",
+      "approach": "2-3 sentences — how to execute this angle",
+      "fitScore": 8,
+      "fitReason": "why this fits the channel's POV and tone",
+      "competitorGap": "what competitors missed",
+      "estimatedDuration": "10-14 min",
+      "difficulty": "low | medium | high",
+      "hook": "one punchy opening line"
+    }
+  ],
+  "recommendedAngleId": "angle_X",
+  "competitorCoverage": [
+    {
+      "channel": "channel name",
+      "title": "their video title",
+      "angle": "what angle they took",
+      "weakness": "where their coverage falls short"
+    }
+  ],
+  "competitorInsight": "2-3 sentence synthesis of what the competitor landscape means for your opportunity",
+  "topicDepth": {
+    "summary": "3-4 sentence overview",
+    "keyFacts": ["5-7 specific verifiable facts"],
+    "timeline": ["key moments in chronological order if applicable"],
+    "mainCharacters": ["key people or companies involved"]
+  }
+}`
+      }],
+    });
+
+    let jsonText = '';
+    for (const block of message.content) {
+      if (block.type === 'text') jsonText += block.text;
+    }
+
+    const parsed = parseClaudeJson(jsonText);
+
+    // Sanitize angles
+    let angles = Array.isArray(parsed.angles) ? parsed.angles : [];
+    angles = angles.map((a, i) => sanitizeAngle(a, i));
+
+    // Enforce exactly 4 angles
+    if (angles.length > 4) angles = angles.slice(0, 4);
+    while (angles.length < 4) {
+      angles.push(sanitizeAngle({ title: `Alternative angle ${angles.length + 1}` }, angles.length));
+    }
+
+    // Validate recommendedAngleId
+    const angleIds = angles.map(a => a.angleId);
+    let recommendedAngleId = parsed.recommendedAngleId;
+    if (!angleIds.includes(recommendedAngleId)) {
+      recommendedAngleId = angles.reduce((best, a) => a.fitScore > best.fitScore ? a : best, angles[0]).angleId;
+    }
+
+    // Sanitize topicDepth
+    const td = parsed.topicDepth || {};
+    let keyFacts = Array.isArray(td.keyFacts) ? td.keyFacts.filter(f => typeof f === 'string' && f.trim()) : [];
+    if (keyFacts.length > 7) keyFacts = keyFacts.slice(0, 7);
+    while (keyFacts.length < 5) keyFacts.push('Additional research needed');
+
+    const topicDepth = {
+      summary: td.summary || '',
+      keyFacts,
+      timeline: Array.isArray(td.timeline) ? td.timeline.filter(t => typeof t === 'string' && t.trim()) : [],
+      mainCharacters: Array.isArray(td.mainCharacters) ? td.mainCharacters.filter(c => typeof c === 'string' && c.trim()) : [],
+    };
+
+    // Sanitize competitorCoverage
+    const competitorCoverage = Array.isArray(parsed.competitorCoverage)
+      ? parsed.competitorCoverage.map(c => ({
+          channel: c.channel || '',
+          title: c.title || '',
+          angle: c.angle || '',
+          weakness: c.weakness || '',
+        }))
+      : [];
+
+    res.json({
+      topic: parsed.topic || opportunity.title,
+      angles,
+      recommendedAngleId,
+      competitorCoverage,
+      competitorInsight: typeof parsed.competitorInsight === 'string' && parsed.competitorInsight.trim()
+        ? parsed.competitorInsight
+        : 'No direct competitor analysis available for this topic.',
+      topicDepth,
+    });
+  } catch (err) {
+    console.error('[research/angles] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/research/idea/save
+router.post('/idea/save', async (req, res) => {
+  const { opportunity, selectedAngle, profile } = req.body;
+
+  if (!opportunity || !opportunity.title?.trim()) {
+    return res.status(400).json({ error: 'opportunity with title is required' });
+  }
+  if (!selectedAngle || !selectedAngle.angleId?.trim()) {
+    return res.status(400).json({ error: 'selectedAngle with angleId is required' });
+  }
+  if (!profile || !profile.profileId) {
+    return res.status(400).json({ error: 'profile with profileId is required' });
+  }
+
+  res.json({
+    ideaId: `idea_${Date.now()}`,
+    savedAt: new Date().toISOString(),
+    topic: opportunity.title,
+    opportunityScore: opportunity.opportunityScore || 0,
+    selectedAngle,
+    profileId: profile.profileId,
+    status: 'saved',
+  });
+});
+
 module.exports = router;

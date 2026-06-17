@@ -65,7 +65,7 @@ export default function App() {
     switch (activePage) {
       case 'projects':       return <Projects onOpen={handleOpenProject} onNew={handleNewProject} />
       case 'video-creator':  return <VideoCreator key={creatorKey} />
-      case 'video-research': return <VideoResearch />
+      case 'video-research': return <VideoResearch onNavigate={setActivePage} />
       case 'script-writer':  return <ScriptWriter />
       case 'title-thumbnail':return <TitleThumbnail />
       case 'settings':       return <Settings />
