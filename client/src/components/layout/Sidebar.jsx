@@ -23,7 +23,7 @@ const NAV_ITEMS = [
     id: 'script-writer',
     label: 'Script Writer',
     icon: PenLine,
-    available: false,
+    available: true,
   },
   {
     id: 'title-thumbnail',

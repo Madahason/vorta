@@ -2743,3 +2743,93 @@ Fourth phase of the Video Research module. Two new UI surfaces: a History Panel 
 - [x] 27. Zero console errors
 - [x] 28. Layout intact at all widths
 - [x] 29. PLAN.md updated
+
+---
+
+## Phase VR-5 — Script Writer Handoff ✅ COMPLETE
+**Commit:** `feature: VR-5 script writer handoff — research brief panel, idea wiring, sidebar cleanup`
+**Date:** 2026-06-18
+
+### Overview
+Final phase of the Video Research module (before VR-6 data layer upgrade). Adds a Research Brief panel at the top of the Script Writer page that displays the saved idea from `vr_selected_idea` with full context: topic, selected angle with hook, collapsible topic depth and competitor coverage, stale profile warning, and "Change idea" / "Clear brief" actions. Script Writer sidebar item is now active. Handoff wiring ensures seamless navigation between Video Research and Script Writer.
+
+### Frontend — `client/src/pages/ScriptWriter.jsx` (full rewrite)
+
+**ResearchBrief panel:**
+- Full-width dark card with purple left border accent, "Research Brief" + "From Video Research" chip
+- Row 1: Topic title + opportunity score badge
+- Row 2: Selected angle — title, pitch, approach, hook quote block
+- Row 3: Topic depth (collapsible, collapsed by default) — summary, key facts (numbered), timeline, key players (chips)
+- Row 4: Competitor coverage (collapsible, collapsed by default) — cards + insight paragraph
+- Row 5: Footer — channel name + niche, "Idea saved [date]", "Change idea" + "Clear brief" actions
+- Stale warning bar when `idea.profileId !== profile.profileId`
+
+**No-brief state:**
+- If `vr_selected_idea` absent or `vr_brief_dismissed_in_scriptwriter` is `true`: subtle "Research it in Video Research →" link
+- "Coming soon" placeholder preserved below the brief/link
+
+**Clear brief flow:**
+- Confirmation modal → sets `vr_brief_dismissed_in_scriptwriter` in localStorage → React state update removes panel (no page reload)
+- Does NOT delete `vr_selected_idea` — idea remains in Video Research
+- Saving a new idea in VR-3 clears `vr_brief_dismissed_in_scriptwriter` automatically
+
+### Other changes
+- `client/src/App.jsx` — passes `onNavigate` to `<ScriptWriter />`
+- `client/src/components/layout/Sidebar.jsx` — Script Writer `available: true` (was `false`)
+- `client/src/pages/VideoResearch.jsx` — added `LS_BRIEF_DISMISSED` constant; VR-3 `handleSave` clears the flag on new idea save
+
+### Production-readiness checks
+- [x] 1. Brief renders when vr_selected_idea present
+- [x] 2. Subtle link renders when idea absent
+- [x] 3. Subtle link renders when brief dismissed
+- [x] 4. All fields render with data — fallbacks for missing fields
+- [x] 5. Score badge colors correct
+- [x] 6. Hook quote block renders
+- [x] 7. Topic research toggle works
+- [x] 8. Competitor coverage toggle works
+- [x] 9. Timeline conditional on array length
+- [x] 10. Stale warning on profileId mismatch
+- [x] 11. No stale warning when IDs match
+- [x] 12. "Change idea" navigates to Video Research
+- [x] 13. "Change idea" preserves vr_selected_idea
+- [x] 14. "Clear brief" modal shows correct text
+- [x] 15. Cancel — no changes
+- [x] 16. Confirm — sets dismissed flag, panel replaced with link, idea preserved
+- [x] 17. Dismissed state persists across navigations
+- [x] 18. New idea save clears dismissed flag
+- [x] 19. "Go to Script Writer" banner navigates correctly
+- [x] 20. Script Writer sidebar active
+- [x] 21. Video Research sidebar active
+- [x] 22. Title & Thumbnail retains "Coming soon"
+- [x] 23. Channel name + niche in footer with graceful fallback
+- [x] 24. Saved date formatted correctly
+- [x] 25. Malformed localStorage → try/catch → subtle link, no crash
+- [x] 26. Collapsible sections start collapsed
+- [x] 27. Zero console errors
+- [x] 28. Full-width layout at all viewport widths
+- [x] 29. PLAN.md updated
+
+---
+
+## Video Research Module — Feature Complete (pending VR-6 data layer upgrade)
+
+The Video Research module (VR-1 through VR-5) is fully built and functional. The current implementation uses Claude with web search for all research data (trending topics, content gaps, competitor analysis). All phases:
+
+| Phase | Feature | Status |
+|-------|---------|--------|
+| VR-1 | Channel Profile Setup | ✅ Complete |
+| VR-2 | Research Dashboard + Opportunity Discovery | ✅ Complete |
+| VR-3 | Idea Card + Angle Selection | ✅ Complete |
+| VR-4 | Research History + Profile Management | ✅ Complete |
+| VR-5 | Script Writer Handoff | ✅ Complete |
+
+### Phase VR-6 — Data Layer Upgrade (planned, not started)
+
+Replace Claude web search with structured API data sources for more reliable, quantitative research:
+
+**Three data sources:**
+1. **Google Trends API** — real-time trending topics with volume data, rising queries, regional interest
+2. **YouTube Search API** — direct search for existing coverage, view counts, publish dates, competition density
+3. **YouTube Competitor Pulls** — channel-specific data from competitor handles: recent uploads, top performers, content patterns
+
+Claude remains as the synthesis layer — takes structured API data and generates the editorial analysis (angles, gaps, opportunity scores). The upgrade replaces "Claude guesses from web search" with "Claude analyses real data from APIs".

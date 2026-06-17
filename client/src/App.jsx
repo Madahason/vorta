@@ -66,7 +66,7 @@ export default function App() {
       case 'projects':       return <Projects onOpen={handleOpenProject} onNew={handleNewProject} />
       case 'video-creator':  return <VideoCreator key={creatorKey} />
       case 'video-research': return <VideoResearch onNavigate={setActivePage} />
-      case 'script-writer':  return <ScriptWriter />
+      case 'script-writer':  return <ScriptWriter onNavigate={setActivePage} />
       case 'title-thumbnail':return <TitleThumbnail />
       case 'settings':       return <Settings />
       default:               return <VideoCreator key={creatorKey} />

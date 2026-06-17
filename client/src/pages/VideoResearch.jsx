@@ -6,6 +6,7 @@ const LS_HISTORY = 'vr_research_history'
 const LS_LAST_REPORT = 'vr_last_report'
 const LS_SELECTED_IDEA = 'vr_selected_idea'
 const LS_BANNER_DISMISSED = 'vr_idea_banner_dismissed'
+const LS_BRIEF_DISMISSED = 'vr_brief_dismissed_in_scriptwriter'
 const MAX_HISTORY = 20
 
 // --- localStorage helpers ---
@@ -537,6 +538,7 @@ function IdeaCardPanel({ item, panelSource, profile, onClose, onSaved, onNavigat
       const json = await resp.json()
       if (!resp.ok) throw new Error(json.error || 'Failed to save idea')
       saveJson(LS_SELECTED_IDEA, json)
+      localStorage.removeItem(LS_BRIEF_DISMISSED)
       setSaveSuccess(true)
       if (onSaved) onSaved(json)
       setTimeout(() => {
