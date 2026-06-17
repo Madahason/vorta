@@ -2320,3 +2320,57 @@ Two parallel upgrades to the Remotion audio pipeline:
 - `client/src/components/video-creator/SceneGrid.jsx` — Framer Motion code expand/collapse
 - `client/src/pages/VideoCreator.jsx` — Framer Motion wizard step transition
 - `client/src/pages/wizard/VisualsStep.jsx` — Framer Motion clip progress card appear
+
+---
+
+## Session 20 — Production Test: Transitions, J/L Cuts, GSAP, Three.js, Framer Motion
+**Commit:** `test: production readiness — transitions, J-L cuts, GSAP, Three.js, Framer Motion`
+**Date:** 2026-06-17
+
+### Method
+Code-level verification via Node.js simulation + module resolution checks + client build. Visual/audio tests require the user to run in Remotion Studio — disk space constraint (293MB clips in `remotion/public/clips/`) prevented automated Remotion bundle copy.
+
+### Check 1 — Transition system ✓ PASSED
+Node.js simulation of `computeSceneStartFrames` + `calculateDocumentaryDuration` with all 4 types:
+- Duration: `6×30+5×30+7×30+5×30+5×30 − 12 − 1 − 10 − 10 = 807 frames` ✓
+- dissolve deducts 12fr, cut deducts 1fr, dip deducts `DIP_FADE×2 − DIP_MID = 10fr` ✓
+- Scene start frames advance correctly for all transition types ✓
+
+### Check 2 — Narration timing ✓ PASSED
+`getTransition().narrationIn` per type:
+- dissolve: 12fr — after crossfade completes ✓
+- cut: 1fr — near-instant ✓
+- dip_black / dip_white: 9fr — starts as dip plate fades to new scene ✓
+
+### Check 3 — J-cut ✓ PASSED
+- `narrationStart = Math.max(0, sceneStart − overlapFr)` — starts before visual cut ✓
+- J-cut on scene 0 → clamps to 0 ✓; on dip transitions or last scene → falls back to "hard" ✓
+
+### Check 4 — L-cut ✓ PASSED
+- `sequenceDuration = sceneEnd + overlapFr − narrationStart` — bleeds past scene end ✓
+- Volume fades over 6 frames at the bleed end ✓; last scene → "hard" ✓
+
+### Check 5 — GSAP Ken Burns ✓ PASSED
+- Named import `{ gsap }` confirmed working; `parseEase('power2.out')(0.5) === 0.875` ✓
+- `ImageScene.jsx` imports and uses `easeOut` from `../utils/easings` ✓
+
+### Check 6 — Three.js Globe ✓ PASSED
+- `three` r184 installed, resolves from `remotion/node_modules/` ✓
+- `SceneRenderer` dispatches `shot_type: "3d_graphic"` to `<ThreeGlobe>` ✓
+- Determinism: rotation = `frame / fps × rotationSpeed`, no requestAnimationFrame ✓
+- Canvas: `renderer.setSize(1920, 1080, false)` + `setPixelRatio(1)` ✓
+- `ErrorBoundaryScene` wrapper catches WebGL unavailability gracefully ✓
+
+### Check 7 — Framer Motion UI ✓ PASSED
+- `framer-motion@12.40.0` installed; client build clean (2224 modules, 0 errors) ✓
+- SceneGrid: `AnimatePresence` + `motion.div key="code-expand"` height 0→auto ✓
+- VideoCreator: `AnimatePresence mode="wait"` keyed by `wizard.currentStep` ✓
+- VisualsStep: clip cards use `motion.div` scale+opacity entrance ✓
+
+### Check 8 — Full render
+Not tested in this session — disk space constraint. All module imports verified; no code issues found.
+
+### Known limitations
+- **Disk space**: `remotion/public/clips/` is 293MB. Delete unused clips before running `remotion bundle` if disk is tight.
+- **WebGL in headless render**: `ThreeGlobe` requires WebGL. Railway Docker needs GPU/WebGL support for headless Chrome render; otherwise `ErrorBoundaryScene` shows error card.
+- **Visual tests for user**: In Remotion Studio — scrub transitions at scene boundaries, listen for J/L cut audio bleed, watch Ken Burns deceleration on image scenes. Set one scene to `shot_type: "3d_graphic"` + `globe_markers` in localStorage to test globe.
