@@ -530,6 +530,27 @@ Return ONLY valid JSON array. No markdown, no preamble.
 [{"title":"...","channel":"...","summary":"...","performanceReason":"...","opportunityScore":8,"suggestedAngle":"...","alreadyCovered":false}]`;
 }
 
+function sanitizeItem(item, panelName) {
+  const base = {
+    title: item.title || 'Untitled',
+    summary: item.summary || '',
+    opportunityScore: clampScore(item.opportunityScore),
+    estimatedSearchVolume: ['low', 'medium', 'high'].includes(item.estimatedSearchVolume) ? item.estimatedSearchVolume : 'medium',
+    alreadyCovered: !!item.alreadyCovered,
+  };
+
+  if (panelName === 'trending') {
+    return { ...base, trendSignal: item.trendSignal || '' };
+  }
+  if (panelName === 'gaps') {
+    return { ...base, gapReason: item.gapReason || '', lastCoveredYear: typeof item.lastCoveredYear === 'number' ? item.lastCoveredYear : null };
+  }
+  if (panelName === 'competitors') {
+    return { ...base, channel: item.channel || '', performanceReason: item.performanceReason || '', suggestedAngle: item.suggestedAngle || '' };
+  }
+  return base;
+}
+
 async function runDiscoveryPanel(panelName, prompt, catalog) {
   const client = new Anthropic();
   const message = await client.messages.create({
@@ -547,15 +568,13 @@ async function runDiscoveryPanel(panelName, prompt, catalog) {
   const parsed = parseClaudeJson(jsonText);
   const items = Array.isArray(parsed) ? parsed : (parsed[panelName] || parsed.items || []);
 
-  const cleaned = items.map(item => ({
-    ...item,
-    opportunityScore: clampScore(item.opportunityScore),
-  }));
+  const cleaned = items.map(item => sanitizeItem(item, panelName));
 
   return filterCovered(cleaned, catalog);
 }
 
 // POST /api/research/discover
+// Optional query param ?panel=trending|gaps|competitors to re-run a single panel
 router.post('/discover', async (req, res) => {
   const { profile } = req.body;
   const err = validateProfile(profile);
@@ -565,7 +584,20 @@ router.post('/discover', async (req, res) => {
     return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
   }
 
+  const singlePanel = req.query.panel;
+  const validPanels = ['trending', 'gaps', 'competitors'];
+
+  if (singlePanel && !validPanels.includes(singlePanel)) {
+    return res.status(400).json({ error: `Invalid panel: ${singlePanel}. Must be one of: ${validPanels.join(', ')}` });
+  }
+
   try {
+    if (singlePanel) {
+      const promptFn = { trending: buildTrendingPrompt, gaps: buildGapsPrompt, competitors: buildCompetitorsPrompt }[singlePanel];
+      const items = await runDiscoveryPanel(singlePanel, promptFn(profile), profile.catalog);
+      return res.json({ [singlePanel]: items });
+    }
+
     const results = await Promise.allSettled([
       runDiscoveryPanel('trending', buildTrendingPrompt(profile), profile.catalog),
       runDiscoveryPanel('gaps', buildGapsPrompt(profile), profile.catalog),
@@ -613,11 +645,14 @@ router.post('/discover/stream', async (req, res) => {
   });
 
   discoveryRunning = true;
+  let clientDisconnected = false;
+  req.on('close', () => { clientDisconnected = true; discoveryRunning = false; });
+
   const reportId = `report_${Date.now()}`;
   const generatedAt = new Date().toISOString();
 
   function send(data) {
-    if (!res.writableEnded) {
+    if (!clientDisconnected && !res.writableEnded) {
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     }
   }
@@ -644,7 +679,7 @@ router.post('/discover/stream', async (req, res) => {
 
   send({ type: 'done', reportId, generatedAt });
   discoveryRunning = false;
-  res.end();
+  if (!res.writableEnded) res.end();
 });
 
 // GET /api/research/discover/status

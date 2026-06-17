@@ -462,7 +462,11 @@ function ExplorePanel({ item, onClose }) {
 // --- Research Dashboard (State C) ---
 function ResearchDashboard({ profile, onBack }) {
   const [report, setReport] = useState(() => loadLastReport())
-  const [panelData, setPanelData] = useState({ trending: null, gaps: null, competitors: null })
+  const [panelData, setPanelData] = useState(() => {
+    const r = loadLastReport()
+    if (r) return { trending: r.trending || [], gaps: r.gaps || [], competitors: r.competitors || [] }
+    return { trending: null, gaps: null, competitors: null }
+  })
   const [panelLoading, setPanelLoading] = useState({ trending: false, gaps: false, competitors: false })
   const [panelErrors, setPanelErrors] = useState({ trending: null, gaps: null, competitors: null })
   const [streaming, setStreaming] = useState(false)
@@ -478,13 +482,6 @@ function ResearchDashboard({ profile, onBack }) {
     const iv = setInterval(update, 30000)
     return () => clearInterval(iv)
   }, [genTime])
-
-  // On mount, populate panelData from cached report
-  useEffect(() => {
-    if (report) {
-      setPanelData({ trending: report.trending || [], gaps: report.gaps || [], competitors: report.competitors || [] })
-    }
-  }, [])
 
   const runDiscovery = useCallback(async () => {
     setStreaming(true)
@@ -552,7 +549,7 @@ function ResearchDashboard({ profile, onBack }) {
     setPanelLoading(prev => ({ ...prev, [panelName]: true }))
     setPanelErrors(prev => ({ ...prev, [panelName]: null }))
     try {
-      const resp = await fetch('/api/research/discover', {
+      const resp = await fetch(`/api/research/discover?panel=${panelName}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ profile }),
@@ -561,7 +558,6 @@ function ResearchDashboard({ profile, onBack }) {
       if (!resp.ok) throw new Error(data.error || 'Failed to retry')
       const items = data[panelName] || []
       setPanelData(prev => ({ ...prev, [panelName]: items }))
-      // Update stored report
       setReport(prev => {
         const updated = { ...prev, [panelName]: items }
         saveJson(LS_LAST_REPORT, updated)
