@@ -1,6 +1,70 @@
 const router = require('express').Router();
 const Anthropic = require('@anthropic-ai/sdk');
 
+// POST /api/research/suggestions
+router.post('/suggestions', async (req, res) => {
+  const { niche, subFocus } = req.body;
+
+  if (!niche?.trim() || !subFocus?.trim()) {
+    return res.status(400).json({ error: 'Both niche and subFocus are required' });
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'your_key_here') {
+    return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured — add it to .env' });
+  }
+
+  try {
+    const client = new Anthropic();
+    const message = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2048,
+      system: 'You are a YouTube content strategist. Return only valid JSON. No markdown fences, no preamble, no explanation.',
+      messages: [{
+        role: 'user',
+        content: `Given this YouTube niche and sub-focus, suggest 5 editorial angles and 5 tones.
+
+Niche: ${niche.trim()}
+Sub-focus: ${subFocus.trim()}
+
+Rules:
+- Return exactly 5 angles and 5 tones
+- Each option must be specific and differentiated — not generic variations of the same idea
+- Each option is a short label followed by a dash and a one-line description of what it means in practice
+- Angles describe the editorial perspective or lens through which content is created
+- Tones describe the voice, mood, and feel of the delivery
+
+Return this exact JSON structure:
+{"angles":["string","string","string","string","string"],"tones":["string","string","string","string","string"]}`
+      }],
+    });
+
+    const text = message.content[0].text.trim();
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        parsed = JSON.parse(jsonMatch[0]);
+      } else {
+        throw new Error('Claude returned invalid JSON for suggestions');
+      }
+    }
+
+    if (!Array.isArray(parsed.angles) || !Array.isArray(parsed.tones)) {
+      throw new Error('Invalid suggestion format — expected angles and tones arrays');
+    }
+
+    res.json({
+      angles: parsed.angles.filter(a => typeof a === 'string' && a.trim()).slice(0, 5),
+      tones: parsed.tones.filter(t => typeof t === 'string' && t.trim()).slice(0, 5),
+    });
+  } catch (err) {
+    console.error('[research/suggestions] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/research/profile/fresh
 router.post('/profile/fresh', async (req, res) => {
   const { niche, subFocus, angle, tone, competitors } = req.body;

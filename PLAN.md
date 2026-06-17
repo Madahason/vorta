@@ -2425,6 +2425,15 @@ First phase of the Video Research module. Two paths for creating a Channel Profi
 
 ### Backend — `server/routes/research.js`
 
+**POST /api/research/suggestions**
+- Accepts: `{ niche, subFocus }`
+- Validates both required (400 if either empty)
+- Single Claude Sonnet 4.6 call returns both angles and tones
+- Returns: `{ angles: [5 strings], tones: [5 strings] }`
+- Each option: short label + dash + one-line description
+- Filters to non-empty strings, slices to 5 max
+- JSON fallback: strips markdown fences if Claude wraps them
+
 **POST /api/research/profile/fresh**
 - Accepts: `{ niche, subFocus, angle, tone, competitors[] }`
 - Validates all required fields (400 if any empty)
@@ -2468,8 +2477,10 @@ First phase of the Video Research module. Two paths for creating a Channel Profi
 
 **State A — No profile (setup form):**
 - Two-tab interface: "Fresh Channel" / "Existing Channel"
-- Fresh tab: niche, sub-focus, angle, tone inputs + tag-style competitor input (max 5, Enter to add)
+- Fresh tab: niche, sub-focus, angle (smart field), tone (smart field) + tag-style competitor input (max 5, Enter to add)
+- Smart field behaviour: "Suggest →" button appears when niche + sub-focus are both filled; one API call fetches 5 angle + 5 tone chips; clicking a chip populates the text input and highlights it; editing text after selection deselects the chip; changing niche/subFocus clears stale suggestions
 - Existing tab: YouTube URL input + competitor tags + timing note
+- Two-phase loading for existing path: "Pulling channel data..." for first 10s, then "Synthesising profile..." until complete
 - Client-side validation: submit buttons disabled until required fields filled
 - Loading state with spinner + status messages
 - Inline error display on failure
@@ -2492,13 +2503,27 @@ First phase of the Video Research module. Two paths for creating a Channel Profi
 - `.env` — added `YOUTUBE_API_KEY=` placeholder, fixed `NODE_TLS_REJECT_UNAUTHORIZED=0` (was `0c`)
 
 ### Production-readiness checks
-- [x] YouTube API key missing → 400 "YOUTUBE_API_KEY not configured"
-- [x] Channel URL malformed / not found → 404 user-friendly message
-- [x] Claude API failure → 500 with error detail, client shows inline
-- [x] localStorage full → try/catch, warning shown
-- [x] Empty fields → client-side validation + server-side 400
-- [x] Double-click → button disabled on first click
-- [x] Both URL formats → `/channel/UCxxx` regex + `/@handle` search resolution
-- [x] API keys from .env → all via `process.env`
-- [x] Malformed localStorage JSON → try/catch, falls back to State A
-- [x] Client build → zero errors, zero warnings
+- [x] 1. POST /suggestions with empty niche/subFocus → 400
+- [x] 2. POST /suggestions with valid input → 5 angles + 5 tones, valid JSON
+- [x] 3. POST /profile/fresh with empty fields → 400
+- [x] 4. POST /profile/fresh with valid input → complete Channel Profile JSON
+- [x] 5. POST /profile/existing with `/@handle` → resolves correctly
+- [x] 6. POST /profile/existing with `/channel/UCxxx` → resolves correctly
+- [x] 7. POST /profile/existing with invalid URL → 400
+- [x] 8. POST /profile/existing with non-existent channel → 404
+- [x] 9. YOUTUBE_API_KEY missing → 400 "YOUTUBE_API_KEY not configured"
+- [x] 10. Claude API failure → 500 with error detail
+- [x] 11. "Suggest →" only when niche + subFocus non-empty
+- [x] 12. One API call fetches both angles and tones
+- [x] 13. Chip selection populates text input
+- [x] 14. Editing text after chip deselects chip
+- [x] 15. Changing niche/subFocus clears stale suggestions
+- [x] 16. Build Profile disabled on click, re-enabled on error
+- [x] 17. Fresh path loading message
+- [x] 18. Existing path two-phase loading (10s switch)
+- [x] 19. localStorage try/catch with fallback
+- [x] 20. Edit Profile confirmation modal
+- [x] 21. "Start Researching →" disabled with hover tooltip
+- [x] 22. All CSS classes use vorta- prefix
+- [x] 23. Client build → zero errors, zero warnings (2224 modules)
+- [x] 24. PLAN.md updated

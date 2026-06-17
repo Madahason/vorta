@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Search, X, Loader2, AlertCircle, ChevronRight, RefreshCw, Sparkles, Globe, TrendingUp, Target, Users, BarChart3 } from 'lucide-react'
 
 const LS_KEY = 'vr_channel_profile'
@@ -23,7 +23,7 @@ function saveProfile(profile) {
 }
 
 // --- Tag Input ---
-function TagInput({ tags, onChange, max = 5, placeholder }) {
+function TagInput({ tags, onChange, max = 5, placeholder, disabled }) {
   const [input, setInput] = useState('')
 
   function addTag() {
@@ -44,7 +44,7 @@ function TagInput({ tags, onChange, max = 5, placeholder }) {
       {tags.map((tag, i) => (
         <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium" style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}>
           {tag}
-          <button onClick={() => removeTag(i)} className="hover:text-white ml-0.5">
+          <button onClick={() => removeTag(i)} className="hover:text-white ml-0.5" type="button">
             <X size={12} />
           </button>
         </span>
@@ -58,8 +58,76 @@ function TagInput({ tags, onChange, max = 5, placeholder }) {
           }}
           placeholder={tags.length === 0 ? placeholder : `${max - tags.length} remaining`}
           className="flex-1 min-w-[120px] bg-transparent border-none outline-none text-white/80 text-sm placeholder:text-white/30"
+          disabled={disabled}
         />
       )}
+    </div>
+  )
+}
+
+// --- Suggestion Chips ---
+function SuggestionChips({ suggestions, selected, onSelect }) {
+  if (!suggestions || suggestions.length === 0) return null
+
+  return (
+    <div className="vorta-suggestion-chips flex flex-wrap gap-1.5 mb-2">
+      {suggestions.map((s, i) => {
+        const isSelected = selected === i
+        return (
+          <button
+            key={i}
+            type="button"
+            onClick={() => onSelect(i)}
+            className="vorta-chip px-2.5 py-1 rounded-md text-xs transition-all cursor-pointer"
+            style={{
+              background: isSelected ? 'rgba(139,92,246,0.25)' : 'rgba(255,255,255,0.04)',
+              border: `1px solid ${isSelected ? 'rgba(139,92,246,0.5)' : 'rgba(255,255,255,0.08)'}`,
+              color: isSelected ? '#c4b5fd' : 'rgba(255,255,255,0.55)',
+            }}
+          >
+            {s.length > 60 ? s.slice(0, 57) + '…' : s}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// --- Smart Field (Angle/Tone with suggestion chips) ---
+function SmartField({ label, value, onChange, suggestions, selectedChip, onChipSelect, placeholder, disabled }) {
+  const lastChipText = useRef(null)
+
+  function handleChipSelect(idx) {
+    const text = suggestions[idx]
+    lastChipText.current = text
+    onChipSelect(idx)
+    onChange(text)
+  }
+
+  function handleInputChange(e) {
+    const newVal = e.target.value
+    onChange(newVal)
+    if (lastChipText.current && newVal !== lastChipText.current) {
+      onChipSelect(null)
+      lastChipText.current = null
+    }
+  }
+
+  return (
+    <div className="vorta-field">
+      <label className="vorta-label">{label}</label>
+      <SuggestionChips
+        suggestions={suggestions}
+        selected={selectedChip}
+        onSelect={handleChipSelect}
+      />
+      <input
+        className="vorta-input"
+        value={value}
+        onChange={handleInputChange}
+        placeholder={placeholder}
+        disabled={disabled}
+      />
     </div>
   )
 }
@@ -78,17 +146,68 @@ function SetupForm({ onProfileCreated }) {
   const [tone, setTone] = useState('')
   const [freshCompetitors, setFreshCompetitors] = useState([])
 
+  // Suggestions state
+  const [angleSuggestions, setAngleSuggestions] = useState([])
+  const [toneSuggestions, setToneSuggestions] = useState([])
+  const [selectedAngleChip, setSelectedAngleChip] = useState(null)
+  const [selectedToneChip, setSelectedToneChip] = useState(null)
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
+  const [suggestionsLoaded, setSuggestionsLoaded] = useState(false)
+  const suggestNicheRef = useRef('')
+  const suggestSubFocusRef = useRef('')
+
   // Existing fields
   const [channelUrl, setChannelUrl] = useState('')
   const [existingCompetitors, setExistingCompetitors] = useState([])
 
+  // Two-phase loading timer for existing path
+  const phaseTimerRef = useRef(null)
+
   const freshValid = niche.trim() && subFocus.trim() && angle.trim() && tone.trim()
   const existingValid = channelUrl.trim()
+  const canSuggest = niche.trim() && subFocus.trim() && !suggestionsLoading && !loading
+
+  // Clear suggestions when niche or subFocus changes after they were loaded
+  useEffect(() => {
+    if (!suggestionsLoaded) return
+    if (niche.trim() !== suggestNicheRef.current || subFocus.trim() !== suggestSubFocusRef.current) {
+      setAngleSuggestions([])
+      setToneSuggestions([])
+      setSelectedAngleChip(null)
+      setSelectedToneChip(null)
+      setSuggestionsLoaded(false)
+    }
+  }, [niche, subFocus, suggestionsLoaded])
+
+  const handleSuggest = useCallback(async () => {
+    setSuggestionsLoading(true)
+    setError('')
+    try {
+      const resp = await fetch('/api/research/suggestions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ niche: niche.trim(), subFocus: subFocus.trim() }),
+      })
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.error || 'Failed to get suggestions')
+      setAngleSuggestions(data.angles || [])
+      setToneSuggestions(data.tones || [])
+      setSelectedAngleChip(null)
+      setSelectedToneChip(null)
+      setSuggestionsLoaded(true)
+      suggestNicheRef.current = niche.trim()
+      suggestSubFocusRef.current = subFocus.trim()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSuggestionsLoading(false)
+    }
+  }, [niche, subFocus])
 
   async function handleFresh() {
     setLoading(true)
     setError('')
-    setStatus('Synthesising profile...')
+    setStatus('Building your channel profile...')
     try {
       const resp = await fetch('/api/research/profile/fresh', {
         method: 'POST',
@@ -113,13 +232,15 @@ function SetupForm({ onProfileCreated }) {
     setLoading(true)
     setError('')
     setStatus('Pulling channel data...')
+    phaseTimerRef.current = setTimeout(() => {
+      setStatus('Synthesising profile...')
+    }, 10000)
     try {
       const resp = await fetch('/api/research/profile/existing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channelUrl, competitors: existingCompetitors }),
       })
-      setStatus('Synthesising profile...')
       const data = await resp.json()
       if (!resp.ok) throw new Error(data.error || 'Failed to analyse channel')
       if (!saveProfile(data)) {
@@ -131,6 +252,10 @@ function SetupForm({ onProfileCreated }) {
     } finally {
       setLoading(false)
       setStatus('')
+      if (phaseTimerRef.current) {
+        clearTimeout(phaseTimerRef.current)
+        phaseTimerRef.current = null
+      }
     }
   }
 
@@ -174,17 +299,53 @@ function SetupForm({ onProfileCreated }) {
               <label className="vorta-label">Sub-focus</label>
               <input className="vorta-input" value={subFocus} onChange={e => setSubFocus(e.target.value)} placeholder="e.g. corporate fraud and collapse" disabled={loading} />
             </div>
-            <div className="vorta-field">
-              <label className="vorta-label">Angle</label>
-              <input className="vorta-input" value={angle} onChange={e => setAngle(e.target.value)} placeholder="e.g. investigative and critical" disabled={loading} />
-            </div>
-            <div className="vorta-field">
-              <label className="vorta-label">Tone</label>
-              <input className="vorta-input" value={tone} onChange={e => setTone(e.target.value)} placeholder="e.g. dark and clinical like MagnatesMedia" disabled={loading} />
-            </div>
+
+            {/* Suggest button */}
+            {canSuggest && !suggestionsLoaded && (
+              <button
+                type="button"
+                onClick={handleSuggest}
+                className="vorta-btn vorta-btn-ghost text-xs flex items-center gap-1.5"
+                style={{ color: '#c4b5fd' }}
+              >
+                <Sparkles size={12} />
+                Suggest →
+              </button>
+            )}
+            {suggestionsLoading && (
+              <div className="flex items-center gap-2 text-xs text-purple-300/70">
+                <Loader2 size={12} className="animate-spin" />
+                Generating suggestions...
+              </div>
+            )}
+
+            {/* Angle (smart field) */}
+            <SmartField
+              label="Angle"
+              value={angle}
+              onChange={setAngle}
+              suggestions={angleSuggestions}
+              selectedChip={selectedAngleChip}
+              onChipSelect={setSelectedAngleChip}
+              placeholder="e.g. investigative and critical"
+              disabled={loading}
+            />
+
+            {/* Tone (smart field) */}
+            <SmartField
+              label="Tone"
+              value={tone}
+              onChange={setTone}
+              suggestions={toneSuggestions}
+              selectedChip={selectedToneChip}
+              onChipSelect={setSelectedToneChip}
+              placeholder="e.g. dark and clinical like MagnatesMedia"
+              disabled={loading}
+            />
+
             <div className="vorta-field">
               <label className="vorta-label">Competitors (max 5)</label>
-              <TagInput tags={freshCompetitors} onChange={setFreshCompetitors} placeholder="@handle — press Enter to add" />
+              <TagInput tags={freshCompetitors} onChange={setFreshCompetitors} placeholder="@handle — press Enter to add" disabled={loading} />
             </div>
             <button
               onClick={handleFresh}
@@ -203,7 +364,7 @@ function SetupForm({ onProfileCreated }) {
             </div>
             <div className="vorta-field">
               <label className="vorta-label">Competitors (max 5)</label>
-              <TagInput tags={existingCompetitors} onChange={setExistingCompetitors} placeholder="@handle — press Enter to add" />
+              <TagInput tags={existingCompetitors} onChange={setExistingCompetitors} placeholder="@handle — press Enter to add" disabled={loading} />
             </div>
             <div className="rounded-lg px-3 py-2 text-xs text-white/35" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}>
               Analysing your channel pulls your full video catalog, top performers, and recent uploads via the YouTube API. This takes 15–30 seconds.
@@ -283,7 +444,7 @@ function ProfileSummary({ profile, onEdit }) {
 
       {/* Competitors */}
       {(profile.competitors || []).length > 0 && (
-        <div className="rounded-xl p-4 mb-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+        <div className="vorta-profile-section rounded-xl p-4 mb-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
           <h3 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">
             <Users size={12} className="inline mr-1.5 -mt-0.5" />
             Competitors
@@ -300,7 +461,7 @@ function ProfileSummary({ profile, onEdit }) {
 
       {/* Channel Voice */}
       {profile.channelVoice && (
-        <div className="rounded-xl p-4 mb-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+        <div className="vorta-profile-section rounded-xl p-4 mb-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
           <h3 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">Channel Voice</h3>
           <p className="text-sm text-white/70 leading-relaxed">{profile.channelVoice}</p>
         </div>
@@ -308,7 +469,7 @@ function ProfileSummary({ profile, onEdit }) {
 
       {/* Top Topics */}
       {pf.topTopics?.length > 0 && (
-        <div className="rounded-xl p-4 mb-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+        <div className="vorta-profile-section rounded-xl p-4 mb-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
           <h3 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">
             <TrendingUp size={12} className="inline mr-1.5 -mt-0.5" />
             Top-Performing Topics
@@ -326,7 +487,7 @@ function ProfileSummary({ profile, onEdit }) {
       {/* Winning Formats + Performance */}
       <div className="grid grid-cols-2 gap-3 mb-4">
         {pf.winningFormats?.length > 0 && (
-          <div className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <div className="vorta-profile-section rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
             <h3 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">Winning Formats</h3>
             <ul className="space-y-1">
               {pf.winningFormats.map((f, i) => (
@@ -339,7 +500,7 @@ function ProfileSummary({ profile, onEdit }) {
           </div>
         )}
         {profile.path === 'existing' && (
-          <div className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <div className="vorta-profile-section rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
             <h3 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">Performance</h3>
             <div className="space-y-2">
               {catalogSize > 0 && (
@@ -364,7 +525,7 @@ function ProfileSummary({ profile, onEdit }) {
 
       {/* Gaps */}
       {(profile.gaps || []).length > 0 && (
-        <div className="rounded-xl p-4 mb-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+        <div className="vorta-profile-section rounded-xl p-4 mb-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
           <h3 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">Content Gaps</h3>
           <ul className="space-y-1.5">
             {profile.gaps.map((g, i) => (
@@ -379,7 +540,7 @@ function ProfileSummary({ profile, onEdit }) {
 
       {/* Current Direction */}
       {cd.recentTopics?.length > 0 && (
-        <div className="rounded-xl p-4 mb-6" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+        <div className="vorta-profile-section rounded-xl p-4 mb-6" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
           <h3 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">Current Direction</h3>
           <div className="flex flex-wrap gap-2 mb-2">
             {cd.recentTopics.map((t, i) => (
@@ -395,7 +556,7 @@ function ProfileSummary({ profile, onEdit }) {
       )}
 
       {/* Start Researching CTA */}
-      <div className="relative group">
+      <div className="vorta-research-cta relative group">
         <button
           disabled
           className="vorta-btn w-full py-3 text-sm font-medium rounded-xl flex items-center justify-center gap-2"
@@ -428,7 +589,7 @@ function ProfileSummary({ profile, onEdit }) {
 
 function InfoCard({ icon: Icon, label, value }) {
   return (
-    <div className="rounded-xl p-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+    <div className="vorta-info-card rounded-xl p-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
       <div className="flex items-center gap-1.5 mb-1">
         <Icon size={11} className="text-white/30" />
         <span className="text-[10px] font-medium text-white/35 uppercase tracking-wider">{label}</span>
