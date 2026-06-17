@@ -2413,3 +2413,92 @@ function sceneDur(scene, fps) {
 
 ### Note: ENOSPC disk warning
 `ENOSPC: no space left on device` from webpack is harmless — cache write fails, next Studio start rebuilds from scratch. Free space by removing unneeded files from `remotion/public/clips/`.
+
+---
+
+## Phase VR-1 — Channel Profile Setup ✅ COMPLETE
+**Commit:** `feature: VR-1 channel profile setup — fresh and existing channel paths`
+**Date:** 2026-06-17
+
+### Overview
+First phase of the Video Research module. Two paths for creating a Channel Profile: "Fresh Channel" (manual niche/angle/tone inputs → Claude synthesis) and "Existing Channel" (YouTube URL → YouTube Data API 3-tier pull → Claude synthesis). Profile persists in localStorage and powers future research phases.
+
+### Backend — `server/routes/research.js`
+
+**POST /api/research/profile/fresh**
+- Accepts: `{ niche, subFocus, angle, tone, competitors[] }`
+- Validates all required fields (400 if any empty)
+- Checks `ANTHROPIC_API_KEY` (500 if missing)
+- Sends inputs to Claude Sonnet 4.6 for synthesis
+- Returns full Channel Profile JSON with `path: "fresh"`, empty `catalog`, niche-landscape-derived performance data
+
+**POST /api/research/profile/existing**
+- Accepts: `{ channelUrl, competitors[] }`
+- Checks `YOUTUBE_API_KEY` (400 if missing), `ANTHROPIC_API_KEY` (500 if missing)
+- Resolves channel ID from URL — handles both `/channel/UCxxx` and `/@handle` formats (search endpoint for handle resolution)
+- Three-tier YouTube API pull:
+  - Tier 1: All video titles (paginated, up to 1000)
+  - Tier 2: Top 20 videos by view count — full metadata
+  - Tier 3: Most recent 30 videos — full metadata
+- Passes all three tiers to Claude Sonnet 4.6 for synthesis
+- Returns full Channel Profile JSON with `path: "existing"`, populated `catalog` and real performance data
+- 404 if channel not found; 500 with error detail if Claude/YouTube fails
+
+**Channel Profile schema:**
+```json
+{
+  "profileId": "prof_[timestamp]",
+  "createdAt": "ISO timestamp",
+  "path": "fresh | existing",
+  "channelName": "string",
+  "niche": "string",
+  "subFocus": "string",
+  "angle": "string",
+  "tone": "string",
+  "competitors": ["array"],
+  "catalog": ["array of titles"],
+  "performanceFingerprint": { "topTopics": [], "winningFormats": [], "avgViewsTop20": 0, "bestPerformingTitle": "" },
+  "currentDirection": { "recentTopics": [], "editorialShift": "" },
+  "channelVoice": "string",
+  "gaps": ["array"]
+}
+```
+
+### Frontend — `client/src/pages/VideoResearch.jsx`
+
+**State A — No profile (setup form):**
+- Two-tab interface: "Fresh Channel" / "Existing Channel"
+- Fresh tab: niche, sub-focus, angle, tone inputs + tag-style competitor input (max 5, Enter to add)
+- Existing tab: YouTube URL input + competitor tags + timing note
+- Client-side validation: submit buttons disabled until required fields filled
+- Loading state with spinner + status messages
+- Inline error display on failure
+- Button disabled during API call (prevents double-click)
+
+**State B — Profile exists (summary card):**
+- Channel name, niche, sub-focus, angle, tone in info cards
+- Competitor tags, channel voice paragraph, top topics, winning formats
+- For existing profiles: catalog size and performance metrics
+- Content gaps list
+- Current direction with recent topics
+- "Edit Profile" button → confirmation modal → clears localStorage → returns to State A
+- "Start Researching →" button (disabled, tooltip: "Coming in next phase")
+
+**localStorage:** Key `vr_channel_profile`. All reads/writes wrapped in try/catch. Malformed JSON falls back to State A.
+
+### Other changes
+- `server/index.js` — registered `app.use('/api/research', require('./routes/research'))`
+- `client/src/components/layout/Sidebar.jsx` — Video Research `available: true` (was `false`)
+- `.env` — added `YOUTUBE_API_KEY=` placeholder, fixed `NODE_TLS_REJECT_UNAUTHORIZED=0` (was `0c`)
+
+### Production-readiness checks
+- [x] YouTube API key missing → 400 "YOUTUBE_API_KEY not configured"
+- [x] Channel URL malformed / not found → 404 user-friendly message
+- [x] Claude API failure → 500 with error detail, client shows inline
+- [x] localStorage full → try/catch, warning shown
+- [x] Empty fields → client-side validation + server-side 400
+- [x] Double-click → button disabled on first click
+- [x] Both URL formats → `/channel/UCxxx` regex + `/@handle` search resolution
+- [x] API keys from .env → all via `process.env`
+- [x] Malformed localStorage JSON → try/catch, falls back to State A
+- [x] Client build → zero errors, zero warnings

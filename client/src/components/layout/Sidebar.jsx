@@ -17,7 +17,7 @@ const NAV_ITEMS = [
     id: 'video-research',
     label: 'Video Research',
     icon: Search,
-    available: false,
+    available: true,
   },
   {
     id: 'script-writer',
