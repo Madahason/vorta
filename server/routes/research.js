@@ -551,6 +551,10 @@ function sanitizeItem(item, panelName) {
   return base;
 }
 
+const trendsService = require('../services/trendsService');
+const competitionService = require('../services/competitionService');
+const competitorService = require('../services/competitorService');
+
 async function runDiscoveryPanel(panelName, prompt, catalog) {
   const client = new Anthropic();
   const message = await client.messages.create({
@@ -573,6 +577,127 @@ async function runDiscoveryPanel(panelName, prompt, catalog) {
   return filterCovered(cleaned, catalog);
 }
 
+async function runEnrichedDiscovery(panelName, profile) {
+  const startTime = Date.now();
+  const client = new Anthropic();
+  const catalog = profile.catalog || [];
+
+  // Step 1: Get Claude to suggest candidate topics
+  const candidatePrompt = panelName === 'competitors'
+    ? buildCompetitorsPrompt(profile)
+    : panelName === 'gaps'
+      ? buildGapsPrompt(profile)
+      : buildTrendingPrompt(profile);
+
+  const candidateMsg = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 2048,
+    tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+    messages: [{ role: 'user', content: candidatePrompt }],
+  });
+
+  let candidateText = '';
+  for (const block of candidateMsg.content) {
+    if (block.type === 'text') candidateText += block.text;
+  }
+  const candidateItems = (() => {
+    try {
+      const p = parseClaudeJson(candidateText);
+      return Array.isArray(p) ? p : (p[panelName] || p.items || []);
+    } catch { return []; }
+  })();
+
+  const topicTitles = candidateItems.map(i => i.title).filter(Boolean).slice(0, 8);
+
+  // Step 2: Enrich with real data
+  let trendResults = [];
+  let competitionResults = [];
+  let competitorData = [];
+  const dataSources = { panel: panelName };
+  const fallbacks = [];
+
+  try {
+    if (panelName === 'trending' || panelName === 'gaps') {
+      const [trends, comps] = await Promise.allSettled([
+        trendsService.getTrendDataBatch(topicTitles, profile.niche),
+        Promise.all(topicTitles.map(t => competitionService.getCompetitionData(t).catch(() => null)))
+      ]);
+      trendResults = trends.status === 'fulfilled' ? trends.value : [];
+      competitionResults = comps.status === 'fulfilled' ? comps.value : [];
+      trendResults.forEach(t => { if (t.dataSource === 'claude-estimate') fallbacks.push(t.topic); });
+      dataSources.trends = trendResults[0]?.dataSource || 'unavailable';
+      dataSources.competition = 'youtube-search-api';
+    }
+    if (panelName === 'competitors' && profile.competitors?.length > 0) {
+      competitorData = await competitorService.getAllCompetitorData(profile.competitors);
+      dataSources.competitors = 'youtube-api';
+    }
+  } catch (err) {
+    console.warn(`[discover/enrich/${panelName}]`, err.message);
+  }
+
+  // Build trend/competition lookup maps
+  const trendMap = {};
+  trendResults.forEach(t => { trendMap[t.topic?.toLowerCase()] = t; });
+  const compMap = {};
+  competitionResults.forEach(c => { if (c) compMap[c.topic?.toLowerCase()] = c; });
+
+  // Step 3: Claude synthesis with real data
+  const enrichedDataBlock = panelName === 'competitors'
+    ? `\nREAL COMPETITOR DATA:\n${competitorData.filter(c => !c.error).map(c =>
+        `Channel: ${c.channelName} (@${c.channelHandle}) — ${c.subscriberCount?.toLocaleString()} subs, avg ${c.avgViewsRecent?.toLocaleString()} views/recent\nTop videos:\n${(c.topVideos || []).slice(0, 3).map(v => `  - "${v.title}" (${v.views?.toLocaleString()} views, ${v.publishedAt?.slice(0, 10)})`).join('\n')}\nRecent videos:\n${(c.recentVideos || []).slice(0, 5).map(v => `  - "${v.title}" (${v.views?.toLocaleString()} views, ${v.publishedAt?.slice(0, 10)})`).join('\n')}`
+      ).join('\n\n')}`
+    : `\nREAL TREND & COMPETITION DATA:\n${topicTitles.map(t => {
+        const td = trendMap[t.toLowerCase()];
+        const cd = compMap[t.toLowerCase()];
+        return `Topic: "${t}"\n  Trends: interestScore=${td?.interestScore ?? '?'}, trend=${td?.trend ?? '?'}, peak=${td?.peakScore ?? '?'}, source=${td?.dataSource ?? 'none'}\n  Competition: ${cd ? `${cd.totalResults} videos, median ${cd.medianViews} views, ${cd.competitionLevel} competition${cd.weakCoverageSignals?.length ? ', signals: ' + cd.weakCoverageSignals.join('; ') : ''}` : 'unavailable'}`;
+      }).join('\n')}`;
+
+  const scoreRubric = `
+OPPORTUNITY SCORE RUBRIC (calculate for each topic):
+Trend momentum (0-3 pts): rising + score>60 = 3, stable + score>40 = 2, else 1
+Competition gap (0-4 pts): low + 2+ weak signals = 4, low = 3, medium = 2, high = 1
+Channel fit (0-3 pts): how well it matches angle "${profile.angle}" and tone "${profile.tone}"
+Total: sum of all three (integer 1-10)`;
+
+  const synthesisPrompt = panelName === 'competitors'
+    ? `Based on the REAL YouTube data below, identify 4-6 videos from competitor channels that are overperforming relative to the channel's average.${enrichedDataBlock}\n\nOur channel: niche="${profile.niche}", angle="${profile.angle}", tone="${profile.tone}"\n${scoreRubric}\n\nFor each return: title, channel, summary, performanceReason, opportunityScore, suggestedAngle, alreadyCovered, subscriberCount (real number), realViews (real number).\nReturn ONLY valid JSON array.`
+    : panelName === 'gaps'
+      ? `Based on the REAL trend and competition data below, identify 6-8 topics with genuine search demand but weak YouTube coverage.${enrichedDataBlock}\n\nChannel: niche="${profile.niche}", angle="${profile.angle}", tone="${profile.tone}"\n${scoreRubric}\n\nFor each return: title, summary, gapReason, opportunityScore, estimatedSearchVolume, lastCoveredYear, alreadyCovered, trendData (object with interestScore, trend, dataSource), competitionData (object with totalResults, medianViews, competitionLevel, weakCoverageSignals).\nReturn ONLY valid JSON array.`
+      : `Based on the REAL trend and competition data below, identify 6-8 trending topics gaining momentum.${enrichedDataBlock}\n\nChannel: niche="${profile.niche}", angle="${profile.angle}", tone="${profile.tone}"\n${scoreRubric}\n\nFor each return: title, summary, trendSignal, opportunityScore, estimatedSearchVolume, alreadyCovered, trendData (object with interestScore, trend, peakScore, timelinePoints, dataSource), competitionData (object with totalResults, medianViews, competitionLevel, weakCoverageSignals).\nReturn ONLY valid JSON array.`;
+
+  const synthMsg = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 4096,
+    messages: [{ role: 'user', content: synthesisPrompt }],
+  });
+
+  let synthText = '';
+  for (const block of synthMsg.content) {
+    if (block.type === 'text') synthText += block.text;
+  }
+
+  const synthParsed = (() => {
+    try {
+      const p = parseClaudeJson(synthText);
+      return Array.isArray(p) ? p : (p[panelName] || p.items || []);
+    } catch { return candidateItems; }
+  })();
+
+  const enrichedItems = synthParsed.map(item => ({
+    ...sanitizeItem(item, panelName),
+    trendData: item.trendData || trendMap[item.title?.toLowerCase()] || null,
+    competitionData: item.competitionData || compMap[item.title?.toLowerCase()] || null,
+    subscriberCount: item.subscriberCount || null,
+    realViews: item.realViews || null,
+  }));
+
+  const elapsed = Date.now() - startTime;
+  console.log(`[discover/${panelName}] enriched in ${elapsed}ms (${enrichedItems.length} items)`);
+
+  return { items: filterCovered(enrichedItems, catalog), dataSources, fallbacks };
+}
+
 // POST /api/research/discover
 // Optional query param ?panel=trending|gaps|competitors to re-run a single panel
 router.post('/discover', async (req, res) => {
@@ -593,29 +718,37 @@ router.post('/discover', async (req, res) => {
 
   try {
     if (singlePanel) {
-      const promptFn = { trending: buildTrendingPrompt, gaps: buildGapsPrompt, competitors: buildCompetitorsPrompt }[singlePanel];
-      const items = await runDiscoveryPanel(singlePanel, promptFn(profile), profile.catalog);
-      return res.json({ [singlePanel]: items });
+      const result = await runEnrichedDiscovery(singlePanel, profile);
+      return res.json({ [singlePanel]: result.items });
     }
 
     const results = await Promise.allSettled([
-      runDiscoveryPanel('trending', buildTrendingPrompt(profile), profile.catalog),
-      runDiscoveryPanel('gaps', buildGapsPrompt(profile), profile.catalog),
-      runDiscoveryPanel('competitors', buildCompetitorsPrompt(profile), profile.catalog),
+      runEnrichedDiscovery('trending', profile),
+      runEnrichedDiscovery('gaps', profile),
+      runEnrichedDiscovery('competitors', profile),
     ]);
+
+    const allFallbacks = [];
+    const dsInfo = {};
+    const extract = (r, name) => {
+      if (r.status === 'fulfilled') {
+        dsInfo[name] = r.value.dataSources;
+        allFallbacks.push(...(r.value.fallbacks || []));
+        return r.value.items;
+      }
+      console.error(`[discover/${name}]`, r.reason?.message);
+      return [];
+    };
 
     const report = {
       reportId: `report_${Date.now()}`,
       generatedAt: new Date().toISOString(),
       profileId: profile.profileId || null,
-      trending: results[0].status === 'fulfilled' ? results[0].value : [],
-      gaps: results[1].status === 'fulfilled' ? results[1].value : [],
-      competitors: results[2].status === 'fulfilled' ? results[2].value : [],
+      trending: extract(results[0], 'trending'),
+      gaps: extract(results[1], 'gaps'),
+      competitors: extract(results[2], 'competitors'),
+      dataSources: { ...dsInfo, trendFallbacks: allFallbacks },
     };
-
-    if (results[0].status === 'rejected') console.error('[discover/trending]', results[0].reason?.message);
-    if (results[1].status === 'rejected') console.error('[discover/gaps]', results[1].reason?.message);
-    if (results[2].status === 'rejected') console.error('[discover/competitors]', results[2].reason?.message);
 
     res.json(report);
   } catch (err) {
@@ -657,17 +790,17 @@ router.post('/discover/stream', async (req, res) => {
     }
   }
 
-  const panels = [
-    { name: 'trending', prompt: buildTrendingPrompt(profile) },
-    { name: 'gaps', prompt: buildGapsPrompt(profile) },
-    { name: 'competitors', prompt: buildCompetitorsPrompt(profile) },
-  ];
+  const panelNames = ['trending', 'gaps', 'competitors'];
+  const allFallbacks = [];
+  const dsInfo = {};
 
-  const promises = panels.map(async ({ name, prompt }) => {
+  const promises = panelNames.map(async (name) => {
     try {
-      const items = await runDiscoveryPanel(name, prompt, profile.catalog);
-      send({ type: 'panel', panel: name, items });
-      return { name, items };
+      const result = await runEnrichedDiscovery(name, profile);
+      dsInfo[name] = result.dataSources;
+      allFallbacks.push(...(result.fallbacks || []));
+      send({ type: 'panel', panel: name, items: result.items });
+      return { name, items: result.items };
     } catch (error) {
       console.error(`[discover/stream/${name}]`, error.message);
       send({ type: 'error', panel: name, message: error.message });
@@ -677,7 +810,7 @@ router.post('/discover/stream', async (req, res) => {
 
   await Promise.allSettled(promises);
 
-  send({ type: 'done', reportId, generatedAt });
+  send({ type: 'done', reportId, generatedAt, dataSources: { ...dsInfo, trendFallbacks: allFallbacks } });
   discoveryRunning = false;
   if (!res.writableEnded) res.end();
 });

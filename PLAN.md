@@ -2823,13 +2823,108 @@ The Video Research module (VR-1 through VR-5) is fully built and functional. The
 | VR-4 | Research History + Profile Management | ✅ Complete |
 | VR-5 | Script Writer Handoff | ✅ Complete |
 
-### Phase VR-6 — Data Layer Upgrade (planned, not started)
+### Phase VR-6 — Data Layer Upgrade ✅ COMPLETE
+**Commit:** `feature: VR-6 data layer — SerpApi trends, YouTube competition + competitor data, three-tier fallback`
+**Date:** 2026-06-18
 
-Replace Claude web search with structured API data sources for more reliable, quantitative research:
+#### Overview
+Replaced Claude web-search estimation with real data sources. Three new backend services with three-tier fallback chains and 24-hour caching. Claude remains the synthesis layer — interprets real numbers instead of guessing.
 
-**Three data sources:**
-1. **Google Trends API** — real-time trending topics with volume data, rising queries, regional interest
-2. **YouTube Search API** — direct search for existing coverage, view counts, publish dates, competition density
-3. **YouTube Competitor Pulls** — channel-specific data from competitor handles: recent uploads, top performers, content patterns
+#### Backend services
 
-Claude remains as the synthesis layer — takes structured API data and generates the editorial analysis (angles, gaps, opportunity scores). The upgrade replaces "Claude guesses from web search" with "Claude analyses real data from APIs".
+**`server/services/trendsService.js`** — Google Trends data with three-tier fallback:
+- Tier 1: SerpApi (`SERPAPI_KEY`) — 90-day timeseries, interest score, related topics
+- Tier 2: google-trends-api npm package — fallback when SerpApi unavailable
+- Tier 3: Claude estimation — fallback when both trend sources fail
+- `getTrendDataBatch()` — parallel with 500ms rate limiting between calls
+- 24-hour in-memory cache (Map-based, TTL check)
+
+**`server/services/competitionService.js`** — YouTube Search API competition density:
+- Search + stats fetch for any topic → totalResults, medianViews, avgViews, topVideo, weakCoverageSignals, competitionLevel (low/medium/high)
+- Empty result handling for topics with no YouTube coverage
+- 24-hour cache
+
+**`server/services/competitorService.js`** — YouTube Data API competitor pulls:
+- `getCompetitorVideos()` — recent + top videos, subscriber count, avg views
+- `getAllCompetitorData()` — parallel via `Promise.allSettled`, one failure doesn't block others
+- Handle resolution (`/@handle` → channelId) reused from VR-1 pattern
+- 24-hour cache
+
+#### Updated discovery flow (`server/routes/research.js`)
+1. Claude generates candidate topics (still uses web_search for ideation)
+2. Real data enrichment in parallel: trends batch + competition density + competitor pulls
+3. Claude synthesis pass with real data injected — opportunity scores calculated from rubric (trend momentum 0-3 + competition gap 0-4 + channel fit 0-3)
+4. SSE `done` event includes `dataSources` field showing which source served each panel + any fallback topics
+
+#### Frontend updates (`client/src/pages/VideoResearch.jsx`)
+- **MiniSparkline** component — SVG sparkline for topics with timelinePoints (60px wide)
+- **Trending Now cards**: real interest score + trend direction + sparkline; "~est." chip on Claude-estimated topics
+- **Gap Finder cards**: real competition data (video count, median views, competition level, weak coverage signals)
+- **Competitor Watch cards**: real view counts + subscriber counts on channel chips
+- **Data sources popover** — pill in dashboard top bar showing which APIs served the report + fallback count
+- `formatK()` helper for human-readable numbers
+
+#### Environment variables
+- `SERPAPI_KEY` added to `.env` (optional — falls back to google-trends-api then Claude)
+- `YOUTUBE_API_KEY` already existed from VR-1
+
+#### Dependencies added
+- `google-search-results-nodejs` — SerpApi client
+- `google-trends-api` — direct Google Trends scraper
+- `googleapis` — YouTube Data API v3 client
+
+#### Production-readiness checks
+- [x] 1. SERPAPI_KEY missing → falls back to google-trends-api
+- [x] 2. Both trend sources fail → Claude estimate with dataSource field
+- [x] 3. Rate limiting in getTrendDataBatch (500ms between calls)
+- [x] 4. Cache works — second call returns cache hit
+- [x] 5. Cache TTL is 24 hours
+- [x] 6. Missing YOUTUBE_API_KEY → clear error
+- [x] 7. No YouTube results → empty result, competitionLevel 'low'
+- [x] 8. Promise.allSettled on competitor data — one failure doesn't block others
+- [x] 9. Discovery latency logged per panel
+- [x] 10. SSE still streams incrementally
+- [x] 11. opportunityScore still integer 1-10 (sanitizeItem + clampScore)
+- [x] 12. dataSources in done SSE event
+- [x] 13. Data sources pill in dashboard top bar
+- [x] 14. Popover shows correct sources
+- [x] 15. "~est." chip on Claude-estimated cards
+- [x] 16. Trending cards show real interest score + trend direction
+- [x] 17. MiniSparkline renders (no error on empty points)
+- [x] 18. Gap cards show real competition data
+- [x] 19. weakCoverageSignals render (max 2 per card)
+- [x] 20. Competitor cards show real view + subscriber counts
+- [x] 21. VR-1 through VR-5 functionality preserved
+- [x] 22. Zero console errors with real data
+- [x] 23. Zero console errors on fallback paths
+- [x] 24. Layout intact with enriched content
+- [x] 25. PLAN.md updated
+
+---
+
+## Video Research Module — Fully Complete
+
+All six phases of the Video Research module are built, tested, and deployed:
+
+| Phase | Feature | Status |
+|-------|---------|--------|
+| VR-1 | Channel Profile Setup | ✅ Complete |
+| VR-2 | Research Dashboard + Opportunity Discovery | ✅ Complete |
+| VR-3 | Idea Card + Angle Selection | ✅ Complete |
+| VR-4 | Research History + Profile Management | ✅ Complete |
+| VR-5 | Script Writer Handoff | ✅ Complete |
+| VR-6 | Data Layer Upgrade | ✅ Complete |
+
+**Data sources in production:**
+- Google Trends (SerpApi → google-trends-api → Claude estimate)
+- YouTube Search API (competition density)
+- YouTube Data API (competitor channel pulls)
+- Claude Sonnet 4.6 (topic ideation, synthesis, opportunity scoring)
+
+**localStorage keys in use:**
+- `vr_channel_profile` — channel profile object
+- `vr_last_report` — most recent research report
+- `vr_research_history` — array of past reports (capped at 20)
+- `vr_selected_idea` — saved idea with enriched data
+- `vr_idea_banner_dismissed` — boolean
+- `vr_brief_dismissed_in_scriptwriter` — boolean

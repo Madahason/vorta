@@ -353,7 +353,24 @@ function VolumePill({ volume }) {
   )
 }
 
+// --- Mini Sparkline ---
+function MiniSparkline({ points }) {
+  if (!points || points.length < 2) return null
+  const vals = points.map(p => p.value || 0)
+  const max = Math.max(...vals, 1)
+  const w = 60; const h = 20
+  const step = w / (vals.length - 1)
+  const d = vals.map((v, i) => `${i === 0 ? 'M' : 'L'}${i * step},${h - (v / max) * h}`).join(' ')
+  return <svg className="vorta-sparkline" width={w} height={h} viewBox={`0 0 ${w} ${h}`}><path d={d} fill="none" stroke="rgba(139,92,246,0.5)" strokeWidth="1.5" /></svg>
+}
+
+function formatK(n) { return n >= 1000000 ? `${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n) }
+
 function OpportunityCard({ item, panel, onExplore, saved }) {
+  const td = item.trendData || {}
+  const cd = item.competitionData || {}
+  const isEstimate = td.dataSource === 'claude-estimate'
+
   return (
     <div className="vorta-opportunity-card rounded-lg p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
       <div className="flex items-start justify-between gap-2 mb-2">
@@ -363,10 +380,28 @@ function OpportunityCard({ item, panel, onExplore, saved }) {
           <ScoreBadge score={item.opportunityScore} />
         </div>
       </div>
-      <p className="text-xs text-white/50 leading-relaxed mb-3">{item.summary}</p>
+      <p className="text-xs text-white/50 leading-relaxed mb-2">{item.summary}</p>
+
+      {/* Enriched trend data for Trending panel */}
+      {panel === 'trending' && td.interestScore !== undefined && (
+        <div className="vorta-trend-data flex items-center gap-2 mb-2">
+          <span className="text-[10px] text-white/45">Interest: {td.interestScore}/100 · <span className={td.trend === 'rising' ? 'text-green-400' : td.trend === 'falling' ? 'text-red-400' : 'text-white/40'}>{td.trend || 'stable'}</span></span>
+          <MiniSparkline points={td.timelinePoints} />
+          {isEstimate && <span className="vorta-estimate-chip text-[9px] text-white/25 px-1 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.04)' }}>~est.</span>}
+        </div>
+      )}
+
+      {/* Enriched competition data for Gaps panel */}
+      {panel === 'gaps' && cd.totalResults !== undefined && (
+        <div className="vorta-comp-data text-[10px] text-white/35 mb-2">
+          {cd.totalResults} videos · median {formatK(cd.medianViews || 0)} views · {cd.competitionLevel || 'unknown'} competition
+          {(cd.weakCoverageSignals || []).slice(0, 2).map((s, i) => <span key={i} className="block text-[10px] text-amber-400/50 italic mt-0.5">{s}</span>)}
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <VolumePill volume={item.estimatedSearchVolume} />
-        {panel === 'trending' && item.trendSignal && (
+        {panel === 'trending' && item.trendSignal && !td.interestScore && (
           <span className="vorta-trend-signal text-[10px] text-white/35 italic">{item.trendSignal}</span>
         )}
         {panel === 'gaps' && (
@@ -377,7 +412,12 @@ function OpportunityCard({ item, panel, onExplore, saved }) {
         )}
         {panel === 'competitors' && (
           <>
-            {item.channel && <span className="vorta-competitor-channel px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>{item.channel}</span>}
+            {item.channel && (
+              <span className="vorta-competitor-channel px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
+                {item.channel}{item.subscriberCount ? ` · ${formatK(item.subscriberCount)} subs` : ''}
+              </span>
+            )}
+            {item.realViews > 0 && <span className="text-[10px] text-white/30">{formatK(item.realViews)} views</span>}
           </>
         )}
       </div>
@@ -989,6 +1029,8 @@ function ResearchDashboard({ profile, onBack, onNavigate, onEditProfile }) {
   const [savedIdea, setSavedIdea] = useState(() => loadJson(LS_SELECTED_IDEA))
   const [bannerDismissed, setBannerDismissed] = useState(() => loadJson(LS_BANNER_DISMISSED) || false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [reportDataSources, setReportDataSources] = useState(null)
+  const [dsPopoverOpen, setDsPopoverOpen] = useState(false)
 
   function handleExplore(item, panelName) { setHistoryOpen(false); setExploreItem(item); setExplorePanel(panelName) }
   function handleOpenHistory() { setExploreItem(null); setHistoryOpen(true) }
@@ -1053,7 +1095,9 @@ function ResearchDashboard({ profile, onBack, onNavigate, onEditProfile }) {
             } else if (evt.type === 'done') {
               finalReport.reportId = evt.reportId
               finalReport.generatedAt = evt.generatedAt
+              finalReport.dataSources = evt.dataSources || null
               setGenTime(evt.generatedAt)
+              setReportDataSources(evt.dataSources || null)
             }
           } catch {}
         }
@@ -1132,6 +1176,24 @@ function ResearchDashboard({ profile, onBack, onNavigate, onEditProfile }) {
             <span className="vorta-timestamp flex items-center gap-1.5 text-[11px] text-white/25">
               <Clock size={10} />Research generated {timeAgoStr}
             </span>
+          )}
+          {reportDataSources && (
+            <div className="vorta-ds-popover-wrap relative">
+              <button onClick={() => setDsPopoverOpen(!dsPopoverOpen)} className="vorta-btn vorta-btn-ghost text-[10px] text-white/30 hover:text-white/50 flex items-center gap-1">
+                <BarChart3 size={10} />Data sources
+              </button>
+              {dsPopoverOpen && (
+                <div className="vorta-ds-popover absolute right-0 top-full mt-1 w-72 rounded-lg p-3 z-50" style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }}>
+                  <h4 className="text-[10px] font-medium text-white/50 uppercase tracking-wider mb-2">Data sources for this report</h4>
+                  <div className="space-y-1.5 text-[11px]">
+                    {reportDataSources.trending?.trends && <div className="flex items-center gap-2"><span className="text-green-400">✓</span><span className="text-white/50">Trending: {reportDataSources.trending.trends === 'serpapi' ? 'Google Trends (SerpApi)' : reportDataSources.trending.trends === 'google-trends-api' ? 'Google Trends API' : reportDataSources.trending.trends}</span></div>}
+                    {reportDataSources.gaps?.competition && <div className="flex items-center gap-2"><span className="text-green-400">✓</span><span className="text-white/50">Gaps: {reportDataSources.gaps.competition}</span></div>}
+                    {reportDataSources.competitors?.competitors && <div className="flex items-center gap-2"><span className="text-green-400">✓</span><span className="text-white/50">Competitors: {reportDataSources.competitors.competitors}</span></div>}
+                    {(reportDataSources.trendFallbacks || []).length > 0 && <div className="flex items-center gap-2"><span className="text-amber-400">~</span><span className="text-white/40">{reportDataSources.trendFallbacks.length} topic{reportDataSources.trendFallbacks.length !== 1 ? 's' : ''}: AI estimated</span></div>}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
           <button onClick={handleOpenHistory} className="vorta-btn vorta-btn-ghost text-xs flex items-center gap-1.5 text-white/40 hover:text-white/60">
             <History size={12} />History
