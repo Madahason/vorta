@@ -21,7 +21,14 @@ function lsWrite(value) {
 }
 
 export default function ScriptInput({ onAnalyze, isAnalyzing }) {
-  const [script, setScript] = useState(() => lsRead()?.script || '')
+  const [script, setScript] = useState(() => {
+    const fromScriptWriter = localStorage.getItem('vorta_script_text')
+    if (fromScriptWriter) {
+      localStorage.removeItem('vorta_script_text')
+      return fromScriptWriter
+    }
+    return lsRead()?.script || ''
+  })
   const [metadata, setMetadata] = useState(() => {
     const saved = lsRead()
     if (!saved) return DEFAULTS
