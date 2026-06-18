@@ -14,7 +14,12 @@ const {
   saveVoiceProfiles,
   loadScriptHistory,
   saveScriptHistory,
-  saveScriptToHistory
+  saveScriptToHistory,
+  loadTranscriptLibrary,
+  saveTranscriptLibrary,
+  addTranscriptToLibrary,
+  loadTranscriptFile,
+  deleteTranscriptFile
 } = require('../services/scriptWriterService');
 
 router.get('/voice-profiles', (req, res) => {
@@ -23,11 +28,14 @@ router.get('/voice-profiles', (req, res) => {
 
 router.post('/voice-profiles', async (req, res) => {
   try {
-    const { name, transcripts } = req.body;
-    if (!name || !transcripts || !transcripts.length) {
-      return res.status(400).json({ error: 'name and transcripts required' });
+    const { name, transcriptIds, uploaderLabel } = req.body;
+    if (!name || !transcriptIds || !transcriptIds.length) {
+      return res.status(400).json({ error: 'name and transcriptIds required' });
     }
-    const profile = await analyzeVoiceProfile(name, transcripts);
+    if (transcriptIds.length > 5) {
+      return res.status(400).json({ error: 'Maximum 5 transcripts per profile' });
+    }
+    const profile = await analyzeVoiceProfile(name, transcriptIds, uploaderLabel);
     res.json(profile);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -38,6 +46,44 @@ router.delete('/voice-profiles/:id', (req, res) => {
   const profiles = loadVoiceProfiles();
   const filtered = profiles.filter(p => p.id !== req.params.id);
   saveVoiceProfiles(filtered);
+  res.json({ ok: true });
+});
+
+// --- Transcript library routes ---
+
+router.get('/transcripts', (req, res) => {
+  res.json(loadTranscriptLibrary());
+});
+
+router.post('/transcripts', (req, res) => {
+  try {
+    const { transcripts } = req.body;
+    if (!transcripts || !Array.isArray(transcripts) || transcripts.length === 0) {
+      return res.status(400).json({ error: 'transcripts array required' });
+    }
+    const saved = transcripts.map(t => {
+      if (!t.text || t.text.trim().length < 100) {
+        return { error: 'Transcript too short (minimum 100 characters)' };
+      }
+      return addTranscriptToLibrary(t);
+    });
+    res.json(saved);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/transcripts/:id/text', (req, res) => {
+  const text = loadTranscriptFile(req.params.id);
+  if (!text) return res.status(404).json({ error: 'Transcript not found' });
+  res.json({ id: req.params.id, text });
+});
+
+router.delete('/transcripts/:id', (req, res) => {
+  const library = loadTranscriptLibrary();
+  const filtered = library.filter(t => t.id !== req.params.id);
+  saveTranscriptLibrary(filtered);
+  deleteTranscriptFile(req.params.id);
   res.json({ ok: true });
 });
 

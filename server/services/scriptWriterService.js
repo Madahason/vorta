@@ -6,6 +6,8 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const VOICE_PROFILES_PATH = path.resolve(__dirname, '../data/voiceProfiles.json');
 const SCRIPT_HISTORY_PATH = path.resolve(__dirname, '../data/scriptHistory.json');
+const TRANSCRIPT_LIBRARY_PATH = path.resolve(__dirname, '../data/transcriptLibrary.json');
+const TRANSCRIPTS_DIR = path.resolve(__dirname, '../data/transcripts');
 
 function loadScriptHistory() {
   try {
@@ -39,6 +41,70 @@ function getExemplarScripts(styleTemplate, limit = 2) {
     )
     .sort((a, b) => b.rating - a.rating || (b.usedCount || 0) - (a.usedCount || 0))
     .slice(0, limit);
+}
+
+function loadTranscriptLibrary() {
+  try {
+    return JSON.parse(fs.readFileSync(TRANSCRIPT_LIBRARY_PATH, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function saveTranscriptLibrary(library) {
+  fs.mkdirSync(path.dirname(TRANSCRIPT_LIBRARY_PATH), { recursive: true });
+  fs.writeFileSync(TRANSCRIPT_LIBRARY_PATH, JSON.stringify(library, null, 2));
+}
+
+function saveTranscriptFile(id, text) {
+  fs.mkdirSync(TRANSCRIPTS_DIR, { recursive: true });
+  fs.writeFileSync(path.join(TRANSCRIPTS_DIR, `${id}.txt`), text, 'utf8');
+}
+
+function loadTranscriptFile(id) {
+  try {
+    return fs.readFileSync(path.join(TRANSCRIPTS_DIR, `${id}.txt`), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function deleteTranscriptFile(id) {
+  try {
+    fs.unlinkSync(path.join(TRANSCRIPTS_DIR, `${id}.txt`));
+  } catch {}
+}
+
+function addTranscriptToLibrary({ title, channelName, uploaderLabel, text }) {
+  const library = loadTranscriptLibrary();
+  const wordCount = text.trim().split(/\s+/).length;
+  const estimatedMinutes = Math.round(wordCount / 130);
+
+  const entry = {
+    id: `tr_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+    title: title || 'Untitled transcript',
+    channelName: channelName || 'Unknown channel',
+    uploaderLabel: uploaderLabel || 'Anonymous',
+    wordCount,
+    estimatedMinutes,
+    createdAt: new Date().toISOString(),
+    usedInProfiles: []
+  };
+
+  saveTranscriptFile(entry.id, text);
+  library.unshift(entry);
+  if (library.length > 500) library.splice(500);
+  saveTranscriptLibrary(library);
+  return entry;
+}
+
+function markTranscriptUsedInProfile(transcriptId, profileId) {
+  const library = loadTranscriptLibrary();
+  const entry = library.find(t => t.id === transcriptId);
+  if (entry && !entry.usedInProfiles.includes(profileId)) {
+    entry.usedInProfiles.push(profileId);
+    saveTranscriptLibrary(library);
+  }
 }
 
 function loadVoiceProfiles() {
@@ -459,7 +525,19 @@ async function originalityScanPass(script, onProgress) {
   }
 }
 
-async function analyzeVoiceProfile(name, transcripts) {
+async function analyzeVoiceProfile(name, transcriptIds, uploaderLabel) {
+  const transcripts = transcriptIds
+    .map(id => ({ id, text: loadTranscriptFile(id) }))
+    .filter(t => t.text);
+
+  if (transcripts.length === 0) {
+    throw new Error('No valid transcripts found');
+  }
+
+  const combinedText = transcripts
+    .map((t, i) => `--- Transcript ${i + 1} ---\n${t.text}`)
+    .join('\n\n');
+
   const system = `You are a writing style analyst. Analyze these video transcripts and create a detailed writing style fingerprint.
 
 The fingerprint must capture:
@@ -471,26 +549,63 @@ The fingerprint must capture:
 6. EMOTIONAL REGISTER — how emotion is conveyed (subtly vs explicitly)
 7. SIGNATURE MOVES — recurring techniques (rhetorical questions, rule of three, specific openings)
 
-Write this as a detailed instruction set that another writer could follow to match this voice exactly. Be specific and actionable, not vague.`;
+Write this as a detailed instruction set that another writer could follow to match this voice exactly. Be specific and actionable, not vague.
+
+After the fingerprint, add a section called CONFIDENCE ASSESSMENT:
+
+CONFIDENCE SCORE: [1-10]
+CONFIDENCE REASONING: [2-3 sentences explaining what gave you confidence or what was missing]
+TRANSCRIPT QUALITY: [assessment of transcript diversity, length, and cleanliness]
+TO IMPROVE THIS FINGERPRINT: [specific suggestions — e.g. "Add a transcript from a historical topic", "Current transcripts are all under 8 minutes — add a longer one", "Transcripts appear to be auto-captions — clean punctuation would help"]
+
+Return the fingerprint and confidence assessment as one continuous response.`;
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 1500,
+    max_tokens: 2000,
     system,
-    messages: [{ role: 'user', content: `Analyze these transcripts and create a voice fingerprint:\n\n${transcripts.join('\n\n---\n\n')}` }]
+    messages: [{
+      role: 'user',
+      content: `Analyze these ${transcripts.length} transcript(s) and create a voice fingerprint:\n\n${combinedText}`
+    }]
   });
 
-  const fingerprint = response.content[0].text;
+  const fullResponse = response.content[0].text;
+
+  const scoreMatch = fullResponse.match(/CONFIDENCE SCORE:\s*(\d+)/i);
+  const confidenceScore = scoreMatch ? parseInt(scoreMatch[1]) : null;
+
+  const improvementMatch = fullResponse.match(/TO IMPROVE THIS FINGERPRINT:([\s\S]*?)(?:\n\n|$)/i);
+  const improvementSuggestions = improvementMatch ? improvementMatch[1].trim() : null;
+
+  const fingerprintEndIndex = fullResponse.indexOf('CONFIDENCE ASSESSMENT');
+  const fingerprint = fingerprintEndIndex > -1
+    ? fullResponse.substring(0, fingerprintEndIndex).trim()
+    : fullResponse;
+
+  const confidenceAssessment = fingerprintEndIndex > -1
+    ? fullResponse.substring(fingerprintEndIndex).trim()
+    : null;
+
   const profiles = loadVoiceProfiles();
   const newProfile = {
     id: `vp_${Date.now()}`,
     name,
+    uploaderLabel: uploaderLabel || 'Anonymous',
     fingerprint,
-    createdAt: new Date().toISOString(),
-    transcriptCount: transcripts.length
+    confidenceScore,
+    confidenceAssessment,
+    improvementSuggestions,
+    transcriptIds,
+    transcriptCount: transcripts.length,
+    createdAt: new Date().toISOString()
   };
+
   profiles.push(newProfile);
   saveVoiceProfiles(profiles);
+
+  transcriptIds.forEach(tid => markTranscriptUsedInProfile(tid, newProfile.id));
+
   return newProfile;
 }
 
@@ -510,5 +625,11 @@ module.exports = {
   saveScriptHistory,
   saveScriptToHistory,
   getExemplarScripts,
+  loadTranscriptLibrary,
+  saveTranscriptLibrary,
+  addTranscriptToLibrary,
+  loadTranscriptFile,
+  deleteTranscriptFile,
+  markTranscriptUsedInProfile,
   STYLE_TEMPLATES
 };

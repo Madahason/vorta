@@ -487,3 +487,161 @@
 .vorta-sw-history-btn {
   position: relative;
 }
+
+/* ── Voice Profile Confidence ────────────────────────────────────────────────── */
+
+.vorta-sw-confidence-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.vorta-sw-confidence-badge.high {
+  background: rgba(34, 197, 94, 0.15);
+  color: rgba(34, 197, 94, 0.9);
+}
+
+.vorta-sw-confidence-badge.medium {
+  background: rgba(245, 158, 11, 0.15);
+  color: rgba(245, 158, 11, 0.9);
+}
+
+.vorta-sw-confidence-badge.low {
+  background: rgba(239, 68, 68, 0.15);
+  color: rgba(239, 68, 68, 0.9);
+}
+
+.vorta-sw-improvement-panel {
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.05);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.6;
+}
+
+.vorta-sw-improvement-panel strong {
+  color: rgba(245, 158, 11, 0.9);
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ── Selection guidance ──────────────────────────────────────────────────────── */
+
+.vorta-sw-selection-guide {
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.vorta-sw-selection-guide-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: rgba(99, 102, 241, 0.9);
+  margin-bottom: 10px;
+}
+
+.vorta-sw-selection-guide-item {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 5px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.4;
+}
+
+.vorta-sw-selection-guide-item .check { color: rgba(34, 197, 94, 0.8); flex-shrink: 0; }
+.vorta-sw-selection-guide-item .cross { color: rgba(239, 68, 68, 0.7); flex-shrink: 0; }
+
+/* ── Transcript length indicator ─────────────────────────────────────────────── */
+
+.vorta-sw-length-indicator {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+.vorta-sw-length-indicator.good {
+  background: rgba(34, 197, 94, 0.12);
+  color: rgba(34, 197, 94, 0.8);
+}
+
+.vorta-sw-length-indicator.short {
+  background: rgba(245, 158, 11, 0.12);
+  color: rgba(245, 158, 11, 0.8);
+}
+
+/* ── Transcript library ──────────────────────────────────────────────────────── */
+
+.vorta-sw-library-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.vorta-sw-library-count {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.vorta-sw-filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.vorta-sw-filter-bar input {
+  flex: 1;
+  min-width: 160px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 7px 12px;
+  color: white;
+  font-size: 13px;
+  outline: none;
+}
+
+.vorta-sw-filter-bar input::placeholder { color: rgba(255, 255, 255, 0.3); }
+
+.vorta-sw-filter-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 7px 12px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.vorta-sw-filter-btn.active {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: rgba(99, 102, 241, 0.9);
+}
+
+.vorta-sw-wordcount {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.3);
+  text-align: right;
+  margin-top: 4px;
+}
+
+.vorta-sw-wordcount.good { color: rgba(34, 197, 94, 0.7); }
+.vorta-sw-wordcount.short { color: rgba(245, 158, 11, 0.7); }

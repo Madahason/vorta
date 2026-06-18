@@ -3000,3 +3000,21 @@ All six phases of the Video Research module are built, tested, and deployed:
 - `usedCount` incremented when "Send to Video Creator" is clicked — secondary quality signal
 - API routes: `GET /history`, `GET /history/:id`, `PATCH /history/:id/rating`, `PATCH /history/:id/used`, `DELETE /history/:id`
 - New files: `server/data/scriptHistory.json`, `client/src/components/script-writer/StarRating.jsx`, `client/src/components/script-writer/ScriptHistory.jsx`
+
+### Voice Profile System upgrade
+
+- **Transcript library:** all transcripts persisted to `server/data/transcriptLibrary.json` (max 500)
+- Full transcript text stored in `server/data/transcripts/{id}.txt` (one file per transcript)
+- Shared library: all sessions share the same transcript pool, tagged with uploader label
+- Each transcript tagged with: `uploaderLabel`, `channelName`, `title`, `wordCount`, `estimatedMinutes`, `usedInProfiles[]`
+- Max 5 transcripts per voice profile (up from 3)
+- **Fingerprint confidence score:** Claude self-evaluates 1-10 with reasoning and improvement suggestions
+- Confidence badges: green (8-10), amber (5-7), red (1-4)
+- Improvement suggestions shown prominently when confidence < 6
+- **Selection guidance panel** shown before transcript picking (topic diversity, length, quality tips)
+- Uploader label persisted to `localStorage` as `vorta_uploader_label`
+- VoiceProfileManager rebuilt with two tabs: Profiles | Transcript Library
+- Transcript library has search, length filter (short/medium/long), sort (newest/most used/longest), live word count on upload
+- API routes: `GET /transcripts`, `POST /transcripts`, `GET /transcripts/:id/text`, `DELETE /transcripts/:id`
+- Voice profile POST now accepts `{ name, transcriptIds, uploaderLabel }` instead of raw transcript text
+- New files: `server/data/transcriptLibrary.json`, `server/data/transcripts/.gitkeep`
