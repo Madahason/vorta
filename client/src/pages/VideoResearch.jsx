@@ -1183,6 +1183,8 @@ function ResearchDashboard({ profile, onBack, onNavigate, onEditProfile }) {
                 <BarChart3 size={10} />Data sources
               </button>
               {dsPopoverOpen && (
+                <>
+                <div className="fixed inset-0 z-40" onClick={() => setDsPopoverOpen(false)} />
                 <div className="vorta-ds-popover absolute right-0 top-full mt-1 w-72 rounded-lg p-3 z-50" style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }}>
                   <h4 className="text-[10px] font-medium text-white/50 uppercase tracking-wider mb-2">Data sources for this report</h4>
                   <div className="space-y-1.5 text-[11px]">
@@ -1192,6 +1194,7 @@ function ResearchDashboard({ profile, onBack, onNavigate, onEditProfile }) {
                     {(reportDataSources.trendFallbacks || []).length > 0 && <div className="flex items-center gap-2"><span className="text-amber-400">~</span><span className="text-white/40">{reportDataSources.trendFallbacks.length} topic{reportDataSources.trendFallbacks.length !== 1 ? 's' : ''}: AI estimated</span></div>}
                   </div>
                 </div>
+                </>
               )}
             </div>
           )}
