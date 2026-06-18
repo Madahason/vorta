@@ -1,7 +1,63 @@
 import { useState } from 'react'
-import { Copy, Check, ArrowRight } from 'lucide-react'
+import { Copy, Check, ArrowRight, AlertTriangle, ShieldCheck, ShieldAlert } from 'lucide-react'
 
-export default function ScriptOutput({ script, onSendToCreator, onChange }) {
+function ScanBar({ scanResult }) {
+  if (!scanResult) return null
+
+  if (scanResult.skipped) {
+    return (
+      <div className="vorta-sw-scan-bar skipped">
+        <span className="vorta-sw-scan-item text-white/30">
+          Originality scan not configured — add Copyleaks credentials in .env
+        </span>
+      </div>
+    )
+  }
+
+  const orig = scanResult.originality ?? 0
+  const ai = scanResult.aiScore ?? 0
+
+  const origColor = orig >= 90 ? '#22c55e' : orig >= 75 ? '#f59e0b' : '#ef4444'
+  const origBg = orig >= 90 ? 'rgba(34,197,94,0.1)' : orig >= 75 ? 'rgba(245,158,11,0.1)' : 'rgba(239,68,68,0.1)'
+  const aiColor = ai <= 20 ? '#22c55e' : ai <= 40 ? '#f59e0b' : '#ef4444'
+  const aiBg = ai <= 20 ? 'rgba(34,197,94,0.1)' : ai <= 40 ? 'rgba(245,158,11,0.1)' : 'rgba(239,68,68,0.1)'
+
+  const ready = orig >= 90 && ai <= 20
+  const warn = orig < 75 || ai > 40
+
+  return (
+    <div className="vorta-sw-scan-bar">
+      <div className="vorta-sw-scan-item" style={{ background: origBg, borderColor: `${origColor}33` }}>
+        <ShieldCheck size={13} style={{ color: origColor }} />
+        <span style={{ color: origColor, fontWeight: 600 }}>Originality: {orig}%</span>
+      </div>
+      <div className="vorta-sw-scan-item" style={{ background: aiBg, borderColor: `${aiColor}33` }}>
+        <ShieldAlert size={13} style={{ color: aiColor }} />
+        <span style={{ color: aiColor, fontWeight: 600 }}>AI Score: {ai}%</span>
+      </div>
+      {ready && (
+        <div className="vorta-sw-scan-item" style={{ background: 'rgba(34,197,94,0.08)', borderColor: 'rgba(34,197,94,0.2)' }}>
+          <Check size={13} style={{ color: '#22c55e' }} />
+          <span style={{ color: '#22c55e', fontWeight: 500 }}>Ready</span>
+        </div>
+      )}
+      {!ready && orig < 75 && (
+        <div className="vorta-sw-scan-item" style={{ background: 'rgba(239,68,68,0.08)', borderColor: 'rgba(239,68,68,0.2)' }}>
+          <AlertTriangle size={13} style={{ color: '#ef4444' }} />
+          <span style={{ color: '#ef4444', fontSize: 11 }}>Regenerate recommended</span>
+        </div>
+      )}
+      {!ready && orig >= 75 && orig < 90 && (
+        <div className="vorta-sw-scan-item" style={{ background: 'rgba(245,158,11,0.08)', borderColor: 'rgba(245,158,11,0.2)' }}>
+          <AlertTriangle size={13} style={{ color: '#f59e0b' }} />
+          <span style={{ color: '#f59e0b', fontSize: 11 }}>Review flagged passages</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function ScriptOutput({ script, scanResult, onSendToCreator, onChange }) {
   const [copied, setCopied] = useState(false)
 
   const wordCount = script.trim().split(/\s+/).filter(Boolean).length
@@ -30,6 +86,7 @@ export default function ScriptOutput({ script, onSendToCreator, onChange }) {
           </button>
         </div>
       </div>
+      <ScanBar scanResult={scanResult} />
       <textarea
         className="vorta-sw-script-editor"
         value={script}

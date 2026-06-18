@@ -263,6 +263,148 @@ Return the complete final script only. No commentary.`;
   return result;
 }
 
+async function antiDetectionPass(script, onProgress) {
+  onProgress({ pass: 'anti_detection', status: 'running', message: 'Breaking AI patterns...' });
+
+  const system = `You are a script editor whose job is to make AI-generated text undetectable as AI-written. You will rewrite this documentary script to eliminate all AI writing patterns while preserving every fact and the overall structure.
+
+WHAT TO FIX — work through the script and apply ALL of these:
+
+1. PARAGRAPH RHYTHM VARIATION
+   - AI writes paragraphs of similar length. Break this.
+   - Some paragraphs should be 1 sentence. Some 6-7. Vary deliberately.
+   - Never have more than 3 consecutive paragraphs of similar length.
+
+2. SENTENCE RHYTHM VARIATION
+   - AI defaults to: long sentence, medium sentence, short sentence — repeated.
+   - Break this pattern. Cluster short sentences. Then write a long one. Then fragment.
+   - Add at least 6 genuine sentence fragments throughout (incomplete sentences used for emphasis).
+   - Example of a fragment: "Sixteen billion dollars. Gone."
+
+3. HUMAN IMPERFECTIONS
+   - Add 3-4 em dash interruptions mid-thought: "The board approved the deal — and they knew exactly what they were doing."
+   - Add 2-3 parenthetical asides: "The CFO (who would later deny knowing anything) signed off the same afternoon."
+   - Add 1-2 moments where the narrator addresses the viewer directly and unexpectedly: "Here's what nobody talks about."
+
+4. SPECIFICITY OVER GENERALITY
+   - Find every sentence that describes a general state ("the company was struggling") and replace with a specific fact or image.
+   - Never name an emotion. Show the situation that creates it.
+
+5. REMOVE ALL REMAINING AI TRANSITIONS
+   Remove or rewrite any of these or similar:
+   - "It's worth noting..."
+   - "Interestingly..."
+   - "This raises the question..."
+   - "What's remarkable is..."
+   - "The answer lies in..."
+   - "Let's take a closer look..."
+   - Any sentence that begins with "This" referring to the previous paragraph
+
+6. OPENING AND CLOSING
+   - The opening line must be a creative human choice, not a template completion.
+     It should feel like someone made a specific decision to start exactly there.
+   - The closing line must be a single powerful statement.
+     Not a summary. Not a lesson. A statement that reframes everything.
+
+7. READING ALOUD TEST
+   Read each paragraph mentally. If any sentence sounds like it was written to be read, not spoken — rewrite it as spoken language.
+
+Return the complete rewritten script only. No commentary, no explanation.`;
+
+  const result = await claudeCall(system, `Rewrite this script to eliminate all AI patterns:\n\n${script}`, 5000);
+  onProgress({ pass: 'anti_detection', status: 'complete', data: result });
+  return result;
+}
+
+async function originalityScanPass(script, onProgress) {
+  onProgress({ pass: 'originality', status: 'running', message: 'Scanning for originality...' });
+
+  const apiKey = process.env.COPYLEAKS_API_KEY;
+  const email = process.env.COPYLEAKS_EMAIL;
+
+  if (!apiKey || !email) {
+    onProgress({
+      pass: 'originality',
+      status: 'skipped',
+      message: 'Originality scan skipped — Copyleaks credentials not configured.',
+      data: { skipped: true, originality: null, aiScore: null }
+    });
+    return { skipped: true };
+  }
+
+  try {
+    const authRes = await fetch('https://id.copyleaks.com/v3/account/login/api', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, key: apiKey })
+    });
+
+    if (!authRes.ok) throw new Error(`Copyleaks auth failed: ${authRes.status}`);
+    const authData = await authRes.json();
+    const accessToken = authData.access_token;
+
+    const textScanId = `vorta_text_${Date.now()}`;
+    const textSubmitRes = await fetch(`https://api.copyleaks.com/v3/businesses/submit/file/${textScanId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({
+        base64: Buffer.from(script).toString('base64'),
+        filename: 'script.txt',
+        properties: {
+          aiGeneratedText: { detect: true }
+        }
+      })
+    });
+
+    if (!textSubmitRes.ok) {
+      throw new Error(`Copyleaks submit failed: ${textSubmitRes.status}`);
+    }
+
+    let result = null;
+    for (let i = 0; i < 12; i++) {
+      await new Promise(r => setTimeout(r, 5000));
+
+      const statusRes = await fetch(`https://api.copyleaks.com/v3/businesses/${textScanId}/result`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+
+      if (statusRes.ok) {
+        result = await statusRes.json();
+        if (result.status === 'Completed') break;
+      }
+    }
+
+    if (!result || result.status !== 'Completed') {
+      throw new Error('Copyleaks scan timed out');
+    }
+
+    const scanResult = {
+      skipped: false,
+      originality: result.scannedDocument?.totalWords > 0
+        ? Math.round((1 - (result.scannedDocument?.matchedWords || 0) / result.scannedDocument.totalWords) * 100)
+        : 100,
+      aiScore: result.aiGeneratedText?.ai || 0,
+      flaggedPassages: result.results?.identical?.map(r => r.introduction?.content || '') || [],
+      scanId: textScanId
+    };
+
+    onProgress({ pass: 'originality', status: 'complete', data: scanResult });
+    return scanResult;
+
+  } catch (err) {
+    onProgress({
+      pass: 'originality',
+      status: 'error',
+      message: `Originality scan failed: ${err.message}. Proceeding without scan.`,
+      data: { skipped: true, error: err.message }
+    });
+    return { skipped: true, error: err.message };
+  }
+}
+
 async function analyzeVoiceProfile(name, transcripts) {
   const system = `You are a writing style analyst. Analyze these video transcripts and create a detailed writing style fingerprint.
 
@@ -305,6 +447,8 @@ module.exports = {
   scriptPass,
   retentionPass,
   humanizationPass,
+  antiDetectionPass,
+  originalityScanPass,
   analyzeVoiceProfile,
   loadVoiceProfiles,
   saveVoiceProfiles,

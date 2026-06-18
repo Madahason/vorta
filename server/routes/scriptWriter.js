@@ -7,6 +7,8 @@ const {
   scriptPass,
   retentionPass,
   humanizationPass,
+  antiDetectionPass,
+  originalityScanPass,
   analyzeVoiceProfile,
   loadVoiceProfiles,
   saveVoiceProfiles
@@ -82,9 +84,11 @@ router.post('/generate-from-angle', async (req, res) => {
     const structure = await structurePass(topic, styleTemplate, chosenAngle, researchBrief, targetLength, send);
     const draft = await scriptPass(topic, styleTemplate, chosenAngle, researchBrief, structure, targetLength, voiceProfile, send);
     const retained = await retentionPass(draft, targetLength, send);
-    const finalScript = await humanizationPass(retained, voiceProfile, send);
+    const humanized = await humanizationPass(retained, voiceProfile, send);
+    const deAIed = await antiDetectionPass(humanized, send);
+    const scanResult = await originalityScanPass(deAIed, send);
 
-    send({ pass: 'complete', status: 'complete', script: finalScript });
+    send({ pass: 'complete', status: 'complete', script: deAIed, scanResult });
     res.end();
   } catch (err) {
     send({ pass: 'error', error: err.message });

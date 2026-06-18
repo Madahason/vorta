@@ -168,6 +168,7 @@ export default function ScriptWriter({ onNavigate }) {
   const [chosenAngle, setChosenAngle] = useState(null)
   const [passLog, setPassLog] = useState([])
   const [finalScript, setFinalScript] = useState('')
+  const [scanResult, setScanResult] = useState(null)
   const [showVoiceManager, setShowVoiceManager] = useState(false)
   const [error, setError] = useState('')
 
@@ -282,6 +283,7 @@ export default function ScriptWriter({ onNavigate }) {
         }
         if (event.pass === 'complete') {
           setFinalScript(event.script)
+          setScanResult(event.scanResult || null)
           setPhase('complete')
           return
         }
@@ -304,6 +306,7 @@ export default function ScriptWriter({ onNavigate }) {
     setAngles([])
     setChosenAngle(null)
     setFinalScript('')
+    setScanResult(null)
     setResearchBrief('')
     setError('')
   }
@@ -429,6 +432,7 @@ export default function ScriptWriter({ onNavigate }) {
           {phase === 'complete' && finalScript && (
             <ScriptOutput
               script={finalScript}
+              scanResult={scanResult}
               onChange={setFinalScript}
               onSendToCreator={handleSendToCreator}
             />
