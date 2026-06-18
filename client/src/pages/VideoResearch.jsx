@@ -537,10 +537,17 @@ function IdeaCardPanel({ item, panelSource, profile, onClose, onSaved, onNavigat
       })
       const json = await resp.json()
       if (!resp.ok) throw new Error(json.error || 'Failed to save idea')
-      saveJson(LS_SELECTED_IDEA, json)
+      const enriched = {
+        ...json,
+        panelSource: panelSource || null,
+        topicDepth: data?.topicDepth || {},
+        competitorCoverage: data?.competitorCoverage || [],
+        competitorInsight: data?.competitorInsight || '',
+      }
+      saveJson(LS_SELECTED_IDEA, enriched)
       localStorage.removeItem(LS_BRIEF_DISMISSED)
       setSaveSuccess(true)
-      if (onSaved) onSaved(json)
+      if (onSaved) onSaved(enriched)
       setTimeout(() => {
         if (onNavigate) onNavigate('script-writer')
       }, 1500)

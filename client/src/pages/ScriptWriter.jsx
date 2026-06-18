@@ -66,6 +66,11 @@ function ResearchBrief({ idea, profile, onNavigate, onDismiss }) {
         <div className="flex items-center gap-2 mb-1">
           <h4 className="text-base font-semibold text-white">{idea.topic || 'Untitled topic'}</h4>
           <ScoreBadge score={idea.opportunityScore} />
+          {idea.panelSource && (
+            <span className="vorta-brief-source px-1.5 py-0.5 rounded text-[9px] font-medium" style={{ background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.06)' }}>
+              {{ trending: 'Trending', gaps: 'Gap', competitors: 'Competitor' }[idea.panelSource] || idea.panelSource}
+            </span>
+          )}
         </div>
       </div>
 
