@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Copy, Check, ArrowRight, AlertTriangle, ShieldCheck, ShieldAlert } from 'lucide-react'
+import { StarRating } from './StarRating'
 
 function ScanBar({ scanResult }) {
   if (!scanResult) return null
@@ -23,7 +24,6 @@ function ScanBar({ scanResult }) {
   const aiBg = ai <= 20 ? 'rgba(34,197,94,0.1)' : ai <= 40 ? 'rgba(245,158,11,0.1)' : 'rgba(239,68,68,0.1)'
 
   const ready = orig >= 90 && ai <= 20
-  const warn = orig < 75 || ai > 40
 
   return (
     <div className="vorta-sw-scan-bar">
@@ -57,7 +57,7 @@ function ScanBar({ scanResult }) {
   )
 }
 
-export default function ScriptOutput({ script, scanResult, onSendToCreator, onChange }) {
+export default function ScriptOutput({ script, scanResult, historyId, userRating, onRated, onSendToCreator, onChange }) {
   const [copied, setCopied] = useState(false)
 
   const wordCount = script.trim().split(/\s+/).filter(Boolean).length
@@ -93,6 +93,13 @@ export default function ScriptOutput({ script, scanResult, onSendToCreator, onCh
         onChange={e => onChange(e.target.value)}
         spellCheck={false}
       />
+      {historyId && (
+        <StarRating
+          historyId={historyId}
+          currentRating={userRating}
+          onRated={onRated}
+        />
+      )}
     </div>
   )
 }

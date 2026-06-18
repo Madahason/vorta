@@ -1,9 +1,10 @@
 import { useState, useMemo, useCallback } from 'react'
-import { Search, ArrowRight, AlertTriangle, ChevronDown, ChevronUp, X, Target, Mic, Sparkles } from 'lucide-react'
+import { Search, ArrowRight, AlertTriangle, ChevronDown, ChevronUp, X, Target, Mic, Sparkles, History } from 'lucide-react'
 import StyleSelector from '../components/script-writer/StyleSelector'
 import VoiceProfileManager from '../components/script-writer/VoiceProfileManager'
 import GenerationProgress from '../components/script-writer/GenerationProgress'
 import ScriptOutput from '../components/script-writer/ScriptOutput'
+import ScriptHistory from '../components/script-writer/ScriptHistory'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 const LS_SELECTED_IDEA = 'vr_selected_idea'
@@ -169,7 +170,10 @@ export default function ScriptWriter({ onNavigate }) {
   const [passLog, setPassLog] = useState([])
   const [finalScript, setFinalScript] = useState('')
   const [scanResult, setScanResult] = useState(null)
+  const [historyId, setHistoryId] = useState(null)
+  const [userRating, setUserRating] = useState(null)
   const [showVoiceManager, setShowVoiceManager] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
   const [error, setError] = useState('')
 
   const showBrief = idea && !dismissed
@@ -284,6 +288,8 @@ export default function ScriptWriter({ onNavigate }) {
         if (event.pass === 'complete') {
           setFinalScript(event.script)
           setScanResult(event.scanResult || null)
+          setHistoryId(event.historyId || null)
+          setUserRating(null)
           setPhase('complete')
           return
         }
@@ -297,6 +303,9 @@ export default function ScriptWriter({ onNavigate }) {
 
   function handleSendToCreator() {
     localStorage.setItem('vorta_script_text', finalScript)
+    if (historyId) {
+      fetch(`${API}/api/script-writer/history/${historyId}/used`, { method: 'PATCH' }).catch(() => {})
+    }
     onNavigate('video-creator')
   }
 
@@ -307,8 +316,19 @@ export default function ScriptWriter({ onNavigate }) {
     setChosenAngle(null)
     setFinalScript('')
     setScanResult(null)
+    setHistoryId(null)
+    setUserRating(null)
     setResearchBrief('')
     setError('')
+  }
+
+  function handleLoadFromHistory(script, entry) {
+    setFinalScript(script)
+    setHistoryId(entry.id)
+    setUserRating(entry.rating)
+    setScanResult(entry.scanResult || null)
+    setPhase('complete')
+    setShowHistory(false)
   }
 
   const isGenerating = phase === 'researching' || phase === 'generating'
@@ -318,7 +338,12 @@ export default function ScriptWriter({ onNavigate }) {
       {/* Left column — Form */}
       <div className="vorta-sw-form-panel">
         <div className="p-6">
-          <h1 className="text-xl font-semibold text-white mb-1">Script Writer</h1>
+          <div className="flex items-center justify-between mb-1">
+            <h1 className="text-xl font-semibold text-white">Script Writer</h1>
+            <button onClick={() => setShowHistory(true)} className="vorta-sw-history-btn vorta-btn vorta-btn-ghost vorta-btn-sm">
+              <History size={13} /> History
+            </button>
+          </div>
           <p className="text-xs text-white/40 mb-6">Generate fact-grounded documentary scripts with multi-pass AI refinement.</p>
 
           {showBrief && (
@@ -433,6 +458,9 @@ export default function ScriptWriter({ onNavigate }) {
             <ScriptOutput
               script={finalScript}
               scanResult={scanResult}
+              historyId={historyId}
+              userRating={userRating}
+              onRated={setUserRating}
               onChange={setFinalScript}
               onSendToCreator={handleSendToCreator}
             />
@@ -446,6 +474,14 @@ export default function ScriptWriter({ onNavigate }) {
           selectedId={voiceProfileId}
           onSelect={(id) => setVoiceProfileId(id)}
           onClose={() => setShowVoiceManager(false)}
+        />
+      )}
+
+      {/* Script history panel */}
+      {showHistory && (
+        <ScriptHistory
+          onClose={() => setShowHistory(false)}
+          onLoadScript={handleLoadFromHistory}
         />
       )}
     </div>

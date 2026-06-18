@@ -2988,3 +2988,15 @@ All six phases of the Video Research module are built, tested, and deployed:
   - Green: originality ≥90% and AI score ≤20%; Amber: marginal; Red: regenerate recommended
 - Pipeline now 8 passes: Research → Angles → Structure → Script → Retention → Humanize → Anti-AI → Originality
 - GenerationProgress updated to show 8 steps with skipped/error states
+
+### Script Memory System
+
+- `server/data/scriptHistory.json` — persists all generated scripts (max 200, newest first)
+- Each entry stores: topic, style, length, voice profile, chosen angle, full script, scan results, rating (1-5), usedCount, createdAt, wordCount
+- **Star rating** — user rates after generation; 4-5 star scripts become exemplars
+- **Few-shot injection** — top-rated scripts injected into Pass 4 (script draft) and Pass 6 (humanization) as quality examples; Claude matches their quality level
+- **Script History panel** — slide-in panel showing all past scripts with load/delete
+- "Load Script" restores a past script into the output panel for reuse or re-sending
+- `usedCount` incremented when "Send to Video Creator" is clicked — secondary quality signal
+- API routes: `GET /history`, `GET /history/:id`, `PATCH /history/:id/rating`, `PATCH /history/:id/used`, `DELETE /history/:id`
+- New files: `server/data/scriptHistory.json`, `client/src/components/script-writer/StarRating.jsx`, `client/src/components/script-writer/ScriptHistory.jsx`

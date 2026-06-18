@@ -5,6 +5,41 @@ const path = require('path');
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const VOICE_PROFILES_PATH = path.resolve(__dirname, '../data/voiceProfiles.json');
+const SCRIPT_HISTORY_PATH = path.resolve(__dirname, '../data/scriptHistory.json');
+
+function loadScriptHistory() {
+  try {
+    return JSON.parse(fs.readFileSync(SCRIPT_HISTORY_PATH, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function saveScriptHistory(history) {
+  fs.mkdirSync(path.dirname(SCRIPT_HISTORY_PATH), { recursive: true });
+  fs.writeFileSync(SCRIPT_HISTORY_PATH, JSON.stringify(history, null, 2));
+}
+
+function saveScriptToHistory(entry) {
+  const history = loadScriptHistory();
+  history.unshift(entry);
+  if (history.length > 200) history.splice(200);
+  saveScriptHistory(history);
+  return entry;
+}
+
+function getExemplarScripts(styleTemplate, limit = 2) {
+  const history = loadScriptHistory();
+  return history
+    .filter(s =>
+      s.styleTemplate === styleTemplate &&
+      s.rating >= 4 &&
+      s.script &&
+      s.script.length > 500
+    )
+    .sort((a, b) => b.rating - a.rating || (b.usedCount || 0) - (a.usedCount || 0))
+    .slice(0, limit);
+}
 
 function loadVoiceProfiles() {
   try {
@@ -174,6 +209,16 @@ async function scriptPass(topic, styleTemplate, chosenAngle, researchBrief, stru
   const template = STYLE_TEMPLATES[styleTemplate];
   const lengthConfig = TARGET_LENGTHS[targetLength];
 
+  const exemplars = getExemplarScripts(styleTemplate, 2);
+  let exemplarSection = '';
+  if (exemplars.length > 0) {
+    exemplarSection = `\n\nEXEMPLAR SCRIPTS (top-rated scripts in this style — match this quality level):\n\n` +
+      exemplars.map((ex, i) =>
+        `--- Exemplar ${i + 1} (${ex.targetLength} min, rated ${ex.rating}/5) ---\n` +
+        ex.script.substring(0, 1500) + (ex.script.length > 1500 ? '\n[...continues]' : '')
+      ).join('\n\n');
+  }
+
   let voiceInstructions = `Write in the style of MagnatesMedia and Wendover Productions: dark, clinical, investigative tone. Short punchy sentences mixed with longer explanatory ones. Present tense narration. No filler phrases. Every sentence must either raise a question or answer the last one.`;
 
   if (voiceProfile) {
@@ -192,6 +237,7 @@ RULES:
 - Open with the hook immediately. No "In this video" or "Today we're going to."
 - Each scene transition must feel earned, not announced.
 - Target approximately ${lengthConfig.words} words total.
+${exemplarSection}
 
 Write the complete script now. Start immediately with the opening line. No preamble.`;
 
@@ -229,8 +275,15 @@ Return the complete improved script. Preserve all facts exactly. Do not add new 
   return result;
 }
 
-async function humanizationPass(script, voiceProfile, onProgress) {
+async function humanizationPass(script, voiceProfile, styleTemplate, onProgress) {
   onProgress({ pass: 'humanization', status: 'running', message: 'Final polish and humanization...' });
+
+  const exemplars = getExemplarScripts(styleTemplate, 1);
+  let exemplarSection = '';
+  if (exemplars.length > 0) {
+    exemplarSection = `\n\nREFERENCE (a top-rated script in this style — match its human quality):\n\n` +
+      exemplars[0].script.substring(0, 1000) + '\n[...]\n';
+  }
 
   let voiceNote = 'Remove all AI writing patterns. Make it sound like a thoughtful human documentary narrator wrote this after months of research.';
   if (voiceProfile) {
@@ -240,6 +293,7 @@ async function humanizationPass(script, voiceProfile, onProgress) {
   const system = `You are a script editor doing a final humanization pass.
 
 ${voiceNote}
+${exemplarSection}
 
 Remove or replace:
 - "It's worth noting that..."
@@ -452,5 +506,9 @@ module.exports = {
   analyzeVoiceProfile,
   loadVoiceProfiles,
   saveVoiceProfiles,
+  loadScriptHistory,
+  saveScriptHistory,
+  saveScriptToHistory,
+  getExemplarScripts,
   STYLE_TEMPLATES
 };
