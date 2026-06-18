@@ -82,6 +82,7 @@ app.use('/api/voiceover',     require('./routes/voiceover'));
 app.use('/api/render',        require('./routes/render'));
 app.use('/api/clips',        require('./routes/clips'));
 app.use('/api/research',     require('./routes/research'));
+app.use('/api/script-writer', require('./routes/scriptWriter'));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', anthropic_key: apiKeyLoaded, deps: DEPS });
