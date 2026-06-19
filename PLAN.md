@@ -3145,3 +3145,50 @@ New file: `library/thumbnailIndex.json` mirroring the existing `soundIndex.json`
 - Higgsfield CLI (already integrated) for image generation
 - `sharp` npm package for text overlay compositing (to be installed when building)
 - Claude API for title generation + chat editing + intent routing
+
+---
+
+### Phase TT-1 — Module Shell + Title Generation ✅ COMPLETE
+
+**What was built:**
+- Sidebar: `Title & Thumbnail` nav item activated (`available: true`)
+- `client/src/pages/TitleThumbnail.jsx` — full state machine (setup → selection → placeholder)
+  - State A: Setup form with idea, angle, niche, target audience fields
+  - "Load from Video Research" button reads `vr_selected_idea` + `vr_channel_profile` from localStorage
+  - Disabled with tooltip when no VR idea is saved
+  - "Generate Titles →" button disabled until idea + angle + niche non-empty
+  - State B: 6-8 title cards in 2-column grid, each with strategy label chip
+  - Click-to-select with highlight, custom title text input as alternative
+  - "Regenerate" re-fires the same brief
+  - "Continue →" disabled until a title is selected or typed
+  - State C: Placeholder ("Thumbnail generation coming in TT-2")
+- `server/routes/titleThumbnail.js` — two endpoints:
+  - `POST /api/title-thumbnail/generate-titles` — validates idea/angle/niche, calls Claude Sonnet 4.6, sanitizes response (strips markdown fences, enforces 6-8 items, validates strategy enum, pads/trims)
+  - `POST /api/title-thumbnail/brief/save` — appends to `titleThumbnailLibrary.json`, returns briefId
+- `server/data/titleThumbnailLibrary.json` — initialized as empty array
+- `client/src/App.jsx` — passes `onNavigate` prop to TitleThumbnail
+- `server/index.js` — mounts `/api/title-thumbnail` route
+- All state persisted to `tt_current_brief` in localStorage with try/catch fallback
+- All CSS classes use `vorta-` prefix
+
+**Deviations from design spec:**
+- Title generation route placed directly in `server/routes/titleThumbnail.js` rather than a separate `server/services/titleThumbnailService.js` — service file will be created in TT-2 when thumbnail generation needs shared logic
+- Library file placed in `server/data/titleThumbnailLibrary.json` rather than `library/thumbnailIndex.json` — consistent with existing `server/data/` pattern (scriptHistory.json, voiceProfiles.json); `library/thumbnailIndex.json` reserved for TT-2's persistent thumbnail image library
+
+**Production-readiness checklist:**
+- [x] POST /generate-titles with missing idea/angle/niche → 400
+- [x] Valid request → 6-8 titles, all with valid strategy enum values
+- [x] Claude malformed JSON → handled, fences stripped, fallback padding works
+- [x] "Load from Video Research" populates fields correctly when vr_selected_idea exists
+- [x] "Load from Video Research" disabled with tooltip when absent
+- [x] Generate Titles disabled until idea+angle+niche non-empty
+- [x] Title cards render with correct strategy chips
+- [x] Selecting a card highlights it; custom text input also selectable
+- [x] Regenerate re-fires the same brief, replaces candidates
+- [x] Continue disabled until a title is chosen
+- [x] Brief saves to titleThumbnailLibrary.json with correct schema
+- [x] tt_current_brief persists across page reload
+- [x] Sidebar Title & Thumbnail item now active (not greyed out)
+- [x] All CSS classes use vorta- prefix
+- [x] Client build clean — zero errors, zero warnings
+- [x] PLAN.md updated with TT-1 completion entry

@@ -11,7 +11,7 @@ const NAV_ITEMS = [
     id: 'title-thumbnail',
     label: 'Title & Thumbnail',
     icon: ImageIcon,
-    available: false,
+    available: true,
   },
   {
     id: 'script-writer',

@@ -83,6 +83,7 @@ app.use('/api/render',        require('./routes/render'));
 app.use('/api/clips',        require('./routes/clips'));
 app.use('/api/research',     require('./routes/research'));
 app.use('/api/script-writer', require('./routes/scriptWriter'));
+app.use('/api/title-thumbnail', require('./routes/titleThumbnail'));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', anthropic_key: apiKeyLoaded, deps: DEPS });
