@@ -34,6 +34,7 @@ remotion/public/clips/*.mov
 library/clips/*.mp4
 library/clips/*.webm
 library/clips/*.mov
+library/thumbnails/
 
 # Claude Code internal state
 .claude/

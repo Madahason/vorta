@@ -3244,3 +3244,55 @@ New file: `library/thumbnailIndex.json` mirroring the existing `soundIndex.json`
 - [x] All CSS classes use vorta- prefix
 - [x] Client build clean — zero errors, zero warnings
 - [x] PLAN.md updated with TT-2 completion entry
+
+---
+
+### Phase TT-3 — Text Overlay Compositor ✅ COMPLETE
+
+**What was built:**
+- `sharp` (npm) added to server dependencies for image compositing
+- `server/services/thumbnailComposer.js` (NEW) — `composeThumbnail()`:
+  - Reads base image dimensions via `sharp().metadata()` (never hardcoded)
+  - Builds SVG overlay text with 3-layer rendering: shadow (offset, semi-transparent), stroke (thick outline for legibility), fill (clean text on top)
+  - Font: system font stack ("Arial Black", "Helvetica Neue", Impact, sans-serif) — easy to swap for bundled font later
+  - Position logic: 'left' | 'right' | 'top' | 'bottom' mapping to safe zones
+  - Bottom-right duration badge safe zone enforced: ~15% width x 12% height reserved, text never enters that region regardless of position
+  - fontSize auto-scaled to ~10% of image height if not provided, stroke width auto-scaled from fontSize
+  - Word count > 4 triggers console warning (soft guidance, not a hard block)
+  - Composites SVG onto base JPEG via `sharp.composite()`, outputs JPEG at 92% quality
+- `server/routes/titleThumbnail.js` — added `POST /api/title-thumbnail/compose`:
+  - Validates briefId required, base image exists (400 with "generate a thumbnail image first" if missing)
+  - Resolves selectedThumbnail path to absolute, verifies file exists
+  - Calls composeThumbnail(), saves output to `library/thumbnails/[briefId]/final_v1.jpg`
+  - Updates titleThumbnailLibrary.json with `overlayState`, `finalImagePath`, `status: "composed"`
+  - Returns `{ finalImagePath, overlayState }`
+- `client/src/pages/TitleThumbnail.jsx` — State D replaced with full OverlayEditor:
+  - Live CSS preview: text overlay rendered client-side with `position: absolute`, `-webkit-text-stroke`, `text-shadow` — updates instantly on every control change, zero server calls until Save
+  - Controls panel (right sidebar): text input (prefilled with selectedTitle, fully editable), position buttons (left/right/top/bottom with icons), font size slider (32-140px), fill color picker, stroke color picker, stroke width slider (0-12px)
+  - Word count helper: shows count, turns amber at 5+ words with "consider keeping to 3-4 words" hint
+  - "Save Thumbnail" button calls POST /compose, replaces live preview with actual server-rendered final image
+  - "Download JPEG" link once saved — direct download of composited image
+  - "Edit again" button returns to live preview mode for further adjustments
+  - All overlay state persisted to `tt_current_brief` in localStorage
+
+**Deviations from design spec:**
+- `fontWeight` parameter accepted by composer but not exposed in UI slider — 800 (heavy) is the fixed default per spec; can be exposed in TT-4 if needed
+- Text wrapping implemented in composer with auto line-break at word boundaries — handles longer overlay text gracefully even though spec recommends 3-4 words
+
+**Production-readiness checklist:**
+- [x] POST /compose with missing briefId → 400
+- [x] POST /compose when brief has no base image → 400 with clear message
+- [x] Valid request → SVG overlay built, composited, saved to correct path
+- [x] Image dimensions read dynamically via sharp metadata, not hardcoded
+- [x] Text renders with stroke/shadow for legibility against varied backgrounds
+- [x] Bottom-right duration-badge zone stays clear of text regardless of position
+- [x] fontSize scales proportionally based on image dimensions
+- [x] Word count warning triggers at 5+ words, stays neutral at 4 or fewer
+- [x] Live CSS preview updates instantly on every control change, no server call
+- [x] Save replaces preview with actual rendered output
+- [x] titleThumbnailLibrary.json entry correctly stores overlayState and finalImagePath
+- [x] Download button produces a valid, correctly-sized JPEG file
+- [x] Re-opening a brief after reload restores the saved overlay controls
+- [x] All CSS classes use vorta- prefix
+- [x] Client build clean — zero errors, zero warnings
+- [x] PLAN.md updated with TT-3 completion entry

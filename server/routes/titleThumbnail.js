@@ -7,6 +7,7 @@ const http = require('http');
 const { execSync } = require('child_process');
 const { generateThumbnail } = require('../services/higgsfield');
 const { generateThumbnailPrompt } = require('../services/titleThumbnailService');
+const { composeThumbnail } = require('../services/thumbnailComposer');
 
 const LIBRARY_PATH = path.join(__dirname, '..', 'data', 'titleThumbnailLibrary.json');
 const THUMBNAILS_DIR = path.resolve(__dirname, '..', '..', 'library', 'thumbnails');
@@ -259,6 +260,75 @@ router.post('/generate-image', async (req, res) => {
     res.json({ images, styleMode: resolvedMode, prompt, failedCount });
   } catch (err) {
     console.error('[title-thumbnail/generate-image] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/title-thumbnail/compose
+router.post('/compose', async (req, res) => {
+  const { briefId, text, position, fontSize, color, strokeColor, strokeWidth } = req.body;
+
+  if (!briefId?.trim()) {
+    return res.status(400).json({ error: 'briefId is required' });
+  }
+
+  const library = loadLibrary();
+  const entry = library.find(e => e.briefId === briefId.trim());
+  if (!entry) {
+    return res.status(400).json({ error: 'Brief not found' });
+  }
+
+  // Determine the selected base image — prefer the selectedThumbnail from the request
+  // or fall back to the first base image in the library entry
+  const selectedBase = req.body.selectedThumbnail || (entry.baseImages && entry.baseImages[0]);
+  if (!selectedBase) {
+    return res.status(400).json({ error: 'Generate a thumbnail image first' });
+  }
+
+  // Resolve relative path to absolute
+  const basePath = path.resolve(__dirname, '..', '..', selectedBase.replace(/^\//, ''));
+  if (!fs.existsSync(basePath)) {
+    return res.status(400).json({ error: `Base image not found at ${selectedBase}` });
+  }
+
+  const overlayText = (text?.trim()) || entry.selectedTitle || 'Untitled';
+
+  try {
+    const briefDir = path.join(THUMBNAILS_DIR, briefId.trim());
+    if (!fs.existsSync(briefDir)) fs.mkdirSync(briefDir, { recursive: true });
+
+    const outputPath = path.join(briefDir, 'final_v1.jpg');
+    const relativePath = `/library/thumbnails/${briefId.trim()}/final_v1.jpg`;
+
+    await composeThumbnail({
+      basePath,
+      text: overlayText,
+      position: position || 'left',
+      fontSize: fontSize || undefined,
+      color: color || '#FFFFFF',
+      strokeColor: strokeColor || '#000000',
+      strokeWidth: strokeWidth !== undefined ? strokeWidth : undefined,
+      outputPath,
+    });
+
+    const overlayState = {
+      text: overlayText,
+      position: position || 'left',
+      fontSize: fontSize || null,
+      color: color || '#FFFFFF',
+      strokeColor: strokeColor || '#000000',
+      strokeWidth: strokeWidth !== undefined ? strokeWidth : null,
+    };
+
+    entry.overlayState = overlayState;
+    entry.finalImagePath = relativePath;
+    entry.status = 'composed';
+    saveLibrary(library);
+
+    console.log(`[title-thumbnail/compose] saved: ${relativePath}`);
+    res.json({ finalImagePath: relativePath, overlayState });
+  } catch (err) {
+    console.error('[title-thumbnail/compose] error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

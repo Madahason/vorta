@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { ImageIcon, Loader2, AlertCircle, ChevronRight, RefreshCw, Check, Type, Sparkles, ArrowRight, Image, AlertTriangle } from 'lucide-react'
+import { ImageIcon, Loader2, AlertCircle, ChevronRight, RefreshCw, Check, Type, Sparkles, ArrowRight, Image, AlertTriangle, Download, Save, AlignLeft, AlignRight, ArrowUp, ArrowDown } from 'lucide-react'
 
 const LS_KEY = 'tt_current_brief'
 
@@ -449,23 +449,272 @@ function ThumbnailGeneration({ brief, selectedTitle, onContinue, onBack, persist
   )
 }
 
-// --- State D: Placeholder ---
-function OverlayPlaceholder({ selectedTitle, selectedImage, onBack }) {
+const POSITIONS = [
+  { id: 'left', label: 'Left', icon: AlignLeft },
+  { id: 'right', label: 'Right', icon: AlignRight },
+  { id: 'top', label: 'Top', icon: ArrowUp },
+  { id: 'bottom', label: 'Bottom', icon: ArrowDown },
+]
+
+function getPreviewStyle(position, fontSize) {
+  const base = {
+    position: 'absolute',
+    fontFamily: '"Arial Black", "Helvetica Neue", Impact, sans-serif',
+    fontWeight: 800,
+    lineHeight: 1.15,
+    maxWidth: '45%',
+    wordBreak: 'break-word',
+  }
+  switch (position) {
+    case 'right':
+      return { ...base, right: '18%', top: '35%', textAlign: 'right' }
+    case 'top':
+      return { ...base, left: '4%', top: '4%', textAlign: 'left' }
+    case 'bottom':
+      return { ...base, left: '4%', bottom: '16%', textAlign: 'left' }
+    case 'left':
+    default:
+      return { ...base, left: '4%', top: '35%', textAlign: 'left' }
+  }
+}
+
+// --- State D: Overlay Editor ---
+function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBrief }) {
+  const saved = loadJson('tt_current_brief')
+  const savedOverlay = saved?.overlayState || {}
+
+  const [text, setText] = useState(savedOverlay.text || selectedTitle || '')
+  const [position, setPosition] = useState(savedOverlay.position || 'left')
+  const [fontSize, setFontSize] = useState(savedOverlay.fontSize || 72)
+  const [color, setColor] = useState(savedOverlay.color || '#FFFFFF')
+  const [strokeColor, setStrokeColor] = useState(savedOverlay.strokeColor || '#000000')
+  const [strokeWidth, setStrokeWidth] = useState(savedOverlay.strokeWidth ?? 4)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+  const [finalImage, setFinalImage] = useState(() => saved?.finalImagePath || null)
+  const [showFinal, setShowFinal] = useState(() => !!saved?.finalImagePath)
+
+  const wordCount = text.trim().split(/\s+/).filter(Boolean).length
+  const wordCountColor = wordCount > 4 ? '#fbbf24' : 'rgba(255,255,255,0.3)'
+
+  async function handleSave() {
+    setSaving(true)
+    setError(null)
+    try {
+      const currentBrief = loadJson('tt_current_brief') || {}
+      const resp = await fetch('/api/title-thumbnail/compose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          briefId: currentBrief.briefId || brief?.briefId,
+          text,
+          position,
+          fontSize,
+          color,
+          strokeColor,
+          strokeWidth,
+          selectedThumbnail: selectedImage,
+        }),
+      })
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.error || 'Failed to compose thumbnail')
+      setFinalImage(data.finalImagePath)
+      setShowFinal(true)
+      persistBrief({
+        overlayState: data.overlayState,
+        finalImagePath: data.finalImagePath,
+      })
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function handleControlChange() {
+    setShowFinal(false)
+  }
+
+  const previewFontSize = Math.round(fontSize * 0.55)
+
   return (
-    <div className="vorta-tt-overlay-placeholder max-w-2xl mx-auto text-center">
-      <div className="rounded-xl p-8" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-        <div className="inline-flex items-center justify-center w-14 h-14 rounded-xl mb-4" style={{ background: 'rgba(139,92,246,0.08)' }}>
-          <Type size={24} className="text-purple-400/50" />
+    <div className="vorta-tt-overlay max-w-4xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-lg font-semibold text-white">Text Overlay</h2>
+          <p className="text-xs text-white/35 mt-0.5">Add text to your thumbnail</p>
         </div>
-        <h2 className="text-lg font-semibold text-white mb-2">Thumbnail Selected</h2>
-        <p className="text-sm text-purple-300/70 font-medium mb-2">"{selectedTitle}"</p>
-        {selectedImage && (
-          <div className="mx-auto mb-4 rounded-lg overflow-hidden max-w-sm" style={{ border: '1px solid rgba(255,255,255,0.08)' }}>
-            <img src={selectedImage} alt="Selected thumbnail" className="w-full aspect-video object-cover" />
-          </div>
-        )}
-        <p className="text-xs text-white/30 mb-6">Text overlay coming in TT-3</p>
         <button onClick={onBack} className="vorta-btn vorta-btn-ghost text-xs text-white/40">← Back to thumbnails</button>
+      </div>
+
+      <div className="grid grid-cols-[1fr_320px] gap-6">
+        {/* Preview area */}
+        <div>
+          <div className="vorta-overlay-preview relative rounded-lg overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.08)' }}>
+            <div className="aspect-video relative bg-black">
+              <img
+                src={showFinal && finalImage ? finalImage + '?t=' + Date.now() : selectedImage}
+                alt="Thumbnail preview"
+                className="w-full h-full object-cover"
+              />
+              {/* Live CSS text overlay — only shown when not displaying final render */}
+              {!showFinal && text.trim() && (
+                <div
+                  style={{
+                    ...getPreviewStyle(position),
+                    fontSize: previewFontSize,
+                    color: color,
+                    WebkitTextStroke: `${Math.max(1, Math.round(strokeWidth * 0.55))}px ${strokeColor}`,
+                    textShadow: `2px 2px 4px rgba(0,0,0,0.6)`,
+                    paintOrder: 'stroke fill',
+                  }}
+                >
+                  {text}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {showFinal && (
+            <div className="flex items-center gap-3 mt-3">
+              <span className="text-[10px] text-green-400 flex items-center gap-1"><Check size={10} />Saved</span>
+              <a
+                href={finalImage}
+                download="thumbnail.jpg"
+                className="vorta-btn vorta-btn-ghost text-xs flex items-center gap-1.5"
+                style={{ color: '#c4b5fd' }}
+              >
+                <Download size={12} />Download JPEG
+              </a>
+              <button
+                onClick={() => setShowFinal(false)}
+                className="vorta-btn vorta-btn-ghost text-xs text-white/40"
+              >
+                Edit again
+              </button>
+            </div>
+          )}
+
+          {error && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.15)', color: '#fca5a5' }}>
+              <AlertCircle size={12} className="shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Controls panel */}
+        <div className="vorta-overlay-controls rounded-xl p-4 space-y-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          {/* Text input */}
+          <div className="vorta-field">
+            <label className="vorta-label">Overlay Text</label>
+            <input
+              className="vorta-input"
+              value={text}
+              onChange={e => { setText(e.target.value); handleControlChange() }}
+              placeholder="Text on thumbnail..."
+            />
+            <p className="text-[10px] mt-1" style={{ color: wordCountColor }}>
+              {wordCount} word{wordCount !== 1 ? 's' : ''}{wordCount > 4 ? ' — consider keeping to 3-4 words' : ''}
+            </p>
+          </div>
+
+          {/* Position */}
+          <div className="vorta-field">
+            <label className="vorta-label">Position</label>
+            <div className="grid grid-cols-4 gap-1.5">
+              {POSITIONS.map(p => {
+                const isActive = position === p.id
+                const Icon = p.icon
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => { setPosition(p.id); handleControlChange() }}
+                    className="vorta-position-btn flex flex-col items-center gap-1 py-2 rounded-md text-[10px] transition-all"
+                    style={{
+                      background: isActive ? 'rgba(139,92,246,0.12)' : 'rgba(255,255,255,0.03)',
+                      border: `1px solid ${isActive ? 'rgba(139,92,246,0.3)' : 'rgba(255,255,255,0.06)'}`,
+                      color: isActive ? '#c4b5fd' : 'rgba(255,255,255,0.4)',
+                    }}
+                  >
+                    <Icon size={12} />
+                    {p.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Font size */}
+          <div className="vorta-field">
+            <label className="vorta-label">Font Size: {fontSize}px</label>
+            <input
+              type="range"
+              min="32"
+              max="140"
+              value={fontSize}
+              onChange={e => { setFontSize(Number(e.target.value)); handleControlChange() }}
+              className="w-full"
+            />
+          </div>
+
+          {/* Colors */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="vorta-field">
+              <label className="vorta-label">Fill Color</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={color}
+                  onChange={e => { setColor(e.target.value); handleControlChange() }}
+                  className="w-8 h-8 rounded cursor-pointer border-0"
+                  style={{ background: 'transparent' }}
+                />
+                <span className="text-[10px] text-white/40 font-mono">{color}</span>
+              </div>
+            </div>
+            <div className="vorta-field">
+              <label className="vorta-label">Stroke Color</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={strokeColor}
+                  onChange={e => { setStrokeColor(e.target.value); handleControlChange() }}
+                  className="w-8 h-8 rounded cursor-pointer border-0"
+                  style={{ background: 'transparent' }}
+                />
+                <span className="text-[10px] text-white/40 font-mono">{strokeColor}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Stroke width */}
+          <div className="vorta-field">
+            <label className="vorta-label">Stroke Width: {strokeWidth}px</label>
+            <input
+              type="range"
+              min="0"
+              max="12"
+              value={strokeWidth}
+              onChange={e => { setStrokeWidth(Number(e.target.value)); handleControlChange() }}
+              className="w-full"
+            />
+          </div>
+
+          {/* Save button */}
+          <button
+            onClick={handleSave}
+            disabled={saving || !text.trim()}
+            className="vorta-btn vorta-btn-primary w-full flex items-center justify-center gap-2 py-2.5"
+            style={{ opacity: saving || !text.trim() ? 0.5 : 1 }}
+          >
+            {saving ? (
+              <><Loader2 size={14} className="animate-spin" />Compositing...</>
+            ) : (
+              <><Save size={14} />Save Thumbnail</>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -628,10 +877,12 @@ export default function TitleThumbnail({ onNavigate }) {
       )}
 
       {!loading && view === 'overlay' && selectedTitle && (
-        <OverlayPlaceholder
+        <OverlayEditor
+          brief={brief}
           selectedTitle={selectedTitle}
           selectedImage={selectedThumbnail}
           onBack={handleBackToThumbnails}
+          persistBrief={persistBrief}
         />
       )}
     </div>
