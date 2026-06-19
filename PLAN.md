@@ -3357,3 +3357,71 @@ Position is `{ x, y }` — normalized 0.0-1.0 percentages, resolution-independen
 - [x] All CSS classes use vorta- prefix
 - [x] Client build clean — zero errors, zero warnings
 - [x] PLAN.md updated noting TT-3 extension (fonts + formatting)
+
+---
+
+### Phase TT-4 — Chat-Based Editing + Version History ✅ COMPLETE
+
+**What was built:**
+- `server/services/titleThumbnailChat.js` (NEW) — 4 exported functions:
+  - `chatEditTitle(briefId, message, conversationHistory, briefContext)` — Claude call with full conversation history, returns revised title candidates with strategy tags + assistant reply
+  - `classifyIntent(message, currentState)` — Claude call that classifies into `edit_image | edit_overlay | ambiguous`; ambiguous returns a clarifying question, never guesses
+  - `chatEditImage(briefId, message, currentPrompt, currentImagePath)` — Claude rewrites the Higgsfield prompt with explicit preservation clause, then generates via CLI with `--image` reference flag (falls back to prompt-only if flag fails); downloads and saves result
+  - `chatEditOverlay(briefId, message, currentOverlayState, selectedBase)` — Claude maps natural-language instructions to overlayState field changes (font, weight, italic, uppercase, letter spacing, pill, position, color, etc.), validates against FONT_CONFIG, then calls composeThumbnail() for immediate sharp render
+- `server/routes/titleThumbnail.js` — 4 new endpoints:
+  - `POST /chat/title` — loads conversation history from versions[], calls chatEditTitle, appends version
+  - `POST /chat/thumbnail` — calls classifyIntent first; if ambiguous returns question and stops; if edit_image calls chatEditImage; if edit_overlay calls chatEditOverlay; appends version
+  - `GET /versions/:briefId` — returns the full versions[] array
+  - `POST /restore/:briefId` — finds target version, creates NEW version copying its data forward (append-only, never deletes), updates current-state fields
+- `client/src/components/title-thumbnail/ChatPanel.jsx` (NEW) — reusable chat component:
+  - Full visible scrollable chat thread with message history
+  - User messages right-aligned (purple), assistant replies left-aligned (grey), system messages centered
+  - Loading state: "Thinking..." bubble in-thread during processing
+  - Error state: red bubble with error message
+  - Ambiguous intent: clarifying question rendered as assistant reply, user responds in same thread
+  - Version history strip: horizontal scroll of version chips (v1, v2, v3...) with type icons (Image/Type/Message), current highlighted; click to restore
+  - Send on Enter or button click
+  - Loads existing version history on mount
+- `client/src/pages/TitleThumbnail.jsx` — ChatPanel integrated:
+  - Title Selection (State B): ChatPanel at bottom, title chat mode; updated titles reflect in the card grid immediately
+  - Overlay Editor (State D): ChatPanel in controls sidebar, thumbnail chat mode; image updates refresh the preview, overlay updates sync all control states (font, position, colors, pill, etc.)
+  - Restore callback updates all relevant state from restored version data
+
+**Version history schema:**
+```json
+{
+  "versionId": "v_[timestamp]",
+  "createdAt": "ISO timestamp",
+  "type": "title | image | overlay",
+  "instruction": "user's chat message or restore note",
+  "data": { /* type-specific: titles[], prompt+imagePath, or overlayState */ }
+}
+```
+- Append-only: restoring creates a NEW version, never deletes
+- Top-level fields (selectedTitle, baseImages, overlayState, etc.) always reflect current/active version
+
+**Intent routing examples:**
+- `edit_image`: "make the background darker", "remove the second person", "make it more dramatic"
+- `edit_overlay`: "change the text to say X", "use a serif font", "make it uppercase", "add a background box"
+- `ambiguous`: "make it pop more", "make it better" → returns clarifying question
+
+**Production-readiness checklist:**
+- [x] Title chat returns valid candidates on first message
+- [x] Title chat maintains conversation context across turns
+- [x] classifyIntent correctly routes edit_image vs edit_overlay vs ambiguous
+- [x] Ambiguous intent returns clarifying question, does NOT call edit functions
+- [x] edit_image attempts --image reference flag, falls back to prompt-only
+- [x] edit_image prompt includes explicit preservation clause
+- [x] edit_overlay maps instructions to correct overlayState fields
+- [x] edit_overlay reuses thumbnailComposer for exclusion-zone clamping
+- [x] Every successful edit appends a new version, never overwrites
+- [x] versions[] correctly ordered with type + instruction + data
+- [x] Restore creates new version pointing to old data, does not delete
+- [x] Restore updates current-state fields and live preview
+- [x] Chat thread renders full scrollable history
+- [x] Version history strip renders with correct current highlight
+- [x] Loading states render in-thread as pending bubble
+- [x] titleThumbnailLibrary.json stays valid after sequential edits
+- [x] All CSS classes use vorta- prefix
+- [x] Client build clean — zero errors, zero warnings
+- [x] PLAN.md updated with TT-4 completion entry

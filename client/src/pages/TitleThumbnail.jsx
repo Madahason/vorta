@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { ImageIcon, Loader2, AlertCircle, ChevronRight, RefreshCw, Check, Type, Sparkles, ArrowRight, Image, AlertTriangle, Download, Save, AlignLeft, AlignRight, AlignCenter, ArrowUp, ArrowDown, Move } from 'lucide-react'
+import ChatPanel from '../components/title-thumbnail/ChatPanel'
 
 const LS_KEY = 'tt_current_brief'
 
@@ -126,14 +127,17 @@ function SetupForm({ onBriefReady, initialBrief }) {
 }
 
 // --- State B: Title Selection ---
-function TitleSelection({ brief, titles, onSelect, onRegenerate, onBack, regenerating }) {
+function TitleSelection({ brief, titles, onSelect, onRegenerate, onBack, regenerating, briefId, onTitlesChanged }) {
   const [selectedIdx, setSelectedIdx] = useState(null)
   const [customTitle, setCustomTitle] = useState('')
   const [useCustom, setUseCustom] = useState(false)
+  const [localTitles, setLocalTitles] = useState(titles)
+
+  useEffect(() => { setLocalTitles(titles) }, [titles])
 
   const selectedTitle = useCustom
     ? customTitle.trim()
-    : (selectedIdx !== null && titles[selectedIdx] ? titles[selectedIdx].text : '')
+    : (selectedIdx !== null && localTitles[selectedIdx] ? localTitles[selectedIdx].text : '')
 
   const canContinue = selectedTitle.length > 0
 
@@ -164,7 +168,7 @@ function TitleSelection({ brief, titles, onSelect, onRegenerate, onBack, regener
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-lg font-semibold text-white">Choose Your Title</h2>
-          <p className="text-xs text-white/35 mt-0.5">{titles.length} candidates generated for "{brief.idea}"</p>
+          <p className="text-xs text-white/35 mt-0.5">{localTitles.length} candidates generated for "{brief.idea}"</p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={onBack} className="vorta-btn vorta-btn-ghost text-xs text-white/40">← Back</button>
@@ -179,7 +183,7 @@ function TitleSelection({ brief, titles, onSelect, onRegenerate, onBack, regener
 
       {/* Title cards grid */}
       <div className="grid grid-cols-2 gap-3 mb-6">
-        {titles.map((t, i) => {
+        {localTitles.map((t, i) => {
           const isSelected = !useCustom && selectedIdx === i
           return (
             <button
@@ -216,6 +220,22 @@ function TitleSelection({ brief, titles, onSelect, onRegenerate, onBack, regener
           placeholder="Type a custom title..."
         />
       </div>
+
+      {/* Title chat */}
+      {briefId && (
+        <div className="mb-6">
+          <ChatPanel
+            briefId={briefId}
+            mode="title"
+            onTitleUpdate={(newTitles) => {
+              setLocalTitles(newTitles)
+              setSelectedIdx(null)
+              setUseCustom(false)
+              if (onTitlesChanged) onTitlesChanged(newTitles)
+            }}
+          />
+        </div>
+      )}
 
       {/* Continue button */}
       <button
@@ -496,7 +516,7 @@ function clampToSafeZone(nx, ny) {
 }
 
 // --- State D: Overlay Editor ---
-function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBrief }) {
+function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBrief, briefId, onImageUpdated }) {
   const saved = loadJson('tt_current_brief')
   const savedOverlay = saved?.overlayState || {}
 
@@ -975,6 +995,71 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
               <><Save size={14} />Save Thumbnail</>
             )}
           </button>
+
+          {/* Thumbnail chat */}
+          {briefId && (
+            <ChatPanel
+              briefId={briefId}
+              mode="thumbnail"
+              onImageUpdate={(imagePath, prompt) => {
+                if (onImageUpdated) onImageUpdated(imagePath)
+                setShowFinal(false)
+                handleControlChange()
+              }}
+              onOverlayUpdate={(newOverlay, newFinalPath) => {
+                if (newOverlay.text !== undefined) setText(newOverlay.text)
+                if (newOverlay.x !== undefined) setPosX(newOverlay.x)
+                if (newOverlay.y !== undefined) setPosY(newOverlay.y)
+                if (newOverlay.fontSize) setFontSize(newOverlay.fontSize)
+                if (newOverlay.color) setColor(newOverlay.color)
+                if (newOverlay.strokeColor) setStrokeColor(newOverlay.strokeColor)
+                if (newOverlay.strokeWidth !== undefined) setStrokeWidth(newOverlay.strokeWidth)
+                if (newOverlay.fontFamily) { setFontFamily(newOverlay.fontFamily); setFontWeight(newOverlay.fontWeight || null) }
+                if (newOverlay.italic !== undefined) setItalic(newOverlay.italic)
+                if (newOverlay.uppercase !== undefined) setUppercase(newOverlay.uppercase)
+                if (newOverlay.letterSpacing !== undefined) setLetterSpacing(newOverlay.letterSpacing)
+                if (newOverlay.backgroundPill !== undefined) setBackgroundPill(newOverlay.backgroundPill)
+                if (newOverlay.backgroundPillColor) setPillColor(newOverlay.backgroundPillColor)
+                if (newOverlay.backgroundPillOpacity !== undefined) setPillOpacity(newOverlay.backgroundPillOpacity)
+                if (newFinalPath) {
+                  setFinalImage(newFinalPath)
+                  setShowFinal(true)
+                }
+                persistBrief({ overlayState: newOverlay, finalImagePath: newFinalPath })
+              }}
+              onRestore={(currentState) => {
+                if (currentState.overlayState) {
+                  const o = currentState.overlayState
+                  if (o.text !== undefined) setText(o.text)
+                  if (o.x !== undefined) setPosX(o.x)
+                  if (o.y !== undefined) setPosY(o.y)
+                  if (o.fontSize) setFontSize(o.fontSize)
+                  if (o.color) setColor(o.color)
+                  if (o.strokeColor) setStrokeColor(o.strokeColor)
+                  if (o.strokeWidth !== undefined) setStrokeWidth(o.strokeWidth)
+                  if (o.fontFamily) { setFontFamily(o.fontFamily); setFontWeight(o.fontWeight || null) }
+                  if (o.italic !== undefined) setItalic(o.italic)
+                  if (o.uppercase !== undefined) setUppercase(o.uppercase)
+                  if (o.letterSpacing !== undefined) setLetterSpacing(o.letterSpacing)
+                  if (o.backgroundPill !== undefined) setBackgroundPill(o.backgroundPill)
+                  if (o.backgroundPillColor) setPillColor(o.backgroundPillColor)
+                  if (o.backgroundPillOpacity !== undefined) setPillOpacity(o.backgroundPillOpacity)
+                }
+                if (currentState.finalImagePath) {
+                  setFinalImage(currentState.finalImagePath)
+                  setShowFinal(true)
+                }
+                if (currentState.baseImages?.[0] && onImageUpdated) {
+                  onImageUpdated(currentState.baseImages[0])
+                }
+                persistBrief({
+                  overlayState: currentState.overlayState,
+                  finalImagePath: currentState.finalImagePath,
+                  thumbnailImages: currentState.baseImages?.map(p => ({ path: p })),
+                })
+              }}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -1124,6 +1209,8 @@ export default function TitleThumbnail({ onNavigate }) {
           onRegenerate={handleRegenerate}
           onBack={handleBackToSetup}
           regenerating={loading}
+          briefId={brief?.briefId || loadJson(LS_KEY)?.briefId}
+          onTitlesChanged={(newTitles) => { setTitles(newTitles); persistBrief({ titleCandidates: newTitles }) }}
         />
       )}
 
@@ -1144,6 +1231,8 @@ export default function TitleThumbnail({ onNavigate }) {
           selectedImage={selectedThumbnail}
           onBack={handleBackToThumbnails}
           persistBrief={persistBrief}
+          briefId={brief?.briefId || loadJson(LS_KEY)?.briefId}
+          onImageUpdated={(newPath) => { setSelectedThumbnail(newPath); persistBrief({ selectedThumbnail: newPath }) }}
         />
       )}
     </div>

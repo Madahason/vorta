@@ -8,6 +8,7 @@ const { execSync } = require('child_process');
 const { generateThumbnail } = require('../services/higgsfield');
 const { generateThumbnailPrompt } = require('../services/titleThumbnailService');
 const { composeThumbnail } = require('../services/thumbnailComposer');
+const { chatEditTitle, classifyIntent, chatEditImage, chatEditOverlay } = require('../services/titleThumbnailChat');
 
 const LIBRARY_PATH = path.join(__dirname, '..', 'data', 'titleThumbnailLibrary.json');
 const THUMBNAILS_DIR = path.resolve(__dirname, '..', '..', 'library', 'thumbnails');
@@ -350,6 +351,217 @@ router.post('/compose', async (req, res) => {
     console.error('[title-thumbnail/compose] error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// --- Version helpers ---
+
+function appendVersion(entry, type, instruction, data) {
+  if (!entry.versions) entry.versions = [];
+  const version = {
+    versionId: `v_${Date.now()}`,
+    createdAt: new Date().toISOString(),
+    type,
+    instruction,
+    data,
+  };
+  entry.versions.push(version);
+  return version;
+}
+
+function buildConversationHistory(versions, type) {
+  return (versions || [])
+    .filter(v => v.type === type && v.instruction)
+    .flatMap(v => [
+      { role: 'user', content: v.instruction },
+      { role: 'assistant', content: JSON.stringify(v.data) },
+    ]);
+}
+
+// POST /api/title-thumbnail/chat/title
+router.post('/chat/title', async (req, res) => {
+  const { briefId, message } = req.body;
+  if (!briefId?.trim() || !message?.trim()) {
+    return res.status(400).json({ error: 'briefId and message are required' });
+  }
+  if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'your_key_here') {
+    return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  }
+
+  const library = loadLibrary();
+  const entry = library.find(e => e.briefId === briefId.trim());
+  if (!entry) return res.status(400).json({ error: 'Brief not found' });
+
+  try {
+    const history = buildConversationHistory(entry.versions, 'title');
+    const result = await chatEditTitle(briefId.trim(), message.trim(), history, {
+      idea: entry.idea,
+      angle: entry.angle,
+      niche: entry.niche,
+      selectedTitle: entry.selectedTitle,
+      titleCandidates: entry.titleCandidates,
+    });
+
+    if (result.titles.length > 0) {
+      entry.titleCandidates = result.titles;
+    }
+
+    appendVersion(entry, 'title', message.trim(), {
+      titles: result.titles,
+      assistantReply: result.assistantReply,
+    });
+
+    saveLibrary(library);
+    res.json(result);
+  } catch (err) {
+    console.error('[chat/title] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/title-thumbnail/chat/thumbnail
+router.post('/chat/thumbnail', async (req, res) => {
+  const { briefId, message } = req.body;
+  if (!briefId?.trim() || !message?.trim()) {
+    return res.status(400).json({ error: 'briefId and message are required' });
+  }
+  if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'your_key_here') {
+    return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  }
+
+  const library = loadLibrary();
+  const entry = library.find(e => e.briefId === briefId.trim());
+  if (!entry) return res.status(400).json({ error: 'Brief not found' });
+
+  try {
+    const intentResult = await classifyIntent(message.trim(), {
+      thumbnailPrompt: entry.thumbnailPrompt,
+      overlayState: entry.overlayState,
+    });
+
+    if (intentResult.intent === 'ambiguous') {
+      appendVersion(entry, 'overlay', message.trim(), {
+        assistantReply: intentResult.clarifyingQuestion,
+        ambiguous: true,
+      });
+      saveLibrary(library);
+      return res.json({
+        intent: 'ambiguous',
+        clarifyingQuestion: intentResult.clarifyingQuestion,
+      });
+    }
+
+    if (intentResult.intent === 'edit_image') {
+      const currentImage = (entry.baseImages && entry.baseImages[0]) || null;
+      if (!currentImage) {
+        return res.status(400).json({ error: 'Generate a thumbnail image first' });
+      }
+
+      const result = await chatEditImage(
+        briefId.trim(),
+        message.trim(),
+        entry.thumbnailPrompt || '',
+        currentImage,
+      );
+
+      entry.thumbnailPrompt = result.prompt;
+      entry.baseImages = [result.imagePath, ...(entry.baseImages || [])];
+      entry.status = 'thumbnailed';
+
+      appendVersion(entry, 'image', message.trim(), {
+        prompt: result.prompt,
+        imagePath: result.imagePath,
+        styleMode: entry.styleMode,
+      });
+
+      saveLibrary(library);
+      return res.json({
+        intent: 'edit_image',
+        imagePath: result.imagePath,
+        prompt: result.prompt,
+        assistantReply: result.assistantReply,
+      });
+    }
+
+    // edit_overlay
+    const selectedBase = (entry.baseImages && entry.baseImages[0]) || null;
+    if (!selectedBase) {
+      return res.status(400).json({ error: 'Generate a thumbnail image first' });
+    }
+
+    const result = await chatEditOverlay(
+      briefId.trim(),
+      message.trim(),
+      entry.overlayState || {},
+      selectedBase,
+    );
+
+    entry.overlayState = result.overlayState;
+    entry.finalImagePath = result.finalImagePath;
+    entry.status = 'composed';
+
+    appendVersion(entry, 'overlay', message.trim(), {
+      overlayState: result.overlayState,
+      assistantReply: result.assistantReply,
+    });
+
+    saveLibrary(library);
+    return res.json({
+      intent: 'edit_overlay',
+      overlayState: result.overlayState,
+      finalImagePath: result.finalImagePath,
+      assistantReply: result.assistantReply,
+    });
+  } catch (err) {
+    console.error('[chat/thumbnail] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/title-thumbnail/versions/:briefId
+router.get('/versions/:briefId', (req, res) => {
+  const library = loadLibrary();
+  const entry = library.find(e => e.briefId === req.params.briefId);
+  if (!entry) return res.status(404).json({ error: 'Brief not found' });
+  res.json({ versions: entry.versions || [] });
+});
+
+// POST /api/title-thumbnail/restore/:briefId
+router.post('/restore/:briefId', (req, res) => {
+  const { versionId } = req.body;
+  if (!versionId?.trim()) return res.status(400).json({ error: 'versionId is required' });
+
+  const library = loadLibrary();
+  const entry = library.find(e => e.briefId === req.params.briefId);
+  if (!entry) return res.status(404).json({ error: 'Brief not found' });
+
+  const versions = entry.versions || [];
+  const target = versions.find(v => v.versionId === versionId.trim());
+  if (!target) return res.status(404).json({ error: 'Version not found' });
+
+  const restoreVersion = appendVersion(entry, target.type, `Restored to version from ${target.createdAt}`, target.data);
+
+  if (target.type === 'title' && target.data?.titles) {
+    entry.titleCandidates = target.data.titles;
+  } else if (target.type === 'image' && target.data?.imagePath) {
+    entry.baseImages = [target.data.imagePath, ...(entry.baseImages || []).filter(p => p !== target.data.imagePath)];
+    if (target.data.prompt) entry.thumbnailPrompt = target.data.prompt;
+  } else if (target.type === 'overlay' && target.data?.overlayState) {
+    entry.overlayState = target.data.overlayState;
+    if (target.data.finalImagePath) entry.finalImagePath = target.data.finalImagePath;
+  }
+
+  saveLibrary(library);
+  res.json({
+    restored: restoreVersion,
+    currentState: {
+      selectedTitle: entry.selectedTitle,
+      titleCandidates: entry.titleCandidates,
+      baseImages: entry.baseImages,
+      overlayState: entry.overlayState,
+      finalImagePath: entry.finalImagePath,
+      thumbnailPrompt: entry.thumbnailPrompt,
+    },
+  });
 });
 
 module.exports = router;
