@@ -457,6 +457,29 @@ const PRESETS = [
   { id: 'bottom', label: 'Bottom', icon: ArrowDown,   x: 0.5,  y: 0.85 },
 ]
 
+const FONT_FAMILIES = [
+  {
+    id: 'anton', name: 'Anton', css: 'Anton, Impact, sans-serif',
+    weights: [{ value: 400, label: 'Regular' }],
+    defaultWeight: 400, italicAvailable: false,
+  },
+  {
+    id: 'inter', name: 'Inter', css: 'Inter, "Helvetica Neue", sans-serif',
+    weights: [{ value: 700, label: 'Bold' }, { value: 900, label: 'Black' }],
+    defaultWeight: 900, italicAvailable: false,
+  },
+  {
+    id: 'playfair', name: 'Playfair', css: '"Playfair Display", Georgia, serif',
+    weights: [{ value: 700, label: 'Bold' }, { value: 900, label: 'Black' }],
+    defaultWeight: 700, italicAvailable: false,
+  },
+  {
+    id: 'oswald', name: 'Oswald', css: 'Oswald, "Arial Narrow", sans-serif',
+    weights: [{ value: 700, label: 'Bold' }],
+    defaultWeight: 700, italicAvailable: false,
+  },
+]
+
 const EXCL_W = 0.15
 const EXCL_H = 0.12
 
@@ -484,6 +507,14 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
   const [color, setColor] = useState(savedOverlay.color || '#FFFFFF')
   const [strokeColor, setStrokeColor] = useState(savedOverlay.strokeColor || '#000000')
   const [strokeWidth, setStrokeWidth] = useState(savedOverlay.strokeWidth ?? 4)
+  const [fontFamily, setFontFamily] = useState(savedOverlay.fontFamily || 'anton')
+  const [fontWeight, setFontWeight] = useState(savedOverlay.fontWeight || null)
+  const [italic, setItalic] = useState(savedOverlay.italic || false)
+  const [uppercase, setUppercase] = useState(savedOverlay.uppercase !== undefined ? savedOverlay.uppercase : true)
+  const [letterSpacing, setLetterSpacing] = useState(savedOverlay.letterSpacing || 0)
+  const [backgroundPill, setBackgroundPill] = useState(savedOverlay.backgroundPill || false)
+  const [pillColor, setPillColor] = useState(savedOverlay.backgroundPillColor || '#000000')
+  const [pillOpacity, setPillOpacity] = useState(savedOverlay.backgroundPillOpacity ?? 0.6)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [finalImage, setFinalImage] = useState(() => saved?.finalImagePath || null)
@@ -493,8 +524,13 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
 
   const canvasRef = useRef(null)
 
+  const currentFont = FONT_FAMILIES.find(f => f.id === fontFamily) || FONT_FAMILIES[0]
+  const resolvedWeight = fontWeight && currentFont.weights.some(w => w.value === fontWeight)
+    ? fontWeight : currentFont.defaultWeight
+
   const wordCount = text.trim().split(/\s+/).filter(Boolean).length
   const wordCountColor = wordCount > 4 ? '#fbbf24' : 'rgba(255,255,255,0.3)'
+  const displayText = uppercase ? text : text
 
   function handlePreset(preset) {
     const clamped = clampToSafeZone(preset.x, preset.y)
@@ -533,6 +569,16 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
     setShowFinal(false)
   }
 
+  function handleFontFamilyChange(id) {
+    setFontFamily(id)
+    const newFont = FONT_FAMILIES.find(f => f.id === id) || FONT_FAMILIES[0]
+    if (!newFont.weights.some(w => w.value === fontWeight)) {
+      setFontWeight(newFont.defaultWeight)
+    }
+    if (italic && !newFont.italicAvailable) setItalic(false)
+    setShowFinal(false)
+  }
+
   async function handleSave() {
     setSaving(true)
     setError(null)
@@ -550,6 +596,14 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
           color,
           strokeColor,
           strokeWidth,
+          fontFamily,
+          fontWeight: resolvedWeight,
+          italic,
+          uppercase,
+          letterSpacing,
+          backgroundPill,
+          backgroundPillColor: pillColor,
+          backgroundPillOpacity: pillOpacity,
           selectedThumbnail: selectedImage,
         }),
       })
@@ -629,28 +683,60 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
 
               {/* Live CSS text overlay — draggable via pointer events */}
               {!showFinal && text.trim() && (
-                <div
-                  className="vorta-overlay-text absolute pointer-events-none"
-                  style={{
-                    left: `${posX * 100}%`,
-                    top: `${posY * 100}%`,
-                    transform: 'translate(-50%, -50%)',
-                    fontFamily: '"Arial Black", "Helvetica Neue", Impact, sans-serif',
-                    fontWeight: 800,
-                    lineHeight: 1.15,
-                    fontSize: previewFontSize,
-                    color: color,
-                    WebkitTextStroke: `${Math.max(1, Math.round(strokeWidth * 0.55))}px ${strokeColor}`,
-                    textShadow: `2px 2px 4px rgba(0,0,0,0.6)`,
-                    paintOrder: 'stroke fill',
-                    maxWidth: '50%',
-                    textAlign: 'center',
-                    wordBreak: 'break-word',
-                    userSelect: 'none',
-                  }}
-                >
-                  {text}
-                </div>
+                <>
+                  {backgroundPill && (
+                    <div
+                      className="vorta-overlay-pill absolute pointer-events-none"
+                      style={{
+                        left: `${posX * 100}%`,
+                        top: `${posY * 100}%`,
+                        transform: 'translate(-50%, -50%)',
+                        background: pillColor,
+                        opacity: pillOpacity,
+                        borderRadius: Math.round(previewFontSize * 0.15),
+                        padding: `${Math.round(previewFontSize * 0.25)}px ${Math.round(previewFontSize * 0.4)}px`,
+                        maxWidth: '55%',
+                        textAlign: 'center',
+                        fontSize: previewFontSize,
+                        fontFamily: currentFont.css,
+                        fontWeight: resolvedWeight,
+                        letterSpacing: letterSpacing,
+                        lineHeight: 1.15,
+                        color: 'transparent',
+                        wordBreak: 'break-word',
+                        userSelect: 'none',
+                        fontStyle: italic ? 'italic' : 'normal',
+                      }}
+                    >
+                      {uppercase ? text.toUpperCase() : text}
+                    </div>
+                  )}
+                  <div
+                    className="vorta-overlay-text absolute pointer-events-none"
+                    style={{
+                      left: `${posX * 100}%`,
+                      top: `${posY * 100}%`,
+                      transform: 'translate(-50%, -50%)',
+                      fontFamily: currentFont.css,
+                      fontWeight: resolvedWeight,
+                      fontStyle: italic ? 'italic' : 'normal',
+                      textTransform: uppercase ? 'uppercase' : 'none',
+                      letterSpacing: letterSpacing,
+                      lineHeight: 1.15,
+                      fontSize: previewFontSize,
+                      color: color,
+                      WebkitTextStroke: `${Math.max(1, Math.round(strokeWidth * 0.55))}px ${strokeColor}`,
+                      textShadow: `2px 2px 4px rgba(0,0,0,0.6)`,
+                      paintOrder: 'stroke fill',
+                      maxWidth: '50%',
+                      textAlign: 'center',
+                      wordBreak: 'break-word',
+                      userSelect: 'none',
+                    }}
+                  >
+                    {text}
+                  </div>
+                </>
               )}
 
               {/* Drag crosshair indicator */}
@@ -695,7 +781,7 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
         </div>
 
         {/* Controls panel */}
-        <div className="vorta-overlay-controls rounded-xl p-4 space-y-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+        <div className="vorta-overlay-controls rounded-xl p-4 space-y-3 overflow-y-auto" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', maxHeight: 'calc(100vh - 180px)' }}>
           {/* Text input */}
           <div className="vorta-field">
             <label className="vorta-label">Overlay Text</label>
@@ -708,6 +794,73 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
             <p className="text-[10px] mt-1" style={{ color: wordCountColor }}>
               {wordCount} word{wordCount !== 1 ? 's' : ''}{wordCount > 4 ? ' — consider keeping to 3-4 words' : ''}
             </p>
+          </div>
+
+          {/* Font family picker */}
+          <div className="vorta-field">
+            <label className="vorta-label">Font</label>
+            <div className="grid grid-cols-2 gap-1.5">
+              {FONT_FAMILIES.map(f => {
+                const isActive = fontFamily === f.id
+                return (
+                  <button
+                    key={f.id}
+                    onClick={() => { handleFontFamilyChange(f.id); handleControlChange() }}
+                    className="vorta-font-chip text-left rounded-md px-2.5 py-2 transition-all"
+                    style={{
+                      background: isActive ? 'rgba(139,92,246,0.12)' : 'rgba(255,255,255,0.03)',
+                      border: `1px solid ${isActive ? 'rgba(139,92,246,0.3)' : 'rgba(255,255,255,0.06)'}`,
+                    }}
+                  >
+                    <span className="block text-xs" style={{ fontFamily: f.css, fontWeight: f.defaultWeight, color: isActive ? '#c4b5fd' : 'rgba(255,255,255,0.6)' }}>{f.name}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Weight + Italic + Uppercase row */}
+          <div className="flex items-center gap-1.5">
+            {currentFont.weights.length > 1 && currentFont.weights.map(w => (
+              <button
+                key={w.value}
+                onClick={() => { setFontWeight(w.value); handleControlChange() }}
+                className="vorta-weight-btn px-2 py-1 rounded text-[9px] transition-all"
+                style={{
+                  background: resolvedWeight === w.value ? 'rgba(139,92,246,0.12)' : 'rgba(255,255,255,0.03)',
+                  border: `1px solid ${resolvedWeight === w.value ? 'rgba(139,92,246,0.3)' : 'rgba(255,255,255,0.06)'}`,
+                  color: resolvedWeight === w.value ? '#c4b5fd' : 'rgba(255,255,255,0.4)',
+                  fontWeight: w.value,
+                }}
+              >
+                {w.label}
+              </button>
+            ))}
+            <button
+              onClick={() => { setItalic(!italic); handleControlChange() }}
+              disabled={!currentFont.italicAvailable && !italic}
+              className="vorta-italic-btn px-2 py-1 rounded text-[9px] transition-all"
+              title={!currentFont.italicAvailable ? 'Italic not available for this font (CSS skew used)' : ''}
+              style={{
+                background: italic ? 'rgba(139,92,246,0.12)' : 'rgba(255,255,255,0.03)',
+                border: `1px solid ${italic ? 'rgba(139,92,246,0.3)' : 'rgba(255,255,255,0.06)'}`,
+                color: italic ? '#c4b5fd' : 'rgba(255,255,255,0.4)',
+                fontStyle: 'italic',
+              }}
+            >
+              I
+            </button>
+            <button
+              onClick={() => { setUppercase(!uppercase); handleControlChange() }}
+              className="vorta-uppercase-btn px-2 py-1 rounded text-[9px] font-bold transition-all"
+              style={{
+                background: uppercase ? 'rgba(139,92,246,0.12)' : 'rgba(255,255,255,0.03)',
+                border: `1px solid ${uppercase ? 'rgba(139,92,246,0.3)' : 'rgba(255,255,255,0.06)'}`,
+                color: uppercase ? '#c4b5fd' : 'rgba(255,255,255,0.4)',
+              }}
+            >
+              AA
+            </button>
           </div>
 
           {/* Position presets */}
@@ -737,60 +890,76 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
             <p className="text-[9px] text-white/15 mt-1">x: {posX.toFixed(2)} · y: {posY.toFixed(2)}</p>
           </div>
 
-          {/* Font size */}
+          {/* Font size + letter spacing */}
           <div className="vorta-field">
-            <label className="vorta-label">Font Size: {fontSize}px</label>
-            <input
-              type="range"
-              min="32"
-              max="140"
-              value={fontSize}
-              onChange={e => { setFontSize(Number(e.target.value)); handleControlChange() }}
-              className="w-full"
-            />
+            <label className="vorta-label">Size: {fontSize}px</label>
+            <input type="range" min="32" max="140" value={fontSize}
+              onChange={e => { setFontSize(Number(e.target.value)); handleControlChange() }} className="w-full" />
+          </div>
+          <div className="vorta-field">
+            <label className="vorta-label">Letter Spacing: {letterSpacing}px</label>
+            <input type="range" min="-4" max="20" value={letterSpacing}
+              onChange={e => { setLetterSpacing(Number(e.target.value)); handleControlChange() }} className="w-full" />
           </div>
 
           {/* Colors */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-2">
             <div className="vorta-field">
-              <label className="vorta-label">Fill Color</label>
+              <label className="vorta-label">Fill</label>
               <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  value={color}
+                <input type="color" value={color}
                   onChange={e => { setColor(e.target.value); handleControlChange() }}
-                  className="w-8 h-8 rounded cursor-pointer border-0"
-                  style={{ background: 'transparent' }}
-                />
-                <span className="text-[10px] text-white/40 font-mono">{color}</span>
+                  className="w-7 h-7 rounded cursor-pointer border-0" style={{ background: 'transparent' }} />
+                <span className="text-[9px] text-white/30 font-mono">{color}</span>
               </div>
             </div>
             <div className="vorta-field">
-              <label className="vorta-label">Stroke Color</label>
+              <label className="vorta-label">Stroke</label>
               <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  value={strokeColor}
+                <input type="color" value={strokeColor}
                   onChange={e => { setStrokeColor(e.target.value); handleControlChange() }}
-                  className="w-8 h-8 rounded cursor-pointer border-0"
-                  style={{ background: 'transparent' }}
-                />
-                <span className="text-[10px] text-white/40 font-mono">{strokeColor}</span>
+                  className="w-7 h-7 rounded cursor-pointer border-0" style={{ background: 'transparent' }} />
+                <span className="text-[9px] text-white/30 font-mono">{strokeColor}</span>
               </div>
             </div>
           </div>
-
-          {/* Stroke width */}
           <div className="vorta-field">
             <label className="vorta-label">Stroke Width: {strokeWidth}px</label>
-            <input
-              type="range"
-              min="0"
-              max="12"
-              value={strokeWidth}
-              onChange={e => { setStrokeWidth(Number(e.target.value)); handleControlChange() }}
-              className="w-full"
-            />
+            <input type="range" min="0" max="12" value={strokeWidth}
+              onChange={e => { setStrokeWidth(Number(e.target.value)); handleControlChange() }} className="w-full" />
+          </div>
+
+          {/* Background pill */}
+          <div className="vorta-field">
+            <div className="flex items-center justify-between">
+              <label className="vorta-label">Background Pill</label>
+              <button
+                onClick={() => { setBackgroundPill(!backgroundPill); handleControlChange() }}
+                className="vorta-pill-toggle w-8 h-4.5 rounded-full relative transition-all"
+                style={{
+                  background: backgroundPill ? 'rgba(139,92,246,0.5)' : 'rgba(255,255,255,0.1)',
+                  padding: 2,
+                }}
+              >
+                <div className="w-3.5 h-3.5 rounded-full transition-all" style={{
+                  background: backgroundPill ? '#c4b5fd' : 'rgba(255,255,255,0.3)',
+                  transform: backgroundPill ? 'translateX(14px)' : 'translateX(0)',
+                }} />
+              </button>
+            </div>
+            {backgroundPill && (
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center gap-2">
+                  <input type="color" value={pillColor}
+                    onChange={e => { setPillColor(e.target.value); handleControlChange() }}
+                    className="w-7 h-7 rounded cursor-pointer border-0" style={{ background: 'transparent' }} />
+                  <span className="text-[9px] text-white/30 font-mono">{pillColor}</span>
+                  <span className="text-[9px] text-white/20 ml-auto">{Math.round(pillOpacity * 100)}%</span>
+                </div>
+                <input type="range" min="0" max="100" value={Math.round(pillOpacity * 100)}
+                  onChange={e => { setPillOpacity(Number(e.target.value) / 100); handleControlChange() }} className="w-full" />
+              </div>
+            )}
           </div>
 
           {/* Save button */}

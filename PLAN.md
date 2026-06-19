@@ -3305,3 +3305,55 @@ Position is `{ x, y }` — normalized 0.0-1.0 percentages, resolution-independen
 - [x] All CSS classes use vorta- prefix
 - [x] Client build clean — zero errors, zero warnings
 - [x] PLAN.md updated with TT-3 completion entry
+
+---
+
+### Phase TT-3 Extension — Bundled Fonts, Formatting Controls, Background Pill ✅ COMPLETE
+
+**What was built:**
+- 4 OFL-licensed fonts bundled in `assets/fonts/` (6 files total):
+  - Anton (Regular) — heavy condensed, shock framing / big numbers
+  - Inter (Bold, Black) — neutral grotesque, finance / tech / institutional
+  - Playfair Display (Bold, Black) — editorial serif, investigative / documentary
+  - Oswald (Bold) — versatile condensed, politics / business
+- `server/services/thumbnailComposer.js` — fully rewritten:
+  - Fonts embedded into SVG via base64 `@font-face` rules — renders identically regardless of host system fonts
+  - `FONT_CONFIG` maps font families to available weight files — no weight/italic can be selected without a bundled file backing it
+  - New params: `fontFamily`, `fontWeight`, `italic` (SVG skew fallback), `uppercase` (text-transform before render), `letterSpacing`, `backgroundPill`, `backgroundPillColor`, `backgroundPillOpacity`
+  - Background pill: rounded `<rect>` rendered in SVG before text, sized proportionally to fontSize with padding
+  - Pill bounding box included in exclusion-zone clamping — not just the bare text
+  - Per-font character-width factors for more accurate bounding box estimation (condensed fonts like Anton/Oswald vs wider fonts like Inter)
+- `server/routes/titleThumbnail.js` — compose endpoint accepts and passes through all new params with sensible defaults (fontFamily: 'anton', uppercase: true, letterSpacing: 0, backgroundPill: false)
+- `client/src/pages/TitleThumbnail.jsx` — OverlayEditor extended:
+  - **Font picker**: 2x2 grid of visual chips, each rendered in the font's own CSS family so the choice is visible before applying
+  - **Weight selector**: only shows weight buttons available for the selected font (hidden for single-weight fonts like Anton)
+  - **Italic toggle**: I button, auto-disabled when no italic support
+  - **Uppercase toggle**: AA button, defaults on
+  - **Letter spacing slider**: -4px to +20px
+  - **Background pill**: toggle switch, reveals color picker + opacity slider when enabled; pill renders in live CSS preview behind text
+  - All controls update the live preview instantly, zero server calls until Save
+
+**Font register mapping:**
+| Font | Role | Fits when |
+|------|------|-----------|
+| Anton | Impact / display | Shocking numbers, bold claims, MrBeast-adjacent energy |
+| Inter | Clean grotesque | Finance, tech, institutional, stat-driven |
+| Playfair Display | Serif / editorial | Investigative, historical, documentary register |
+| Oswald | Versatile slab-condensed | Politics, business, neutral-aggressive middle ground |
+
+**Production-readiness checklist:**
+- [x] All 4 fonts render correctly in final composited JPEG (distinct, not fallback)
+- [x] Font rendering is identical regardless of host fonts (base64-embedded in SVG)
+- [x] Weight/italic options correctly hide/disable when unavailable
+- [x] Uppercase toggle transforms text in actual rendered output
+- [x] Letter spacing visibly changes character spacing in final render
+- [x] Background pill renders behind text with correct color/opacity
+- [x] Pill bounding box also clamped away from exclusion zone
+- [x] Font preview chips rendered in their actual CSS font
+- [x] Live CSS preview updates instantly on every control, no server call
+- [x] Save produces real server-rendered result replacing preview
+- [x] titleThumbnailLibrary.json stores all new overlayState fields
+- [x] Reopening a brief restores all formatting controls
+- [x] All CSS classes use vorta- prefix
+- [x] Client build clean — zero errors, zero warnings
+- [x] PLAN.md updated noting TT-3 extension (fonts + formatting)

@@ -266,7 +266,9 @@ router.post('/generate-image', async (req, res) => {
 
 // POST /api/title-thumbnail/compose
 router.post('/compose', async (req, res) => {
-  const { briefId, text, x, y, fontSize, color, strokeColor, strokeWidth } = req.body;
+  const { briefId, text, x, y, fontSize, color, strokeColor, strokeWidth,
+    fontFamily, fontWeight, italic, uppercase, letterSpacing,
+    backgroundPill, backgroundPillColor, backgroundPillOpacity } = req.body;
 
   if (!briefId?.trim()) {
     return res.status(400).json({ error: 'briefId is required' });
@@ -308,6 +310,14 @@ router.post('/compose', async (req, res) => {
       color: color || '#FFFFFF',
       strokeColor: strokeColor || '#000000',
       strokeWidth: strokeWidth !== undefined ? strokeWidth : undefined,
+      fontFamily: fontFamily || 'anton',
+      fontWeight: fontWeight || undefined,
+      italic: !!italic,
+      uppercase: uppercase !== undefined ? !!uppercase : true,
+      letterSpacing: typeof letterSpacing === 'number' ? letterSpacing : 0,
+      backgroundPill: !!backgroundPill,
+      backgroundPillColor: backgroundPillColor || '#000000',
+      backgroundPillOpacity: typeof backgroundPillOpacity === 'number' ? backgroundPillOpacity : 0.6,
       outputPath,
     });
 
@@ -319,6 +329,14 @@ router.post('/compose', async (req, res) => {
       color: color || '#FFFFFF',
       strokeColor: strokeColor || '#000000',
       strokeWidth: strokeWidth !== undefined ? strokeWidth : null,
+      fontFamily: fontFamily || 'anton',
+      fontWeight: fontWeight || null,
+      italic: !!italic,
+      uppercase: uppercase !== undefined ? !!uppercase : true,
+      letterSpacing: typeof letterSpacing === 'number' ? letterSpacing : 0,
+      backgroundPill: !!backgroundPill,
+      backgroundPillColor: backgroundPillColor || '#000000',
+      backgroundPillOpacity: typeof backgroundPillOpacity === 'number' ? backgroundPillOpacity : 0.6,
     };
 
     entry.overlayState = overlayState;
