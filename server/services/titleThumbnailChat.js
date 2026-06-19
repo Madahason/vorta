@@ -38,20 +38,31 @@ function downloadFile(url, destPath) {
   });
 }
 
+function buildNaturalHistory(versions, type) {
+  return (versions || [])
+    .filter(v => v.type === type && v.instruction)
+    .flatMap(v => {
+      const userMsg = { role: 'user', content: v.instruction };
+      const reply = v.data?.assistantReply;
+      if (reply) return [userMsg, { role: 'assistant', content: reply }];
+      return [userMsg];
+    });
+}
+
 // --- Title chat ---
 
 async function chatEditTitle(briefId, message, conversationHistory, briefContext) {
   const client = new Anthropic();
 
   const messages = [
-    ...conversationHistory.map(h => ({ role: h.role, content: h.content })),
+    ...conversationHistory,
     { role: 'user', content: message },
   ];
 
   const resp = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 2048,
-    system: `You are a YouTube title strategist. The user is iterating on title candidates for a documentary video.
+    system: `You are a YouTube title strategist. The user is iterating on title candidates for a documentary video. You have a persistent memory of this conversation — reference prior turns when the user says things like "the second one", "like before", "go back to", etc.
 
 Context:
 - Idea: ${briefContext.idea || ''}
@@ -61,8 +72,8 @@ Context:
 - Current candidates: ${JSON.stringify(briefContext.titleCandidates || [])}
 
 When the user asks you to revise titles, return BOTH:
-1. A short natural-language reply explaining what you changed
-2. Updated title candidates
+1. A short natural-language reply explaining what you changed and why
+2. Updated title candidates (6-8 titles)
 
 Return valid JSON only:
 {"assistantReply":"short explanation","titles":[{"text":"...","strategy":"curiosity_gap|contrarian_claim|number_driven|direct_claim|shock_framing"}]}`,
@@ -102,15 +113,20 @@ Current thumbnail state:
 
 Categories:
 - edit_image: changes to the generated scene (background, subject, composition, lighting, color, mood)
+  Examples: "make the background darker", "remove the second person", "make it more dramatic", "change the lighting"
 - edit_overlay: changes to the text layer (wording, font, size, position, color, stroke, uppercase, letter spacing, background pill)
-- ambiguous: unclear what to change — ask a clarifying question
+  Examples: "change the text to say X", "make the font bigger", "move it to the top", "use a different font", "add a background box"
+- restore: the user wants to undo, revert, or go back to a previous state
+  Examples: "undo that", "go back to the previous version", "revert the last change", "what did it look like before", "undo", "go back", "revert"
+- ambiguous: unclear what to change and not an undo request — ask a clarifying question
+  Examples: "make it pop more", "make it better" with no clear target
 
-Return: {"intent":"edit_image|edit_overlay|ambiguous","clarifyingQuestion":"only if ambiguous"}`,
+Return: {"intent":"edit_image|edit_overlay|restore|ambiguous","clarifyingQuestion":"only if ambiguous"}`,
     messages: [{ role: 'user', content: message }],
   });
 
   const parsed = parseClaudeJson(resp.content[0].text.trim());
-  const intent = ['edit_image', 'edit_overlay', 'ambiguous'].includes(parsed.intent)
+  const intent = ['edit_image', 'edit_overlay', 'restore', 'ambiguous'].includes(parsed.intent)
     ? parsed.intent : 'ambiguous';
 
   return {
@@ -123,13 +139,21 @@ Return: {"intent":"edit_image|edit_overlay|ambiguous","clarifyingQuestion":"only
 
 // --- Image editing ---
 
-async function chatEditImage(briefId, message, currentPrompt, currentImagePath) {
+async function chatEditImage(briefId, message, currentPrompt, currentImagePath, conversationHistory) {
   const client = new Anthropic();
+
+  const messages = [
+    ...conversationHistory,
+    {
+      role: 'user',
+      content: `CURRENT PROMPT:\n${currentPrompt}\n\nUSER INSTRUCTION: ${message}`,
+    },
+  ];
 
   const resp = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 1500,
-    system: `You rewrite Higgsfield image generation prompts for YouTube thumbnails. Given the current prompt and the user's edit instruction, produce a revised prompt that changes ONLY what the user asked for and explicitly preserves everything else.
+    system: `You rewrite Higgsfield image generation prompts for YouTube thumbnails. Given the current prompt and the user's edit instruction, produce a revised prompt that changes ONLY what the user asked for and explicitly preserves everything else. You have memory of prior edits in this conversation — use it to understand context like "make it even darker" or "go back to how it was before the last change".
 
 RULES:
 - Start with an explicit preservation clause: "Same composition, same subject placement and framing as before, same aspect ratio and camera angle."
@@ -139,16 +163,12 @@ RULES:
 
 Return valid JSON only:
 {"prompt":"revised full prompt","assistantReply":"short explanation of what changed"}`,
-    messages: [{
-      role: 'user',
-      content: `CURRENT PROMPT:\n${currentPrompt}\n\nUSER INSTRUCTION: ${message}`,
-    }],
+    messages,
   });
 
   const parsed = parseClaudeJson(resp.content[0].text.trim());
   const revisedPrompt = parsed.prompt || currentPrompt;
 
-  // Generate single variation with reference image if available
   const absImagePath = path.resolve(__dirname, '..', '..', currentImagePath.replace(/^\//, ''));
   const hasRefImage = fs.existsSync(absImagePath);
 
@@ -202,15 +222,23 @@ Return valid JSON only:
 
 // --- Overlay editing ---
 
-async function chatEditOverlay(briefId, message, currentOverlayState, selectedBase) {
+async function chatEditOverlay(briefId, message, currentOverlayState, selectedBase, conversationHistory) {
   const client = new Anthropic();
 
   const stateDescription = JSON.stringify(currentOverlayState, null, 2);
 
+  const messages = [
+    ...conversationHistory,
+    {
+      role: 'user',
+      content: `CURRENT STATE:\n${stateDescription}\n\nINSTRUCTION: ${message}`,
+    },
+  ];
+
   const resp = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 1500,
-    system: `You edit YouTube thumbnail text overlays. Given the current overlay state and the user's instruction, return an updated overlay state with ONLY the relevant fields changed.
+    system: `You edit YouTube thumbnail text overlays. Given the current overlay state and the user's instruction, return an updated overlay state with ONLY the relevant fields changed. You have memory of prior edits — use it for context like "make it even bigger" or "change it back to what it was before".
 
 Available fields and valid values:
 - text: string (the overlay text)
@@ -231,10 +259,7 @@ Available fields and valid values:
 
 Return valid JSON only:
 {"overlayState":{...full updated state...},"assistantReply":"short explanation"}`,
-    messages: [{
-      role: 'user',
-      content: `CURRENT STATE:\n${stateDescription}\n\nINSTRUCTION: ${message}`,
-    }],
+    messages,
   });
 
   const parsed = parseClaudeJson(resp.content[0].text.trim());
@@ -292,4 +317,5 @@ module.exports = {
   classifyIntent,
   chatEditImage,
   chatEditOverlay,
+  buildNaturalHistory,
 };

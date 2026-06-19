@@ -8,7 +8,7 @@ const { execSync } = require('child_process');
 const { generateThumbnail } = require('../services/higgsfield');
 const { generateThumbnailPrompt } = require('../services/titleThumbnailService');
 const { composeThumbnail } = require('../services/thumbnailComposer');
-const { chatEditTitle, classifyIntent, chatEditImage, chatEditOverlay } = require('../services/titleThumbnailChat');
+const { chatEditTitle, classifyIntent, chatEditImage, chatEditOverlay, buildNaturalHistory } = require('../services/titleThumbnailChat');
 
 const LIBRARY_PATH = path.join(__dirname, '..', 'data', 'titleThumbnailLibrary.json');
 const THUMBNAILS_DIR = path.resolve(__dirname, '..', '..', 'library', 'thumbnails');
@@ -368,15 +368,6 @@ function appendVersion(entry, type, instruction, data) {
   return version;
 }
 
-function buildConversationHistory(versions, type) {
-  return (versions || [])
-    .filter(v => v.type === type && v.instruction)
-    .flatMap(v => [
-      { role: 'user', content: v.instruction },
-      { role: 'assistant', content: JSON.stringify(v.data) },
-    ]);
-}
-
 // POST /api/title-thumbnail/chat/title
 router.post('/chat/title', async (req, res) => {
   const { briefId, message } = req.body;
@@ -392,7 +383,7 @@ router.post('/chat/title', async (req, res) => {
   if (!entry) return res.status(400).json({ error: 'Brief not found' });
 
   try {
-    const history = buildConversationHistory(entry.versions, 'title');
+    const history = buildNaturalHistory(entry.versions, 'title');
     const result = await chatEditTitle(briefId.trim(), message.trim(), history, {
       idea: entry.idea,
       angle: entry.angle,
@@ -450,17 +441,85 @@ router.post('/chat/thumbnail', async (req, res) => {
       });
     }
 
+    // Handle natural-language undo/restore
+    if (intentResult.intent === 'restore') {
+      const versions = entry.versions || [];
+      const nonAmbiguous = versions.filter(v => !v.data?.ambiguous && v.data);
+      if (nonAmbiguous.length < 2) {
+        appendVersion(entry, 'overlay', message.trim(), {
+          assistantReply: 'No previous version to restore — this is the first edit.',
+          ambiguous: true,
+        });
+        saveLibrary(library);
+        return res.json({
+          intent: 'restore',
+          assistantReply: 'No previous version to restore — this is the first edit.',
+        });
+      }
+      const target = nonAmbiguous[nonAmbiguous.length - 2];
+      const restoreVersion = appendVersion(entry, target.type, `Restored to version from ${target.createdAt} (via: "${message.trim()}")`, {
+        ...target.data,
+        assistantReply: `Restored to the version from ${new Date(target.createdAt).toLocaleTimeString()}.`,
+      });
+
+      if (target.type === 'title' && target.data?.titles) {
+        entry.titleCandidates = target.data.titles;
+      } else if (target.type === 'image' && target.data?.imagePath) {
+        entry.baseImages = [target.data.imagePath, ...(entry.baseImages || []).filter(p => p !== target.data.imagePath)];
+        if (target.data.prompt) entry.thumbnailPrompt = target.data.prompt;
+      } else if (target.type === 'overlay' && target.data?.overlayState) {
+        entry.overlayState = target.data.overlayState;
+        // Re-compose to regenerate the final image from restored overlay state
+        const selectedBase = (entry.baseImages && entry.baseImages[0]) || null;
+        if (selectedBase) {
+          try {
+            const basePath = path.resolve(__dirname, '..', '..', selectedBase.replace(/^\//, ''));
+            const briefDir = path.join(THUMBNAILS_DIR, briefId.trim());
+            if (!fs.existsSync(briefDir)) fs.mkdirSync(briefDir, { recursive: true });
+            const outputPath = path.join(briefDir, 'final_v1.jpg');
+            const relativePath = `/library/thumbnails/${briefId.trim()}/final_v1.jpg`;
+            const o = entry.overlayState;
+            await composeThumbnail({
+              basePath, text: o.text || 'Untitled', x: o.x ?? 0.5, y: o.y ?? 0.5,
+              fontSize: o.fontSize || undefined, color: o.color || '#FFFFFF',
+              strokeColor: o.strokeColor || '#000000', strokeWidth: o.strokeWidth,
+              fontFamily: o.fontFamily || 'anton', fontWeight: o.fontWeight || undefined,
+              italic: !!o.italic, uppercase: o.uppercase !== undefined ? o.uppercase : true,
+              letterSpacing: o.letterSpacing || 0, backgroundPill: !!o.backgroundPill,
+              backgroundPillColor: o.backgroundPillColor || '#000000',
+              backgroundPillOpacity: o.backgroundPillOpacity ?? 0.6, outputPath,
+            });
+            entry.finalImagePath = relativePath;
+          } catch (compErr) {
+            console.error('[chat/thumbnail/restore] recompose failed:', compErr.message);
+          }
+        }
+      }
+
+      saveLibrary(library);
+      return res.json({
+        intent: 'restore',
+        assistantReply: `Restored to the version from ${new Date(target.createdAt).toLocaleTimeString()}.`,
+        overlayState: entry.overlayState,
+        finalImagePath: entry.finalImagePath,
+        baseImages: entry.baseImages,
+        titleCandidates: entry.titleCandidates,
+      });
+    }
+
     if (intentResult.intent === 'edit_image') {
       const currentImage = (entry.baseImages && entry.baseImages[0]) || null;
       if (!currentImage) {
         return res.status(400).json({ error: 'Generate a thumbnail image first' });
       }
 
+      const imageHistory = buildNaturalHistory(entry.versions, 'image');
       const result = await chatEditImage(
         briefId.trim(),
         message.trim(),
         entry.thumbnailPrompt || '',
         currentImage,
+        imageHistory,
       );
 
       entry.thumbnailPrompt = result.prompt;
@@ -471,6 +530,7 @@ router.post('/chat/thumbnail', async (req, res) => {
         prompt: result.prompt,
         imagePath: result.imagePath,
         styleMode: entry.styleMode,
+        assistantReply: result.assistantReply,
       });
 
       saveLibrary(library);
@@ -488,11 +548,13 @@ router.post('/chat/thumbnail', async (req, res) => {
       return res.status(400).json({ error: 'Generate a thumbnail image first' });
     }
 
+    const overlayHistory = buildNaturalHistory(entry.versions, 'overlay');
     const result = await chatEditOverlay(
       briefId.trim(),
       message.trim(),
       entry.overlayState || {},
       selectedBase,
+      overlayHistory,
     );
 
     entry.overlayState = result.overlayState;
@@ -501,6 +563,7 @@ router.post('/chat/thumbnail', async (req, res) => {
 
     appendVersion(entry, 'overlay', message.trim(), {
       overlayState: result.overlayState,
+      finalImagePath: result.finalImagePath,
       assistantReply: result.assistantReply,
     });
 

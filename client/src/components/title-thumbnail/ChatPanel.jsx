@@ -14,14 +14,17 @@ export default function ChatPanel({ briefId, mode, onTitleUpdate, onImageUpdate,
   const [versions, setVersions] = useState([])
   const scrollRef = useRef(null)
 
+  const modeTypes = mode === 'title' ? ['title'] : ['image', 'overlay']
+
   useEffect(() => {
     if (!briefId) return
     fetch(`/api/title-thumbnail/versions/${briefId}`)
       .then(r => r.json())
       .then(data => {
-        setVersions(data.versions || [])
-        const restored = (data.versions || [])
-          .filter(v => v.instruction)
+        const allVersions = data.versions || []
+        setVersions(allVersions.filter(v => modeTypes.includes(v.type)))
+        const restored = allVersions
+          .filter(v => v.instruction && modeTypes.includes(v.type))
           .flatMap(v => {
             const msgs = [{ role: 'user', content: v.instruction, time: v.createdAt, versionId: v.versionId }]
             const reply = v.data?.assistantReply || v.data?.clarifyingQuestion
@@ -77,6 +80,13 @@ export default function ChatPanel({ briefId, mode, onTitleUpdate, onImageUpdate,
         onImageUpdate(data.imagePath, data.prompt)
       } else if (data.intent === 'edit_overlay' && data.overlayState && onOverlayUpdate) {
         onOverlayUpdate(data.overlayState, data.finalImagePath)
+      } else if (data.intent === 'restore' && onRestore) {
+        onRestore({
+          overlayState: data.overlayState,
+          finalImagePath: data.finalImagePath,
+          baseImages: data.baseImages,
+          titleCandidates: data.titleCandidates,
+        })
       }
 
       fetch(`/api/title-thumbnail/versions/${briefId}`)
