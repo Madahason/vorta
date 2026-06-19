@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { ImageIcon, Loader2, AlertCircle, ChevronRight, RefreshCw, Check, Type, Sparkles, ArrowRight } from 'lucide-react'
+import { ImageIcon, Loader2, AlertCircle, ChevronRight, RefreshCw, Check, Type, Sparkles, ArrowRight, Image, AlertTriangle } from 'lucide-react'
 
 const LS_KEY = 'tt_current_brief'
 
@@ -230,18 +230,242 @@ function TitleSelection({ brief, titles, onSelect, onRegenerate, onBack, regener
   )
 }
 
-// --- State C: Placeholder ---
-function ThumbnailPlaceholder({ selectedTitle, onBack }) {
+const STYLE_MODES = [
+  { id: 'curiosity_gap', label: 'Curiosity Gap', desc: 'Shadow, mystery, dramatic light' },
+  { id: 'stat_driven', label: 'Stat Driven', desc: 'Bold number/chart dominant' },
+  { id: 'face_or_figure', label: 'Face / Figure', desc: 'Person in one third, expression-driven' },
+  { id: 'object_icon', label: 'Object Icon', desc: 'Product/symbol hero, studio bg' },
+  { id: 'before_after', label: 'Before / After', desc: 'Split composition, two states' },
+  { id: 'scene_dramatization', label: 'Scene Drama', desc: 'Dramatized real-world moment' },
+]
+
+// --- State C: Thumbnail Generation ---
+function ThumbnailGeneration({ brief, selectedTitle, onContinue, onBack, persistBrief }) {
+  const [styleMode, setStyleMode] = useState(() => {
+    const saved = loadJson('tt_current_brief')
+    return saved?.styleMode || null
+  })
+  const [images, setImages] = useState(() => {
+    const saved = loadJson('tt_current_brief')
+    return saved?.thumbnailImages || []
+  })
+  const [selectedImage, setSelectedImage] = useState(() => {
+    const saved = loadJson('tt_current_brief')
+    return saved?.selectedThumbnail || null
+  })
+  const [generating, setGenerating] = useState(false)
+  const [error, setError] = useState(null)
+  const [failedCount, setFailedCount] = useState(0)
+  const [prompt, setPrompt] = useState(null)
+
+  async function handleGenerate(overrideMode) {
+    const modeToUse = overrideMode !== undefined ? overrideMode : styleMode
+    setGenerating(true)
+    setError(null)
+    setSelectedImage(null)
+    try {
+      const currentBrief = loadJson('tt_current_brief') || {}
+      const resp = await fetch('/api/title-thumbnail/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          briefId: currentBrief.briefId || brief?.briefId || `tt_${Date.now()}`,
+          idea: brief?.idea || currentBrief.idea,
+          angle: brief?.angle || currentBrief.angle,
+          title: selectedTitle,
+          styleMode: modeToUse,
+        }),
+      })
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.error || 'Failed to generate thumbnails')
+      setImages(data.images || [])
+      setStyleMode(data.styleMode)
+      setFailedCount(data.failedCount || 0)
+      setPrompt(data.prompt || null)
+      persistBrief({
+        styleMode: data.styleMode,
+        thumbnailImages: data.images || [],
+        thumbnailPrompt: data.prompt || null,
+      })
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  function handleSelectImage(imgPath) {
+    setSelectedImage(imgPath)
+    persistBrief({ selectedThumbnail: imgPath })
+  }
+
+  function handleStyleChange(modeId) {
+    setStyleMode(modeId)
+    persistBrief({ styleMode: modeId })
+  }
+
+  function handleContinue() {
+    if (!selectedImage) return
+    onContinue(selectedImage)
+  }
+
+  const canContinue = !!selectedImage
+
   return (
-    <div className="vorta-tt-placeholder max-w-2xl mx-auto text-center">
+    <div className="vorta-tt-thumbnails max-w-4xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-lg font-semibold text-white">Generate Thumbnails</h2>
+          <p className="text-xs text-white/35 mt-0.5">Title: "{selectedTitle}"</p>
+        </div>
+        <button onClick={onBack} className="vorta-btn vorta-btn-ghost text-xs text-white/40">← Back to titles</button>
+      </div>
+
+      {/* Style mode selector */}
+      <div className="mb-6">
+        <label className="vorta-label mb-2 block">Style Mode</label>
+        <div className="grid grid-cols-3 gap-2">
+          {STYLE_MODES.map(m => {
+            const isActive = styleMode === m.id
+            return (
+              <button
+                key={m.id}
+                onClick={() => handleStyleChange(m.id)}
+                disabled={generating}
+                className="vorta-style-chip text-left rounded-lg px-3 py-2.5 transition-all"
+                style={{
+                  background: isActive ? 'rgba(139,92,246,0.1)' : 'rgba(255,255,255,0.03)',
+                  border: `1px solid ${isActive ? 'rgba(139,92,246,0.3)' : 'rgba(255,255,255,0.06)'}`,
+                  opacity: generating ? 0.5 : 1,
+                }}
+              >
+                <div className="text-xs font-medium" style={{ color: isActive ? '#c4b5fd' : 'rgba(255,255,255,0.7)' }}>{m.label}</div>
+                <div className="text-[10px] mt-0.5" style={{ color: isActive ? '#c4b5fd80' : 'rgba(255,255,255,0.3)' }}>{m.desc}</div>
+              </button>
+            )
+          })}
+        </div>
+        {!styleMode && (
+          <p className="text-[10px] text-white/25 mt-1.5">Leave unselected for auto-detection based on your idea and niche.</p>
+        )}
+      </div>
+
+      {/* Generate / Regenerate button */}
+      <div className="flex items-center gap-3 mb-6">
+        <button
+          onClick={() => handleGenerate(styleMode)}
+          disabled={generating}
+          className="vorta-btn vorta-btn-primary flex items-center gap-2 px-6 py-2.5"
+          style={{ opacity: generating ? 0.5 : 1 }}
+        >
+          {generating ? (
+            <><Loader2 size={14} className="animate-spin" />Generating 3 variations...</>
+          ) : images.length > 0 ? (
+            <><RefreshCw size={14} />Regenerate</>
+          ) : (
+            <><Image size={14} />Generate Thumbnails</>
+          )}
+        </button>
+        {styleMode && images.length > 0 && !generating && (
+          <span className="text-[10px] text-white/25">Mode: {STYLE_MODES.find(m => m.id === styleMode)?.label || styleMode}</span>
+        )}
+      </div>
+
+      {/* Error display */}
+      {error && (
+        <div className="mb-6 flex items-start gap-2 rounded-lg px-3 py-2.5 text-sm" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.15)', color: '#fca5a5' }}>
+          <AlertCircle size={14} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {/* Loading state */}
+      {generating && (
+        <div className="text-center py-12">
+          <Loader2 size={32} className="animate-spin text-purple-400 mx-auto mb-4" />
+          <p className="text-sm text-white/50">Generating 3 thumbnail variations via Higgsfield...</p>
+          <p className="text-[10px] text-white/25 mt-1">This typically takes 30-60 seconds per variation</p>
+        </div>
+      )}
+
+      {/* Image variant grid */}
+      {!generating && images.length > 0 && (
+        <>
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            {images.map((img, i) => {
+              const isSelected = selectedImage === img.path
+              return (
+                <button
+                  key={i}
+                  onClick={() => handleSelectImage(img.path)}
+                  className="vorta-thumbnail-card relative rounded-lg overflow-hidden transition-all group"
+                  style={{
+                    border: `2px solid ${isSelected ? 'rgba(139,92,246,0.6)' : 'rgba(255,255,255,0.06)'}`,
+                    boxShadow: isSelected ? '0 0 20px rgba(139,92,246,0.15)' : 'none',
+                  }}
+                >
+                  <div className="aspect-video bg-black/50">
+                    <img
+                      src={img.path}
+                      alt={`Thumbnail variation ${i + 1}`}
+                      className="w-full h-full object-cover"
+                      onError={(e) => { e.target.style.display = 'none' }}
+                    />
+                  </div>
+                  {isSelected && (
+                    <div className="absolute top-2 right-2 w-6 h-6 rounded-full flex items-center justify-center" style={{ background: 'rgba(139,92,246,0.9)' }}>
+                      <Check size={12} className="text-white" />
+                    </div>
+                  )}
+                  <div className="absolute bottom-0 left-0 right-0 px-2 py-1.5" style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.7))' }}>
+                    <span className="text-[10px] text-white/60">Variation {i + 1}</span>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          {failedCount > 0 && (
+            <div className="flex items-center gap-2 mb-4 text-[11px]" style={{ color: '#fbbf24' }}>
+              <AlertTriangle size={12} />
+              <span>{failedCount} variation{failedCount > 1 ? 's' : ''} failed — click Regenerate to retry</span>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Continue button */}
+      {images.length > 0 && !generating && (
+        <button
+          onClick={handleContinue}
+          disabled={!canContinue}
+          className="vorta-btn vorta-btn-primary w-full py-3 text-sm font-medium rounded-xl flex items-center justify-center gap-2"
+          style={{ opacity: canContinue ? 1 : 0.5 }}
+        >
+          Continue <ArrowRight size={14} />
+        </button>
+      )}
+    </div>
+  )
+}
+
+// --- State D: Placeholder ---
+function OverlayPlaceholder({ selectedTitle, selectedImage, onBack }) {
+  return (
+    <div className="vorta-tt-overlay-placeholder max-w-2xl mx-auto text-center">
       <div className="rounded-xl p-8" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
         <div className="inline-flex items-center justify-center w-14 h-14 rounded-xl mb-4" style={{ background: 'rgba(139,92,246,0.08)' }}>
-          <ImageIcon size={24} className="text-purple-400/50" />
+          <Type size={24} className="text-purple-400/50" />
         </div>
-        <h2 className="text-lg font-semibold text-white mb-2">Title Selected</h2>
-        <p className="text-sm text-purple-300/70 font-medium mb-4">"{selectedTitle}"</p>
-        <p className="text-xs text-white/30 mb-6">Thumbnail generation coming in TT-2</p>
-        <button onClick={onBack} className="vorta-btn vorta-btn-ghost text-xs text-white/40">← Back to titles</button>
+        <h2 className="text-lg font-semibold text-white mb-2">Thumbnail Selected</h2>
+        <p className="text-sm text-purple-300/70 font-medium mb-2">"{selectedTitle}"</p>
+        {selectedImage && (
+          <div className="mx-auto mb-4 rounded-lg overflow-hidden max-w-sm" style={{ border: '1px solid rgba(255,255,255,0.08)' }}>
+            <img src={selectedImage} alt="Selected thumbnail" className="w-full aspect-video object-cover" />
+          </div>
+        )}
+        <p className="text-xs text-white/30 mb-6">Text overlay coming in TT-3</p>
+        <button onClick={onBack} className="vorta-btn vorta-btn-ghost text-xs text-white/40">← Back to thumbnails</button>
       </div>
     </div>
   )
@@ -262,9 +486,14 @@ export default function TitleThumbnail({ onNavigate }) {
     const saved = loadJson(LS_KEY)
     return saved?.selectedTitle || null
   })
+  const [selectedThumbnail, setSelectedThumbnail] = useState(() => {
+    const saved = loadJson(LS_KEY)
+    return saved?.selectedThumbnail || null
+  })
   const [view, setView] = useState(() => {
     const saved = loadJson(LS_KEY)
-    if (saved?.selectedTitle) return 'placeholder'
+    if (saved?.selectedThumbnail) return 'overlay'
+    if (saved?.selectedTitle) return 'thumbnails'
     if (saved?.titleCandidates?.length > 0) return 'selection'
     return 'setup'
   })
@@ -334,7 +563,13 @@ export default function TitleThumbnail({ onNavigate }) {
       }
     } catch {}
 
-    setView('placeholder')
+    setView('thumbnails')
+  }
+
+  function handleThumbnailSelected(imagePath) {
+    setSelectedThumbnail(imagePath)
+    persistBrief({ selectedThumbnail: imagePath })
+    setView('overlay')
   }
 
   function handleBackToSetup() {
@@ -343,6 +578,10 @@ export default function TitleThumbnail({ onNavigate }) {
 
   function handleBackToSelection() {
     setView('selection')
+  }
+
+  function handleBackToThumbnails() {
+    setView('thumbnails')
   }
 
   return (
@@ -378,8 +617,22 @@ export default function TitleThumbnail({ onNavigate }) {
         />
       )}
 
-      {!loading && view === 'placeholder' && selectedTitle && (
-        <ThumbnailPlaceholder selectedTitle={selectedTitle} onBack={handleBackToSelection} />
+      {!loading && view === 'thumbnails' && selectedTitle && (
+        <ThumbnailGeneration
+          brief={brief}
+          selectedTitle={selectedTitle}
+          onContinue={handleThumbnailSelected}
+          onBack={handleBackToSelection}
+          persistBrief={persistBrief}
+        />
+      )}
+
+      {!loading && view === 'overlay' && selectedTitle && (
+        <OverlayPlaceholder
+          selectedTitle={selectedTitle}
+          selectedImage={selectedThumbnail}
+          onBack={handleBackToThumbnails}
+        />
       )}
     </div>
   )

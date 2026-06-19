@@ -1,1 +1,47 @@
-[]
+[
+  {
+    "briefId": "tt_1781897884564",
+    "createdAt": "2026-06-19T19:38:04.564Z",
+    "idea": "rise and fall of wework",
+    "angle": "wrong decisions",
+    "niche": "business and financce",
+    "targetAudience": "financial analysts",
+    "titleCandidates": [
+      {
+        "text": "WeWork's Fatal Decisions: A Financial Autopsy",
+        "strategy": "direct_claim"
+      },
+      {
+        "text": "How Adam Neumann Destroyed $47 Billion",
+        "strategy": "shock_framing"
+      },
+      {
+        "text": "The Decisions That Killed WeWork",
+        "strategy": "curiosity_gap"
+      },
+      {
+        "text": "WeWork Wasn't a Tech Company — And That's Why It Failed",
+        "strategy": "contrarian_claim"
+      },
+      {
+        "text": "7 Choices That Collapsed WeWork's Empire",
+        "strategy": "number_driven"
+      },
+      {
+        "text": "Why Smart Investors Missed WeWork's Red Flags",
+        "strategy": "curiosity_gap"
+      },
+      {
+        "text": "WeWork Fooled Wall Street. Here's How.",
+        "strategy": "shock_framing"
+      },
+      {
+        "text": "The Business Model That Was Broken From Day One",
+        "strategy": "contrarian_claim"
+      }
+    ],
+    "selectedTitle": "WeWork's Fatal Decisions: A Financial Autopsy",
+    "linkedVrIdeaId": null,
+    "status": "titled"
+  }
+]

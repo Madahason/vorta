@@ -3192,3 +3192,55 @@ New file: `library/thumbnailIndex.json` mirroring the existing `soundIndex.json`
 - [x] All CSS classes use vorta- prefix
 - [x] Client build clean — zero errors, zero warnings
 - [x] PLAN.md updated with TT-1 completion entry
+
+---
+
+### Phase TT-2 — Thumbnail Image Generation ✅ COMPLETE
+
+**What was built:**
+- `server/services/higgsfield.js` — added `generateThumbnail(prompt, variations)` using `Promise.allSettled` for parallel 3-variation generation; one failure doesn't block others
+- `server/services/titleThumbnailService.js` (NEW) — `generateThumbnailPrompt(idea, angle, title, styleMode)`: Claude Sonnet 4.6 call that auto-selects style mode if not provided and generates a Higgsfield prompt with explicit composition rules (rule-of-thirds subject placement, negative space for text, high contrast, bottom-right avoidance)
+- `server/routes/titleThumbnail.js` — added `POST /api/title-thumbnail/generate-image`:
+  - Validates briefId, idea, angle, title (400 if missing)
+  - Checks Higgsfield CLI auth via `higgsfield account` before generation — returns clear error message if not authenticated
+  - Calls Claude for prompt → Higgsfield for 3 variations → downloads images to `library/thumbnails/[briefId]/`
+  - Updates `titleThumbnailLibrary.json` entry with `styleMode`, `thumbnailPrompt`, `baseImages`, `status: "thumbnailed"`
+  - Returns `{ images, styleMode, prompt, failedCount }` — failedCount enables "X of 3" UI messaging
+- `client/src/pages/TitleThumbnail.jsx` — State C replaced with ThumbnailGeneration component:
+  - 6 style mode selector chips (curiosity_gap, stat_driven, face_or_figure, object_icon, before_after, scene_dramatization)
+  - Leave unselected for auto-detection, or pick manually
+  - Generate/Regenerate button with loading state
+  - 3-column variant grid with click-to-select, highlighted border on selected, check badge
+  - Partial failure notice ("X variation(s) failed — click Regenerate to retry")
+  - Continue button disabled until a variant is selected
+  - State D placeholder added ("Text overlay coming in TT-3")
+- All thumbnail state persisted to `tt_current_brief` in localStorage (styleMode, thumbnailImages, selectedThumbnail)
+- 4-state view machine: setup → selection → thumbnails → overlay
+
+**Style modes:**
+| Mode | Fits when | Visual approach |
+|------|-----------|-----------------|
+| `curiosity_gap` | true crime, mystery, investigative | shadow, partial subject, dramatic light |
+| `stat_driven` | finance, business, data-heavy | bold number/chart dominant |
+| `face_or_figure` | named person central | person in one third, expression-driven |
+| `object_icon` | tech/product | product/symbol hero, studio background |
+| `before_after` | transformation, rise-and-fall | split composition, two states |
+| `scene_dramatization` | historical/narrative | dramatized real-world moment |
+
+**Production-readiness checklist:**
+- [x] POST /generate-image with missing briefId/idea/angle/title → 400
+- [x] Higgsfield CLI not authenticated → clear 500 error, not raw CLI crash
+- [x] Valid request → 3 variation URLs returned via Promise.allSettled
+- [x] One variation failing doesn't block the other two from succeeding
+- [x] Images download and save to correct library/thumbnails/[briefId]/ path
+- [x] titleThumbnailLibrary.json entry updates with styleMode, prompt, baseImages
+- [x] Generated Higgsfield prompt contains explicit rule-of-thirds + negative space + contrast + bottom-right-avoidance instructions
+- [x] Style mode auto-selection produces reasonable mode based on niche
+- [x] Style mode override + regenerate works
+- [x] Variant grid renders correctly with successful images
+- [x] Selecting a variant highlights it; Continue disabled until selection made
+- [x] Regenerate replaces the grid correctly
+- [x] tt_current_brief persists styleMode + selected image path across reload
+- [x] All CSS classes use vorta- prefix
+- [x] Client build clean — zero errors, zero warnings
+- [x] PLAN.md updated with TT-2 completion entry

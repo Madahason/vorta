@@ -70,4 +70,23 @@ async function generateImage(prompt, model = MODELS.default) {
   return urlLine;
 }
 
-module.exports = { generateImage, MODELS };
+/**
+ * Generate multiple thumbnail variations in parallel.
+ * Uses Promise.allSettled so one failure doesn't cancel the others.
+ *
+ * @param {string} prompt      - Full Higgsfield prompt
+ * @param {number} [variations] - Number of parallel generations (default 3)
+ * @returns {Promise<Array<{url: string, success: boolean, error?: string}>>}
+ */
+async function generateThumbnail(prompt, variations = 3) {
+  const promises = Array.from({ length: variations }, () =>
+    generateImage(prompt).then(url => ({ url, success: true }))
+      .catch(err => ({ url: null, success: false, error: err.message }))
+  );
+
+  return Promise.allSettled(promises).then(results =>
+    results.map(r => r.status === 'fulfilled' ? r.value : { url: null, success: false, error: r.reason?.message || 'Unknown error' })
+  );
+}
+
+module.exports = { generateImage, generateThumbnail, MODELS };

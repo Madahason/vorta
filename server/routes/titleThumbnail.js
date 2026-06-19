@@ -2,8 +2,14 @@ const router = require('express').Router();
 const Anthropic = require('@anthropic-ai/sdk');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
+const http = require('http');
+const { execSync } = require('child_process');
+const { generateThumbnail } = require('../services/higgsfield');
+const { generateThumbnailPrompt } = require('../services/titleThumbnailService');
 
 const LIBRARY_PATH = path.join(__dirname, '..', 'data', 'titleThumbnailLibrary.json');
+const THUMBNAILS_DIR = path.resolve(__dirname, '..', '..', 'library', 'thumbnails');
 
 const VALID_STRATEGIES = ['curiosity_gap', 'contrarian_claim', 'number_driven', 'direct_claim', 'shock_framing'];
 
@@ -139,6 +145,120 @@ router.post('/brief/save', async (req, res) => {
     res.json({ briefId });
   } catch (err) {
     console.error('[title-thumbnail/brief/save] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Image download helper ---
+function downloadFile(url, destPath) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith('https') ? https : http;
+    const file = fs.createWriteStream(destPath);
+    client.get(url, (response) => {
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        file.close();
+        fs.unlinkSync(destPath);
+        return downloadFile(response.headers.location, destPath).then(resolve).catch(reject);
+      }
+      if (response.statusCode !== 200) {
+        file.close();
+        fs.unlinkSync(destPath);
+        return reject(new Error(`Download failed with status ${response.statusCode}`));
+      }
+      response.pipe(file);
+      file.on('finish', () => { file.close(); resolve(); });
+      file.on('error', (err) => { fs.unlinkSync(destPath); reject(err); });
+    }).on('error', (err) => {
+      fs.unlinkSync(destPath);
+      reject(err);
+    });
+  });
+}
+
+// POST /api/title-thumbnail/generate-image
+router.post('/generate-image', async (req, res) => {
+  const { briefId, idea, angle, title, styleMode } = req.body;
+
+  if (!briefId?.trim() || !idea?.trim() || !angle?.trim() || !title?.trim()) {
+    return res.status(400).json({ error: 'briefId, idea, angle, and title are all required' });
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'your_key_here') {
+    return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured — add it to .env' });
+  }
+
+  // Verify Higgsfield CLI is authenticated
+  try {
+    execSync('higgsfield account', { stdio: 'pipe', timeout: 15000 });
+  } catch (err) {
+    const detail = err.stderr?.toString().trim() || err.message;
+    console.error('[title-thumbnail/generate-image] Higgsfield auth check failed:', detail.slice(0, 200));
+    return res.status(500).json({ error: 'Higgsfield CLI not authenticated — run `higgsfield auth login`' });
+  }
+
+  try {
+    // Step 1: Generate the thumbnail prompt via Claude
+    const { prompt, styleMode: resolvedMode } = await generateThumbnailPrompt(
+      idea.trim(), angle.trim(), title.trim(), styleMode || null
+    );
+
+    console.log(`[title-thumbnail/generate-image] prompt generated, styleMode=${resolvedMode}`);
+    console.log(`[title-thumbnail/generate-image] prompt: ${prompt.slice(0, 200)}...`);
+
+    // Step 2: Generate 3 variations via Higgsfield
+    const results = await generateThumbnail(prompt, 3);
+
+    // Step 3: Download successful images
+    const briefDir = path.join(THUMBNAILS_DIR, briefId.trim());
+    if (!fs.existsSync(briefDir)) fs.mkdirSync(briefDir, { recursive: true });
+
+    const images = [];
+    let failedCount = 0;
+
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (!r.success || !r.url) {
+        failedCount++;
+        console.warn(`[title-thumbnail/generate-image] variation ${i + 1} failed:`, r.error);
+        continue;
+      }
+
+      const filename = `base_v1_${i + 1}.jpg`;
+      const filePath = path.join(briefDir, filename);
+      const relativePath = `/library/thumbnails/${briefId.trim()}/${filename}`;
+
+      try {
+        await downloadFile(r.url, filePath);
+        images.push({ path: relativePath, url: r.url });
+        console.log(`[title-thumbnail/generate-image] saved variation ${i + 1}: ${relativePath}`);
+      } catch (dlErr) {
+        failedCount++;
+        console.error(`[title-thumbnail/generate-image] download failed for variation ${i + 1}:`, dlErr.message);
+      }
+    }
+
+    if (images.length === 0) {
+      return res.status(500).json({ error: 'All thumbnail variations failed to generate' });
+    }
+
+    // Step 4: Update library entry
+    try {
+      const library = loadLibrary();
+      const entry = library.find(e => e.briefId === briefId.trim());
+      if (entry) {
+        entry.styleMode = resolvedMode;
+        entry.thumbnailPrompt = prompt;
+        entry.baseImages = images.map(img => img.path);
+        entry.status = 'thumbnailed';
+        saveLibrary(library);
+      }
+    } catch (libErr) {
+      console.error('[title-thumbnail/generate-image] library update failed:', libErr.message);
+    }
+
+    res.json({ images, styleMode: resolvedMode, prompt, failedCount });
+  } catch (err) {
+    console.error('[title-thumbnail/generate-image] error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
