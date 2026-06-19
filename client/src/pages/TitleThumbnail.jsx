@@ -800,8 +800,9 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
           )}
         </div>
 
-        {/* Controls panel */}
-        <div className="vorta-overlay-controls rounded-xl p-4 space-y-3 overflow-y-auto" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', maxHeight: 'calc(100vh - 180px)' }}>
+        {/* Controls + chat column */}
+        <div className="flex flex-col" style={{ maxHeight: 'calc(100vh - 180px)' }}>
+        <div className="vorta-overlay-controls rounded-xl p-4 space-y-3 overflow-y-auto flex-1 min-h-0" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
           {/* Text input */}
           <div className="vorta-field">
             <label className="vorta-label">Overlay Text</label>
@@ -996,8 +997,10 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
             )}
           </button>
 
-          {/* Thumbnail chat */}
+        </div>
+          {/* Thumbnail chat — pinned below scrollable controls */}
           {briefId && (
+            <div className="shrink-0 mt-2">
             <ChatPanel
               briefId={briefId}
               mode="thumbnail"
@@ -1059,6 +1062,7 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
                 })
               }}
             />
+            </div>
           )}
         </div>
       </div>
