@@ -11,8 +11,8 @@ The platform is designed to scale. Future modules (Video Research, Title & Thumb
 The sidebar navigation should reflect all planned modules, with future ones marked as "Coming soon":
 
 1. **Video Research** — finds winning video ideas, identifies angles and content gaps
-2. **Script Writer** — transforms a video idea + title + thumbnail concept into a full documentary script
-3. **Title & Thumbnail** — generates optimized titles and thumbnail concepts based on winning ideas
+2. **Title & Thumbnail** — generates optimized titles and thumbnail concepts based on winning ideas
+3. **Script Writer** — transforms a video idea + title + thumbnail concept into a full documentary script
 4. **Video Creator** ← current build
 5. **Settings** — style presets, library management, auth status
 
@@ -3018,3 +3018,130 @@ All six phases of the Video Research module are built, tested, and deployed:
 - API routes: `GET /transcripts`, `POST /transcripts`, `GET /transcripts/:id/text`, `DELETE /transcripts/:id`
 - Voice profile POST now accepts `{ name, transcriptIds, uploaderLabel }` instead of raw transcript text
 - New files: `server/data/transcriptLibrary.json`, `server/data/transcripts/.gitkeep`
+
+---
+
+## Title & Thumbnail Module — Design Spec (documented ahead of build)
+
+### Pipeline position
+
+Video Research (idea + angle/gap) → **Title & Thumbnail** (the hook/promise) → Script Writer (writes to fulfill that exact promise) → Video Creator.
+
+Title and thumbnail are created together, before the script. The script's job is to satisfy the curiosity the title/thumbnail creates — not the reverse.
+
+### Input — creative brief
+
+A lightweight object, independent of script/scene state, that can later be auto-populated by Video Research's existing output:
+
+```json
+{
+  "idea": "string",
+  "angle": "string",
+  "niche": "string",
+  "target_audience": "string",
+  "status": "draft | titled | thumbnailed | scripted"
+}
+```
+
+Can be hand-entered, or pulled directly from `vr_selected_idea` (same pattern Script Writer already uses), so the brief isn't duplicated input.
+
+### Title generation (Claude)
+
+- `generateTitles(idea, angle, niche)` → 6-8 candidates
+- Each tagged with a strategy label: `curiosity_gap`, `contrarian_claim`, `number_driven`, `direct_claim`, `shock_framing`
+- Prefer short titles; avoid padding
+- Title and thumbnail text must complement each other, not repeat — if the title states the topic, thumbnail text should add tension or a number, not restate it
+
+### Thumbnail generation — universal composition rules
+
+Apply to every thumbnail regardless of style mode:
+
+1. Subject placed in the left or right third of frame, never dead center — must be stated explicitly in the Higgsfield prompt text (image models default to centered layouts unless told otherwise)
+2. A clean negative-space zone reserved opposite the subject, specifically for text legibility
+3. High contrast / strong tonal separation between subject and background — must read clearly at small mobile thumbnail size
+4. Avoid placing key visual elements in the bottom-right corner (YouTube's duration badge overlaps that zone)
+5. Generate 3 variations per request by default (aligns with YouTube's native 3-thumbnail A/B test feature)
+
+### Thumbnail generation — style modes
+
+Selected per brief, not fixed per channel. The brief's niche/angle/category determines which mode the prompt generator reaches for by default; the user can override per generation.
+
+| Style mode | Fits when | Visual approach |
+|---|---|---|
+| `curiosity_gap` | true crime, mystery, investigative, legal | obscured/partial subject, shadow, single dramatic light source |
+| `stat_driven` | finance, business, data-heavy stories | bold number/chart as dominant visual element, minimal scene |
+| `face_or_figure` | a real named person is central to the story | person rendered prominently in one third, expression-driven |
+| `object_icon` | tech/product stories | product/symbol as hero subject, clean studio-style background |
+| `before_after` | transformation, rise-and-fall narratives | split composition contrasting two states |
+| `scene_dramatization` | historical/narrative moments | a specific dramatized real-world moment, cinematic treatment |
+
+Style consistency is enforced within a single video's 3 variants (so they look like a coherent set), not forced across different videos/projects.
+
+### Text overlay compositing rules (sharp-based, separate layer from base image)
+
+- Max 3-4 words, bold sans-serif, heavy weight
+- Keep overlay text under ~12 characters where possible — text-heavy thumbnails consistently underperform minimal-text ones
+- Default placement: the third opposite the generated subject
+- Always apply stroke/shadow for contrast regardless of background
+- Hard-avoid the bottom-right corner (duration badge safe zone)
+- This is a separate editable layer from the base image — never burned in until the user finalizes
+
+### Chat-based editing (titles and thumbnails)
+
+Both titles and thumbnails support conversational refinement via a persistent, visible chat thread per brief/thumbnail session (full scrollable history, not fire-and-forget).
+
+**Title editing:** plain Claude call with conversation history. User message → revised title candidates, same strategy tagging as initial generation.
+
+**Thumbnail editing — intent routing required:** every chat message must first be classified by Claude into one of:
+- `edit_image` — changes to the generated scene itself (background, subject, composition, lighting, color)
+- `edit_overlay` — changes to the text layer only (wording, position, size, font, color)
+- `ambiguous` — Claude asks a clarifying question in the thread instead of guessing
+
+**edit_image flow (image-reference edit, NOT true masked inpainting):**
+
+The Higgsfield CLI does not expose mask-based inpainting — confirmed via CLI's documented flags (`--image`, `--start-image`, `--end-image`, `--video`, `--audio` — none accept a mask). Edits use image-reference editing:
+
+1. Take the CURRENT stored Higgsfield prompt (not a fresh one) + the chat instruction
+2. Claude rewrites the prompt to explicitly preserve everything not mentioned and change only the requested element
+3. Call Higgsfield with `--image <current_thumbnail_path>` as reference plus the revised prompt — reference-guided regeneration, not pixel-locked inpainting; minor drift outside the edited region is possible and expected
+4. Result becomes the new current version
+
+**edit_overlay flow:** no Higgsfield call. Claude maps the instruction directly to overlay params (text/position/size/color/font) and the sharp compositor recomposes immediately — fast, no generation wait.
+
+### Version history
+
+Every chat turn that produces a new image or overlay state is saved as a version entry, not overwritten. Each thumbnail entry gains a `versions[]` array:
+
+```json
+{
+  "instruction": "make the background darker",
+  "prompt_used": "...",
+  "image_path": "...",
+  "overlay_state": { "text": "...", "position": "...", "size": "...", "color": "..." },
+  "timestamp": "2026-06-19T..."
+}
+```
+
+User can scroll the chat thread and restore any prior version.
+
+### Library (persistent, not per-project)
+
+All generated thumbnails (base image + every edited version + final composited output) persist to a permanent library — same cache-first, append-only pattern as `library/soundIndex.json`. This lets future sessions reference or reuse past hooks/thumbnails across different video projects.
+
+New file: `library/thumbnailIndex.json` mirroring the existing `soundIndex.json` structure (per-entry id, prompt, style_mode, image paths, versions, linked brief/idea).
+
+### Files to create (when building)
+
+| File | Purpose |
+|------|---------|
+| `client/src/pages/TitleThumbnail.jsx` | Main page |
+| `client/src/components/title-thumbnail/` | Component directory |
+| `server/routes/titleThumbnail.js` | API routes |
+| `server/services/titleThumbnailService.js` | Claude title gen, prompt building, intent routing |
+| `library/thumbnailIndex.json` | Persistent thumbnail library |
+
+### Dependencies
+
+- Higgsfield CLI (already integrated) for image generation
+- `sharp` npm package for text overlay compositing (to be installed when building)
+- Claude API for title generation + chat editing + intent routing

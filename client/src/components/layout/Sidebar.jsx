@@ -2,6 +2,24 @@ import { Film, Search, PenLine, ImageIcon, Settings, FolderOpen } from 'lucide-r
 
 const NAV_ITEMS = [
   {
+    id: 'video-research',
+    label: 'Video Research',
+    icon: Search,
+    available: true,
+  },
+  {
+    id: 'title-thumbnail',
+    label: 'Title & Thumbnail',
+    icon: ImageIcon,
+    available: false,
+  },
+  {
+    id: 'script-writer',
+    label: 'Script Writer',
+    icon: PenLine,
+    available: true,
+  },
+  {
     id: 'video-creator',
     label: 'Video Creator',
     icon: Film,
@@ -12,24 +30,6 @@ const NAV_ITEMS = [
     label: 'Projects',
     icon: FolderOpen,
     available: true,
-  },
-  {
-    id: 'video-research',
-    label: 'Video Research',
-    icon: Search,
-    available: true,
-  },
-  {
-    id: 'script-writer',
-    label: 'Script Writer',
-    icon: PenLine,
-    available: true,
-  },
-  {
-    id: 'title-thumbnail',
-    label: 'Title & Thumbnail',
-    icon: ImageIcon,
-    available: false,
   },
   {
     id: 'settings',
