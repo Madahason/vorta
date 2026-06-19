@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { ImageIcon, Loader2, AlertCircle, ChevronRight, RefreshCw, Check, Type, Sparkles, ArrowRight, Image, AlertTriangle, Download, Save, AlignLeft, AlignRight, ArrowUp, ArrowDown } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { ImageIcon, Loader2, AlertCircle, ChevronRight, RefreshCw, Check, Type, Sparkles, ArrowRight, Image, AlertTriangle, Download, Save, AlignLeft, AlignRight, AlignCenter, ArrowUp, ArrowDown, Move } from 'lucide-react'
 
 const LS_KEY = 'tt_current_brief'
 
@@ -449,33 +449,27 @@ function ThumbnailGeneration({ brief, selectedTitle, onContinue, onBack, persist
   )
 }
 
-const POSITIONS = [
-  { id: 'left', label: 'Left', icon: AlignLeft },
-  { id: 'right', label: 'Right', icon: AlignRight },
-  { id: 'top', label: 'Top', icon: ArrowUp },
-  { id: 'bottom', label: 'Bottom', icon: ArrowDown },
+const PRESETS = [
+  { id: 'left',   label: 'Left',   icon: AlignLeft,   x: 0.25, y: 0.5 },
+  { id: 'center', label: 'Center', icon: AlignCenter,  x: 0.5,  y: 0.5 },
+  { id: 'right',  label: 'Right',  icon: AlignRight,  x: 0.75, y: 0.5 },
+  { id: 'top',    label: 'Top',    icon: ArrowUp,     x: 0.5,  y: 0.15 },
+  { id: 'bottom', label: 'Bottom', icon: ArrowDown,   x: 0.5,  y: 0.85 },
 ]
 
-function getPreviewStyle(position, fontSize) {
-  const base = {
-    position: 'absolute',
-    fontFamily: '"Arial Black", "Helvetica Neue", Impact, sans-serif',
-    fontWeight: 800,
-    lineHeight: 1.15,
-    maxWidth: '45%',
-    wordBreak: 'break-word',
+const EXCL_W = 0.15
+const EXCL_H = 0.12
+
+function clampToSafeZone(nx, ny) {
+  let cx = Math.max(0.02, Math.min(0.98, nx))
+  let cy = Math.max(0.02, Math.min(0.98, ny))
+  if (cx > (1 - EXCL_W - 0.05) && cy > (1 - EXCL_H - 0.05)) {
+    const overX = cx - (1 - EXCL_W - 0.05)
+    const overY = cy - (1 - EXCL_H - 0.05)
+    if (overX < overY) cx = 1 - EXCL_W - 0.06
+    else cy = 1 - EXCL_H - 0.06
   }
-  switch (position) {
-    case 'right':
-      return { ...base, right: '18%', top: '35%', textAlign: 'right' }
-    case 'top':
-      return { ...base, left: '4%', top: '4%', textAlign: 'left' }
-    case 'bottom':
-      return { ...base, left: '4%', bottom: '16%', textAlign: 'left' }
-    case 'left':
-    default:
-      return { ...base, left: '4%', top: '35%', textAlign: 'left' }
-  }
+  return { x: cx, y: cy }
 }
 
 // --- State D: Overlay Editor ---
@@ -484,7 +478,8 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
   const savedOverlay = saved?.overlayState || {}
 
   const [text, setText] = useState(savedOverlay.text || selectedTitle || '')
-  const [position, setPosition] = useState(savedOverlay.position || 'left')
+  const [posX, setPosX] = useState(savedOverlay.x ?? 0.25)
+  const [posY, setPosY] = useState(savedOverlay.y ?? 0.5)
   const [fontSize, setFontSize] = useState(savedOverlay.fontSize || 72)
   const [color, setColor] = useState(savedOverlay.color || '#FFFFFF')
   const [strokeColor, setStrokeColor] = useState(savedOverlay.strokeColor || '#000000')
@@ -493,9 +488,50 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
   const [error, setError] = useState(null)
   const [finalImage, setFinalImage] = useState(() => saved?.finalImagePath || null)
   const [showFinal, setShowFinal] = useState(() => !!saved?.finalImagePath)
+  const [dragging, setDragging] = useState(false)
+  const [activePreset, setActivePreset] = useState(null)
+
+  const canvasRef = useRef(null)
 
   const wordCount = text.trim().split(/\s+/).filter(Boolean).length
   const wordCountColor = wordCount > 4 ? '#fbbf24' : 'rgba(255,255,255,0.3)'
+
+  function handlePreset(preset) {
+    const clamped = clampToSafeZone(preset.x, preset.y)
+    setPosX(clamped.x)
+    setPosY(clamped.y)
+    setActivePreset(preset.id)
+    setShowFinal(false)
+  }
+
+  function handlePointerDown(e) {
+    if (showFinal) return
+    e.preventDefault()
+    setDragging(true)
+    e.target.setPointerCapture(e.pointerId)
+    updatePosFromEvent(e)
+  }
+
+  function handlePointerMove(e) {
+    if (!dragging) return
+    updatePosFromEvent(e)
+  }
+
+  function handlePointerUp() {
+    setDragging(false)
+  }
+
+  function updatePosFromEvent(e) {
+    const rect = canvasRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const rawX = (e.clientX - rect.left) / rect.width
+    const rawY = (e.clientY - rect.top) / rect.height
+    const clamped = clampToSafeZone(rawX, rawY)
+    setPosX(clamped.x)
+    setPosY(clamped.y)
+    setActivePreset(null)
+    setShowFinal(false)
+  }
 
   async function handleSave() {
     setSaving(true)
@@ -508,7 +544,8 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
         body: JSON.stringify({
           briefId: currentBrief.briefId || brief?.briefId,
           text,
-          position,
+          x: posX,
+          y: posY,
           fontSize,
           color,
           strokeColor,
@@ -520,6 +557,10 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
       if (!resp.ok) throw new Error(data.error || 'Failed to compose thumbnail')
       setFinalImage(data.finalImagePath)
       setShowFinal(true)
+      if (data.overlayState) {
+        setPosX(data.overlayState.x)
+        setPosY(data.overlayState.y)
+      }
       persistBrief({
         overlayState: data.overlayState,
         finalImagePath: data.finalImagePath,
@@ -542,38 +583,88 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-lg font-semibold text-white">Text Overlay</h2>
-          <p className="text-xs text-white/35 mt-0.5">Add text to your thumbnail</p>
+          <p className="text-xs text-white/35 mt-0.5">Drag text to position or use presets — add text to your thumbnail</p>
         </div>
         <button onClick={onBack} className="vorta-btn vorta-btn-ghost text-xs text-white/40">← Back to thumbnails</button>
       </div>
 
-      <div className="grid grid-cols-[1fr_320px] gap-6">
+      <div className="grid grid-cols-[1fr_300px] gap-6">
         {/* Preview area */}
         <div>
-          <div className="vorta-overlay-preview relative rounded-lg overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.08)' }}>
+          <div
+            ref={canvasRef}
+            className="vorta-overlay-preview relative rounded-lg overflow-hidden select-none"
+            style={{ border: '1px solid rgba(255,255,255,0.08)', cursor: showFinal ? 'default' : 'crosshair' }}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerLeave={handlePointerUp}
+          >
             <div className="aspect-video relative bg-black">
               <img
                 src={showFinal && finalImage ? finalImage + '?t=' + Date.now() : selectedImage}
                 alt="Thumbnail preview"
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover pointer-events-none"
+                draggable={false}
               />
-              {/* Live CSS text overlay — only shown when not displaying final render */}
+
+              {/* Exclusion zone overlay — visible during editing */}
+              {!showFinal && (
+                <div
+                  className="vorta-exclusion-zone absolute pointer-events-none"
+                  style={{
+                    right: 0,
+                    bottom: 0,
+                    width: `${EXCL_W * 100}%`,
+                    height: `${EXCL_H * 100}%`,
+                    background: 'repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(239,68,68,0.12) 3px, rgba(239,68,68,0.12) 6px)',
+                    border: '1px dashed rgba(239,68,68,0.25)',
+                    borderRight: 'none',
+                    borderBottom: 'none',
+                  }}
+                >
+                  <span className="absolute top-1 left-1 text-[8px] text-red-400/40">duration badge</span>
+                </div>
+              )}
+
+              {/* Live CSS text overlay — draggable via pointer events */}
               {!showFinal && text.trim() && (
                 <div
+                  className="vorta-overlay-text absolute pointer-events-none"
                   style={{
-                    ...getPreviewStyle(position),
+                    left: `${posX * 100}%`,
+                    top: `${posY * 100}%`,
+                    transform: 'translate(-50%, -50%)',
+                    fontFamily: '"Arial Black", "Helvetica Neue", Impact, sans-serif',
+                    fontWeight: 800,
+                    lineHeight: 1.15,
                     fontSize: previewFontSize,
                     color: color,
                     WebkitTextStroke: `${Math.max(1, Math.round(strokeWidth * 0.55))}px ${strokeColor}`,
                     textShadow: `2px 2px 4px rgba(0,0,0,0.6)`,
                     paintOrder: 'stroke fill',
+                    maxWidth: '50%',
+                    textAlign: 'center',
+                    wordBreak: 'break-word',
+                    userSelect: 'none',
                   }}
                 >
                   {text}
                 </div>
               )}
+
+              {/* Drag crosshair indicator */}
+              {!showFinal && dragging && (
+                <div className="absolute pointer-events-none" style={{ left: `${posX * 100}%`, top: `${posY * 100}%`, transform: 'translate(-50%, -50%)' }}>
+                  <Move size={16} className="text-purple-400/60" />
+                </div>
+              )}
             </div>
           </div>
+
+          {!showFinal && (
+            <p className="text-[10px] text-white/20 mt-1.5 flex items-center gap-1"><Move size={9} />Click or drag on the image to reposition text</p>
+          )}
 
           {showFinal && (
             <div className="flex items-center gap-3 mt-3">
@@ -619,30 +710,31 @@ function OverlayEditor({ brief, selectedTitle, selectedImage, onBack, persistBri
             </p>
           </div>
 
-          {/* Position */}
+          {/* Position presets */}
           <div className="vorta-field">
             <label className="vorta-label">Position</label>
-            <div className="grid grid-cols-4 gap-1.5">
-              {POSITIONS.map(p => {
-                const isActive = position === p.id
+            <div className="grid grid-cols-5 gap-1">
+              {PRESETS.map(p => {
+                const isActive = activePreset === p.id
                 const Icon = p.icon
                 return (
                   <button
                     key={p.id}
-                    onClick={() => { setPosition(p.id); handleControlChange() }}
-                    className="vorta-position-btn flex flex-col items-center gap-1 py-2 rounded-md text-[10px] transition-all"
+                    onClick={() => handlePreset(p)}
+                    className="vorta-position-btn flex flex-col items-center gap-0.5 py-1.5 rounded-md text-[9px] transition-all"
                     style={{
                       background: isActive ? 'rgba(139,92,246,0.12)' : 'rgba(255,255,255,0.03)',
                       border: `1px solid ${isActive ? 'rgba(139,92,246,0.3)' : 'rgba(255,255,255,0.06)'}`,
                       color: isActive ? '#c4b5fd' : 'rgba(255,255,255,0.4)',
                     }}
                   >
-                    <Icon size={12} />
+                    <Icon size={11} />
                     {p.label}
                   </button>
                 )
               })}
             </div>
+            <p className="text-[9px] text-white/15 mt-1">x: {posX.toFixed(2)} · y: {posY.toFixed(2)}</p>
           </div>
 
           {/* Font size */}

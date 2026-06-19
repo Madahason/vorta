@@ -266,7 +266,7 @@ router.post('/generate-image', async (req, res) => {
 
 // POST /api/title-thumbnail/compose
 router.post('/compose', async (req, res) => {
-  const { briefId, text, position, fontSize, color, strokeColor, strokeWidth } = req.body;
+  const { briefId, text, x, y, fontSize, color, strokeColor, strokeWidth } = req.body;
 
   if (!briefId?.trim()) {
     return res.status(400).json({ error: 'briefId is required' });
@@ -278,20 +278,19 @@ router.post('/compose', async (req, res) => {
     return res.status(400).json({ error: 'Brief not found' });
   }
 
-  // Determine the selected base image — prefer the selectedThumbnail from the request
-  // or fall back to the first base image in the library entry
   const selectedBase = req.body.selectedThumbnail || (entry.baseImages && entry.baseImages[0]);
   if (!selectedBase) {
     return res.status(400).json({ error: 'Generate a thumbnail image first' });
   }
 
-  // Resolve relative path to absolute
   const basePath = path.resolve(__dirname, '..', '..', selectedBase.replace(/^\//, ''));
   if (!fs.existsSync(basePath)) {
     return res.status(400).json({ error: `Base image not found at ${selectedBase}` });
   }
 
   const overlayText = (text?.trim()) || entry.selectedTitle || 'Untitled';
+  const posX = typeof x === 'number' ? Math.max(0, Math.min(1, x)) : 0.5;
+  const posY = typeof y === 'number' ? Math.max(0, Math.min(1, y)) : 0.5;
 
   try {
     const briefDir = path.join(THUMBNAILS_DIR, briefId.trim());
@@ -300,10 +299,11 @@ router.post('/compose', async (req, res) => {
     const outputPath = path.join(briefDir, 'final_v1.jpg');
     const relativePath = `/library/thumbnails/${briefId.trim()}/final_v1.jpg`;
 
-    await composeThumbnail({
+    const result = await composeThumbnail({
       basePath,
       text: overlayText,
-      position: position || 'left',
+      x: posX,
+      y: posY,
       fontSize: fontSize || undefined,
       color: color || '#FFFFFF',
       strokeColor: strokeColor || '#000000',
@@ -313,7 +313,8 @@ router.post('/compose', async (req, res) => {
 
     const overlayState = {
       text: overlayText,
-      position: position || 'left',
+      x: result.x,
+      y: result.y,
       fontSize: fontSize || null,
       color: color || '#FFFFFF',
       strokeColor: strokeColor || '#000000',

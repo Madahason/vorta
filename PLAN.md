@@ -3247,52 +3247,61 @@ New file: `library/thumbnailIndex.json` mirroring the existing `soundIndex.json`
 
 ---
 
-### Phase TT-3 — Text Overlay Compositor ✅ COMPLETE
+### Phase TT-3 (revised) — Text Overlay Compositor with Drag Positioning ✅ COMPLETE
 
 **What was built:**
 - `sharp` (npm) added to server dependencies for image compositing
-- `server/services/thumbnailComposer.js` (NEW) — `composeThumbnail()`:
+- `server/services/thumbnailComposer.js` — `composeThumbnail()`:
+  - **Coordinate-based positioning**: accepts `{ x, y }` normalized 0.0-1.0 coordinates representing the CENTER point of the text block — resolution-independent
+  - Server-side exclusion zone clamping: bottom-right ~15% width x 12% height always kept clear of text, position auto-clamped (never rejected) regardless of client input
   - Reads base image dimensions via `sharp().metadata()` (never hardcoded)
-  - Builds SVG overlay text with 3-layer rendering: shadow (offset, semi-transparent), stroke (thick outline for legibility), fill (clean text on top)
-  - Font: system font stack ("Arial Black", "Helvetica Neue", Impact, sans-serif) — easy to swap for bundled font later
-  - Position logic: 'left' | 'right' | 'top' | 'bottom' mapping to safe zones
-  - Bottom-right duration badge safe zone enforced: ~15% width x 12% height reserved, text never enters that region regardless of position
+  - 3-layer SVG text rendering: shadow (offset, semi-transparent) → thick stroke outline → clean fill
+  - Font: system font stack ("Arial Black", "Helvetica Neue", Impact, sans-serif) — annotated for easy swap to bundled font
   - fontSize auto-scaled to ~10% of image height if not provided, stroke width auto-scaled from fontSize
   - Word count > 4 triggers console warning (soft guidance, not a hard block)
-  - Composites SVG onto base JPEG via `sharp.composite()`, outputs JPEG at 92% quality
-- `server/routes/titleThumbnail.js` — added `POST /api/title-thumbnail/compose`:
+  - Text wrapping at word boundaries for longer overlay text
+  - Returns `{ outputPath, x, y }` — actual clamped coordinates used, so frontend can snap to match
+- `server/routes/titleThumbnail.js` — `POST /api/title-thumbnail/compose`:
+  - Accepts `{ briefId, text, x, y, fontSize, color, strokeColor, strokeWidth }` — x/y default to center (0.5, 0.5) if omitted
   - Validates briefId required, base image exists (400 with "generate a thumbnail image first" if missing)
-  - Resolves selectedThumbnail path to absolute, verifies file exists
-  - Calls composeThumbnail(), saves output to `library/thumbnails/[briefId]/final_v1.jpg`
-  - Updates titleThumbnailLibrary.json with `overlayState`, `finalImagePath`, `status: "composed"`
-  - Returns `{ finalImagePath, overlayState }`
-- `client/src/pages/TitleThumbnail.jsx` — State D replaced with full OverlayEditor:
-  - Live CSS preview: text overlay rendered client-side with `position: absolute`, `-webkit-text-stroke`, `text-shadow` — updates instantly on every control change, zero server calls until Save
-  - Controls panel (right sidebar): text input (prefilled with selectedTitle, fully editable), position buttons (left/right/top/bottom with icons), font size slider (32-140px), fill color picker, stroke color picker, stroke width slider (0-12px)
-  - Word count helper: shows count, turns amber at 5+ words with "consider keeping to 3-4 words" hint
-  - "Save Thumbnail" button calls POST /compose, replaces live preview with actual server-rendered final image
-  - "Download JPEG" link once saved — direct download of composited image
-  - "Edit again" button returns to live preview mode for further adjustments
-  - All overlay state persisted to `tt_current_brief` in localStorage
+  - Returns `{ finalImagePath, overlayState }` — overlayState reflects clamped position
+- `client/src/pages/TitleThumbnail.jsx` — State D: full OverlayEditor with drag positioning:
+  - **Drag-to-position**: pointer events (pointerdown/move/up) on the preview canvas — click anywhere or drag to reposition text in real time
+  - **Exclusion zone visualization**: bottom-right corner has a visible hatched overlay with "duration badge" label during editing, so users understand why dragging stops there
+  - **Client-side clamping**: drag is clamped live against the exclusion zone boundary — no invalid drops possible
+  - **5 preset buttons**: Left (0.25, 0.5), Center (0.5, 0.5), Right (0.75, 0.5), Top (0.5, 0.15), Bottom (0.5, 0.85) — each jumps the text to that position; user can drag freely from there
+  - **Position coordinates display**: shows current x/y values below presets for precision
+  - Live CSS preview with `-webkit-text-stroke`, `text-shadow`, `transform: translate(-50%, -50%)` centered on {x,y} — updates instantly, zero server calls until Save
+  - Controls: text input (word count warning at 5+), font size slider, fill/stroke color pickers, stroke width slider
+  - Save calls POST /compose, snaps preview to server's clamped position if it differs, shows final render
+  - Download JPEG link; "Edit again" to return to live preview
+  - All overlay state (including x, y) persisted to `tt_current_brief` in localStorage
 
-**Deviations from design spec:**
-- `fontWeight` parameter accepted by composer but not exposed in UI slider — 800 (heavy) is the fixed default per spec; can be exposed in TT-4 if needed
-- Text wrapping implemented in composer with auto line-break at word boundaries — handles longer overlay text gracefully even though spec recommends 3-4 words
+**Position model:**
+Position is `{ x, y }` — normalized 0.0-1.0 percentages, resolution-independent. Presets set initial coordinates; dragging overwrites them. The backend only receives coordinates, never preset names.
+
+**Exclusion zone enforcement (dual):**
+- Client-side: `clampToSafeZone()` applied during every drag move — prevents text from entering the bottom-right corner interactively
+- Server-side: `clampPosition()` in thumbnailComposer.js — authoritative check, never trusts client values alone; returns actual clamped coordinates in response
 
 **Production-readiness checklist:**
 - [x] POST /compose with missing briefId → 400
 - [x] POST /compose when brief has no base image → 400 with clear message
-- [x] Valid request → SVG overlay built, composited, saved to correct path
-- [x] Image dimensions read dynamically via sharp metadata, not hardcoded
+- [x] Valid request with explicit {x, y} → composited at that position
+- [x] Valid request with no {x, y} → defaults to center (0.5, 0.5)
+- [x] {x, y} that would overlap the exclusion zone gets clamped server-side, not rejected
+- [x] Image dimensions read dynamically via sharp metadata
 - [x] Text renders with stroke/shadow for legibility against varied backgrounds
-- [x] Bottom-right duration-badge zone stays clear of text regardless of position
-- [x] fontSize scales proportionally based on image dimensions
+- [x] fontSize scales proportionally across different base image resolutions
 - [x] Word count warning triggers at 5+ words, stays neutral at 4 or fewer
-- [x] Live CSS preview updates instantly on every control change, no server call
-- [x] Save replaces preview with actual rendered output
-- [x] titleThumbnailLibrary.json entry correctly stores overlayState and finalImagePath
-- [x] Download button produces a valid, correctly-sized JPEG file
-- [x] Re-opening a brief after reload restores the saved overlay controls
+- [x] All 5 presets (Left, Center, Right, Top, Bottom) jump to correct {x, y}
+- [x] Free drag works smoothly, clamps live at exclusion zone boundary
+- [x] Exclusion zone visibly indicated on canvas during editing
+- [x] Live CSS preview updates instantly on every control/drag change, no server roundtrip
+- [x] Save replaces preview with actual rendered output; snaps to server-side clamped position
+- [x] titleThumbnailLibrary.json stores overlayState with x/y correctly
+- [x] Download produces a valid, correctly-sized JPEG
+- [x] Reopening a brief after reload restores text, position, and style controls
 - [x] All CSS classes use vorta- prefix
 - [x] Client build clean — zero errors, zero warnings
 - [x] PLAN.md updated with TT-3 completion entry
