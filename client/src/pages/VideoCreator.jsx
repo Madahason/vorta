@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Trash2, Library, X, ChevronDown, ChevronUp } from 'lucide-react'
+import { Trash2, Library, X } from 'lucide-react'
 import { VideoPlayer } from '../components/video-creator/VideoPlayer'
 import ClipLibrary from '../components/video-creator/ClipLibrary'
 import { WizardNav } from '../components/video-creator/WizardNav'
@@ -182,9 +182,6 @@ export default function VideoCreator() {
   const [resetKey, setResetKey]         = useState(0)
   const [showPreview, setShowPreview]       = useState(false)
   const [showPreviewHint, setShowPreviewHint] = useState(false)
-  const [showPlayer, setShowPlayer]     = useState(false)
-  const [playerStuck, setPlayerStuck]   = useState(false)
-  const [playerMinimized, setPlayerMinimized] = useState(false)
   const [filmGrain, setFilmGrain]       = useState(true)
   const [previewScene, setPreviewScene] = useState(null)
   // Stable array ref — prevents the preview VideoPlayer from re-initialising
@@ -192,7 +189,6 @@ export default function VideoCreator() {
   const previewScenes = useMemo(() => previewScene ? [previewScene] : [], [previewScene])
 
   const eventSourceRef       = useRef(null)
-  const sentinelRef          = useRef(null)
   const prevGeneratingRef    = useRef(false)
 
   // ─── Session-restored fade-out ───────────────────────────────────────────
@@ -266,20 +262,6 @@ export default function VideoCreator() {
     grainIntensity: filmGrain ? undefined : 0,
   }), [filmGrain])
 
-  // ─── Sticky player — IntersectionObserver on sentinel div ─────────────────
-  useEffect(() => {
-    if (!sentinelRef.current || !showPlayer) {
-      setPlayerStuck(false)
-      return
-    }
-    const observer = new IntersectionObserver(
-      ([entry]) => setPlayerStuck(!entry.isIntersecting),
-      { threshold: 0 }
-    )
-    observer.observe(sentinelRef.current)
-    return () => observer.disconnect()
-  }, [showPlayer])
-
   // ─── Re-run clip matching on load if scenes restored but matches missing ──
   useEffect(() => {
     const realScenes = scenes.filter(s => s.shot_type === 'real_footage')
@@ -319,9 +301,6 @@ export default function VideoCreator() {
     setShowClipLibrary(false)
     setShowPreview(false)
     setShowPreviewHint(false)
-    setShowPlayer(false)
-    setPlayerStuck(false)
-    setPlayerMinimized(false)
     setPreviewScene(null)
     setSessionRestored(false)
     setBadgeFading(false)
@@ -922,43 +901,9 @@ export default function VideoCreator() {
         </div>
       )}
 
-      {/* Compact sticky player — legacy, triggered when scrolled past inline player */}
-      {showPlayer && playerStuck && (
-        <div style={{
-          position: 'fixed', top: 16, right: 24, zIndex: 60, width: 320,
-          background: 'rgba(10,10,10,0.95)', backdropFilter: 'blur(12px)',
-          borderRadius: 10, border: '1px solid rgba(255,255,255,0.10)',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.55)', overflow: 'hidden',
-        }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '7px 12px', borderBottom: '1px solid rgba(255,255,255,0.07)',
-            cursor: playerMinimized ? 'pointer' : 'default',
-          }}
-            onClick={() => playerMinimized && setPlayerMinimized(false)}
-          >
-            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-              Live Preview
-            </span>
-            <button
-              onClick={e => { e.stopPropagation(); setPlayerMinimized(m => !m) }}
-              style={{ color: 'rgba(255,255,255,0.25)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex' }}
-            >
-              {playerMinimized ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-            </button>
-          </div>
-          {!playerMinimized && (
-            <VideoPlayer
-              scenes={scenes}
-              imagePaths={imagePaths}
-              selectedClips={selectedClips}
-              globalSettings={globalSettings}
-  
-              style={{ width: '100%', aspectRatio: '16 / 9', display: 'block' }}
-            />
-          )}
-        </div>
-      )}
+      {/* Legacy sticky player removed — header mini player (line 832) already provides
+         continuous preview on all non-script steps. Two simultaneous VideoPlayers mounting
+         the same scenes caused duplicate <Audio> elements for narration. */}
 
       {showClipLibrary && (
         <ClipLibrary onClose={() => setShowClipLibrary(false)} projectId={projectId} />

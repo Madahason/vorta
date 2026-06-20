@@ -359,6 +359,15 @@ export function Documentary({
     return { key: `narr-${scene.scene_id}`, narrationStart, sequenceDuration, narrationUrl, volumeFn }
   }).filter(Boolean)
 
+  // Regression guard: warn if any narration URL appears more than once
+  const narrationUrlCounts = {}
+  narrationTracks.forEach(t => {
+    narrationUrlCounts[t.narrationUrl] = (narrationUrlCounts[t.narrationUrl] || 0) + 1
+  })
+  Object.entries(narrationUrlCounts).forEach(([url, count]) => {
+    if (count > 1) console.warn(`[Documentary] DUPLICATE NARRATION: "${url}" renders ${count}× — this causes echo/stutter`)
+  })
+
   return (
     <AbsoluteFill style={{ background: '#000' }}>
       {/* Global narration track uploaded via ExportPanel (not per-scene) */}

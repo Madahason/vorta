@@ -2416,6 +2416,28 @@ function sceneDur(scene, fps) {
 
 ---
 
+## Session 23 — Fix: Voiceover repeat/echo bug
+**Commit:** `fix: voiceover repeat/echo bug — remove duplicate narration audio render path`
+**Date:** 2026-06-20
+
+### Root cause
+VideoCreator.jsx mounted a "legacy sticky player" (fixed position, appears on scroll) simultaneously with the header mini player. Both rendered the same `scenes` array, each creating their own Documentary composition with its own set of narration `<Audio>` elements. Two sets of Audio elements for the same narration files — at slightly different frame positions due to independent Player states — produced the millisecond-offset echo/stutter.
+
+The legacy sticky player was built before the header mini player existed and was never removed when the header player was added.
+
+### Fix
+- **`client/src/pages/VideoCreator.jsx`** — removed the legacy sticky player block entirely (was lines 925-961). The header mini player (always visible on non-script steps) already serves the same purpose. Cleaned up unused state (`showPlayer`, `playerStuck`, `playerMinimized`), the IntersectionObserver effect, `sentinelRef`, and unused icon imports.
+- **`remotion/src/compositions/Documentary.jsx`** — added duplicate narration URL warning: counts how many times each narration URL appears in `narrationTracks` and logs `console.warn` if any URL renders more than once. This surfaces any future reintroduction of the bug immediately in the console.
+
+### Verification
+- Documentary.jsx has exactly one `<Audio>` per scene for narration (sibling block, line 376)
+- No narration `<Audio>` inside TransitionSeries.Sequence (old path was fully removed in Session 18)
+- Narration Sequence keys are unique: `narr-${scene.scene_id}`
+- `narrationStartFrame` calculation produces a single value per scene (no dual render paths)
+- Only ONE full-scene VideoPlayer is now mounted at a time (header mini player only)
+
+---
+
 ## Session 22 — Fix: Scene repeat bug after transition system changes
 **Commit:** `fix: scene repeat bug after transition system changes + add frame-count assertion`
 **Date:** 2026-06-20
