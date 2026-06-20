@@ -47,12 +47,14 @@ async function fetchFromSerpApi(topic) {
   const client = new SerpApi.GoogleSearch(process.env.SERPAPI_KEY);
 
   return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('SerpApi timeout after 15s')), 15000);
     client.json({
       engine: 'google_trends',
       q: topic,
       date: 'today 3-m',
       data_type: 'TIMESERIES'
     }, (data) => {
+      clearTimeout(timer);
       if (data.error) reject(new Error(data.error));
       else resolve(parseSerpApiResponse(data, topic));
     });
@@ -87,7 +89,10 @@ async function fetchFromGoogleTrends(topic) {
   const startTime = new Date();
   startTime.setDate(startTime.getDate() - 90);
 
-  const result = await googleTrends.interestOverTime({ keyword: topic, startTime, endTime });
+  const result = await Promise.race([
+    googleTrends.interestOverTime({ keyword: topic, startTime, endTime }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Google Trends timeout after 15s')), 15000))
+  ]);
   return parseGoogleTrendsResponse(JSON.parse(result), topic);
 }
 

@@ -436,15 +436,66 @@ function validateProfile(profile) {
   return null;
 }
 
+function repairJson(raw) {
+  let s = raw.trim();
+  s = s.replace(/```json\s*/g, '').replace(/```\s*/g, '');
+  s = s.replace(/,\s*([\]}])/g, '$1');
+
+  // Walk the string tracking depth outside of string literals
+  // to find the last position where the structure was valid
+  let inString = false;
+  let escaped = false;
+  const stack = [];
+  let lastSafe = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\') { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{' || ch === '[') stack.push(ch);
+    else if (ch === '}' || ch === ']') stack.pop();
+    if (ch === ',' || ch === '}' || ch === ']') lastSafe = i + 1;
+  }
+
+  if (stack.length === 0) return s;
+
+  // Truncate to last safe boundary and close remaining brackets
+  s = s.slice(0, lastSafe);
+  // Remove any trailing comma
+  s = s.replace(/,\s*$/, '');
+  // Re-scan to find what's still open
+  const stack2 = [];
+  inString = false; escaped = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\') { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') stack2.push('}');
+    else if (ch === '[') stack2.push(']');
+    else if (ch === '}' || ch === ']') stack2.pop();
+  }
+  s += stack2.reverse().join('');
+  return s;
+}
+
 function parseClaudeJson(text) {
   const trimmed = text.trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const match = trimmed.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-    if (match) return JSON.parse(match[0]);
-    throw new Error('Claude returned invalid JSON');
+  // Try raw first
+  try { return JSON.parse(trimmed); } catch {}
+  // Extract the outermost JSON object or array
+  const match = trimmed.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+  if (match) {
+    try { return JSON.parse(match[0]); } catch {}
+    // Attempt repair (trailing commas, truncated structures)
+    try { return JSON.parse(repairJson(match[0])); } catch (e) {
+      const pos = parseInt((e.message.match(/position (\d+)/) || [])[1]) || 0;
+      console.error(`[parseClaudeJson] repair failed at pos ${pos}: ...${match[0].slice(Math.max(0, pos - 80), pos + 80)}...`);
+    }
   }
+  throw new Error('Claude returned invalid JSON');
 }
 
 function clampScore(val) {
@@ -564,10 +615,8 @@ async function runDiscoveryPanel(panelName, prompt, catalog) {
     messages: [{ role: 'user', content: prompt }],
   });
 
-  let jsonText = '';
-  for (const block of message.content) {
-    if (block.type === 'text') jsonText += block.text;
-  }
+  const textBlocks = message.content.filter(b => b.type === 'text').map(b => b.text);
+  const jsonText = textBlocks.length > 0 ? textBlocks[textBlocks.length - 1] : '';
 
   const parsed = parseClaudeJson(jsonText);
   const items = Array.isArray(parsed) ? parsed : (parsed[panelName] || parsed.items || []);
@@ -596,10 +645,8 @@ async function runEnrichedDiscovery(panelName, profile) {
     messages: [{ role: 'user', content: candidatePrompt }],
   });
 
-  let candidateText = '';
-  for (const block of candidateMsg.content) {
-    if (block.type === 'text') candidateText += block.text;
-  }
+  const candidateBlocks = candidateMsg.content.filter(b => b.type === 'text').map(b => b.text);
+  const candidateText = candidateBlocks.length > 0 ? candidateBlocks[candidateBlocks.length - 1] : '';
   const candidateItems = (() => {
     try {
       const p = parseClaudeJson(candidateText);
@@ -730,13 +777,16 @@ router.post('/discover', async (req, res) => {
 
     const allFallbacks = [];
     const dsInfo = {};
+    const panelErrors = {};
     const extract = (r, name) => {
       if (r.status === 'fulfilled') {
         dsInfo[name] = r.value.dataSources;
         allFallbacks.push(...(r.value.fallbacks || []));
         return r.value.items;
       }
-      console.error(`[discover/${name}]`, r.reason?.message);
+      const msg = r.reason?.message || 'Unknown error';
+      console.error(`[discover/${name}]`, msg);
+      panelErrors[name] = msg;
       return [];
     };
 
@@ -748,7 +798,15 @@ router.post('/discover', async (req, res) => {
       gaps: extract(results[1], 'gaps'),
       competitors: extract(results[2], 'competitors'),
       dataSources: { ...dsInfo, trendFallbacks: allFallbacks },
+      errors: Object.keys(panelErrors).length > 0 ? panelErrors : undefined,
     };
+
+    if (Object.keys(panelErrors).length === 3) {
+      const firstErr = Object.values(panelErrors)[0];
+      if (firstErr.includes('credit balance') || firstErr.includes('authentication')) {
+        return res.status(402).json({ error: firstErr, report });
+      }
+    }
 
     res.json(report);
   } catch (err) {
@@ -776,10 +834,14 @@ router.post('/discover/stream', async (req, res) => {
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
   });
+  res.flushHeaders();
 
   discoveryRunning = true;
   let clientDisconnected = false;
-  req.on('close', () => { clientDisconnected = true; discoveryRunning = false; });
+  res.on('close', () => {
+    clientDisconnected = true;
+    discoveryRunning = false;
+  });
 
   const reportId = `report_${Date.now()}`;
   const generatedAt = new Date().toISOString();
@@ -883,7 +945,11 @@ RULES:
 - competitorCoverage should reflect real videos if web search finds them
 - Use web search to find real competitor videos and current information about the topic
 
-Return ONLY valid JSON. No markdown, no preamble.
+JSON SAFETY — follow these exactly:
+- Return ONLY valid JSON. No markdown code fences. No preamble or explanation before or after the JSON.
+- Any double quotes within string values MUST be escaped as \\" — this includes quoted speech in hooks, titles with quotes, and any attribution.
+- Do not use unescaped newlines within string values — use \\n if a line break is needed.
+- No trailing commas before closing brackets.
 {
   "topic": "${opportunity.title}",
   "angles": [
@@ -920,9 +986,12 @@ Return ONLY valid JSON. No markdown, no preamble.
       }],
     });
 
-    let jsonText = '';
-    for (const block of message.content) {
-      if (block.type === 'text') jsonText += block.text;
+    const textBlocks = message.content.filter(b => b.type === 'text').map(b => b.text);
+    // Use the last text block — earlier blocks are thinking/preamble from web_search
+    const jsonText = textBlocks.length > 0 ? textBlocks[textBlocks.length - 1] : '';
+
+    if (message.stop_reason === 'max_tokens') {
+      console.warn('[angles] response truncated by max_tokens — attempting repair');
     }
 
     const parsed = parseClaudeJson(jsonText);
@@ -979,7 +1048,12 @@ Return ONLY valid JSON. No markdown, no preamble.
     });
   } catch (err) {
     console.error('[research/angles] error:', err.message);
-    res.status(500).json({ error: err.message });
+    const isParseError = err.message.includes('JSON') || err.message.includes('position');
+    res.status(500).json({
+      error: isParseError
+        ? 'Failed to parse angle data — please try again'
+        : err.message
+    });
   }
 });
 

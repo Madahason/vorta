@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Player } from '@remotion/player'
-import { Documentary } from '@remotion-compositions/compositions/Documentary'
+import { Documentary, calculateDocumentaryDuration } from '@remotion-compositions/compositions/Documentary'
 
 // Auto-build minimal audioSpecs from scene.audio_path when no specs have been
 // applied yet. This means narration plays immediately after voiceover generation
@@ -60,13 +60,10 @@ export function VideoPlayer({ scenes, imagePaths, selectedClips, globalSettings,
     }
   }, [scenes, imagePaths, selectedClips, globalSettings, effectiveAudioSpecs])
 
-  const totalFrames = useMemo(() => {
-    if (!scenes?.length) return 30
-    const TRANSITION_FRAMES = 12
-    const raw     = scenes.reduce((sum, s) => sum + Math.max(Math.round((s.duration_seconds || 5) * fps), 30), 0)
-    const overlap = Math.max(scenes.length - 1, 0) * TRANSITION_FRAMES
-    return Math.max(raw - overlap, 30)
-  }, [scenes, fps])
+  const totalFrames = useMemo(
+    () => calculateDocumentaryDuration(inputProps.scenes, fps),
+    [inputProps.scenes, fps]
+  )
 
   if (!scenes?.length) return null
 

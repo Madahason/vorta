@@ -70,7 +70,7 @@ function sceneDur(scene, fps) {
 // Returns the absolute global start frame for each scene in the final timeline.
 // Mirrors calculateDocumentaryDuration's per-boundary deduction logic exactly,
 // so both the total duration and per-scene positions agree.
-function computeSceneStartFrames(scenes, fps) {
+export function computeSceneStartFrames(scenes, fps) {
   if (!scenes.length) return []
   const starts = [0]
   for (let i = 0; i < scenes.length - 1; i++) {
@@ -162,7 +162,7 @@ export function Documentary({
   audio          = null,
   audioSpecs     = [],
 }) {
-  const { fps } = useVideoConfig()
+  const { fps, durationInFrames: configDuration } = useVideoConfig()
 
   // Deduplicate scenes by scene_id — duplicates cause TransitionSeries to replay scenes.
   const uniqueScenes = useMemo(() => {
@@ -186,6 +186,15 @@ export function Documentary({
   audioSpecs.forEach(spec => {
     if (validSceneIds.has(spec.scene_id)) audioSpecMap[spec.scene_id] = spec
   })
+
+  const expectedFrames = calculateDocumentaryDuration(uniqueScenes, fps)
+  if (expectedFrames !== configDuration) {
+    console.warn(
+      `[Documentary] FRAME MISMATCH: composition durationInFrames=${configDuration} ` +
+      `but calculateDocumentaryDuration=${expectedFrames} (diff=${configDuration - expectedFrames}). ` +
+      `This causes the scene repeat bug — the Player and composition disagree on total length.`
+    )
+  }
 
   const narrationCount = Object.values(audioSpecMap).filter(s => s.narration?.url).length
   console.log('[Documentary] scenes:', scenes.length, '→ unique:', uniqueScenes.length,

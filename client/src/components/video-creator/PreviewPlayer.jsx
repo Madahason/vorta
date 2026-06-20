@@ -1,24 +1,11 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { Player } from '@remotion/player'
-import { Documentary } from '@remotion-compositions/compositions/Documentary'
-
-const TRANSITION_FRAMES = 12
-
-function calcTotalFrames(scenes, fps) {
-  if (!scenes.length) return 30
-  const raw     = scenes.reduce((sum, s) => sum + Math.max(Math.round((s.duration_seconds || 5) * fps), 30), 0)
-  const overlap = Math.max(scenes.length - 1, 0) * TRANSITION_FRAMES
-  return Math.max(raw - overlap, 30)
-}
+import { Documentary, calculateDocumentaryDuration, computeSceneStartFrames } from '@remotion-compositions/compositions/Documentary'
 
 function calcSceneStartFrame(scenes, targetId, fps) {
-  let frame = 0
-  for (const scene of scenes) {
-    if (scene.scene_id === targetId) break
-    frame += Math.max(Math.round((scene.duration_seconds || 5) * fps), 30)
-    frame -= TRANSITION_FRAMES
-  }
-  return Math.max(frame, 0)
+  const starts = computeSceneStartFrames(scenes, fps)
+  const idx = scenes.findIndex(s => s.scene_id === targetId)
+  return idx >= 0 ? starts[idx] : 0
 }
 
 export function PreviewPlayer({
@@ -65,7 +52,7 @@ export function PreviewPlayer({
     })),
   [uniqueScenes])
 
-  const totalFrames = useMemo(() => calcTotalFrames(uniqueScenes, fps), [uniqueScenes])
+  const totalFrames = useMemo(() => calculateDocumentaryDuration(uniqueScenes, fps), [uniqueScenes, fps])
 
   const inputProps = useMemo(() => ({
     scenes:         uniqueScenes.map(s => ({ ...s })),
@@ -85,16 +72,14 @@ export function PreviewPlayer({
     return { total, withVisual, withNarration, totalDuration }
   }, [uniqueScenes, selectedClips, imagePaths])
 
-  // ── Current scene index based on playhead ──
+  const sceneStarts = useMemo(() => computeSceneStartFrames(uniqueScenes, fps), [uniqueScenes, fps])
+
   const currentSceneIndex = useMemo(() => {
-    let accumulated = 0
-    for (let i = 0; i < uniqueScenes.length; i++) {
-      accumulated += Math.max(Math.round((uniqueScenes[i].duration_seconds || 5) * fps), 30)
-      if (i < uniqueScenes.length - 1) accumulated -= TRANSITION_FRAMES
-      if (currentFrame < accumulated) return i
+    for (let i = sceneStarts.length - 1; i >= 0; i--) {
+      if (currentFrame >= sceneStarts[i]) return i
     }
-    return Math.max(uniqueScenes.length - 1, 0)
-  }, [currentFrame, uniqueScenes])
+    return 0
+  }, [currentFrame, sceneStarts])
 
   // ── Player event listeners ──
   useEffect(() => {
@@ -309,12 +294,7 @@ export function PreviewPlayer({
                 {/* Scene markers */}
                 <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '100%', pointerEvents: 'none', zIndex: 2 }}>
                   {uniqueScenes.map((scene, i) => {
-                    let startFrame = 0
-                    for (let j = 0; j < i; j++) {
-                      startFrame += Math.max(Math.round((uniqueScenes[j].duration_seconds || 5) * fps), 30)
-                      if (j < uniqueScenes.length - 1) startFrame -= TRANSITION_FRAMES
-                    }
-                    const pct = (startFrame / totalFrames) * 100
+                    const pct = ((sceneStarts[i] || 0) / totalFrames) * 100
                     if (pct <= 0 || pct >= 100) return null
                     return (
                       <div key={scene.scene_id} style={{

@@ -161,7 +161,7 @@ function SetupForm({ onProfileCreated }) {
   const handleSuggest = useCallback(async () => {
     setSuggestionsLoading(true); setError('')
     try {
-      const resp = await fetch('/api/research/suggestions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ niche: niche.trim(), subFocus: subFocus.trim() }) })
+      const resp = await fetch('http://localhost:3001/api/research/suggestions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ niche: niche.trim(), subFocus: subFocus.trim() }) })
       const data = await resp.json()
       if (!resp.ok) throw new Error(data.error || 'Failed to get suggestions')
       setAngleSuggestions(data.angles || []); setToneSuggestions(data.tones || [])
@@ -173,7 +173,7 @@ function SetupForm({ onProfileCreated }) {
   async function handleFresh() {
     setLoading(true); setError(''); setStatus('Building your channel profile...')
     try {
-      const resp = await fetch('/api/research/profile/fresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ niche, subFocus, angle, tone, competitors: freshCompetitors }) })
+      const resp = await fetch('http://localhost:3001/api/research/profile/fresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ niche, subFocus, angle, tone, competitors: freshCompetitors }) })
       const data = await resp.json()
       if (!resp.ok) throw new Error(data.error || 'Failed to build profile')
       if (!saveProfile(data)) setError('Warning: Could not save profile to localStorage.')
@@ -185,7 +185,7 @@ function SetupForm({ onProfileCreated }) {
     setLoading(true); setError(''); setStatus('Pulling channel data...')
     phaseTimerRef.current = setTimeout(() => setStatus('Synthesising profile...'), 10000)
     try {
-      const resp = await fetch('/api/research/profile/existing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channelUrl, competitors: existingCompetitors }) })
+      const resp = await fetch('http://localhost:3001/api/research/profile/existing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channelUrl, competitors: existingCompetitors }) })
       const data = await resp.json()
       if (!resp.ok) throw new Error(data.error || 'Failed to analyse channel')
       if (!saveProfile(data)) setError('Warning: Could not save profile to localStorage.')
@@ -538,7 +538,7 @@ function IdeaCardPanel({ item, panelSource, profile, onClose, onSaved, onNavigat
     let cancelled = false
     async function fetchAngles() {
       try {
-        const resp = await fetch('/api/research/angles', {
+        const resp = await fetch('http://localhost:3001/api/research/angles', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ opportunity: item, profile }),
@@ -572,7 +572,7 @@ function IdeaCardPanel({ item, panelSource, profile, onClose, onSaved, onNavigat
     setSaving(true)
     setSaveError(null)
     try {
-      const resp = await fetch('/api/research/idea/save', {
+      const resp = await fetch('http://localhost:3001/api/research/idea/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ opportunity: item, selectedAngle, profile }),
@@ -598,6 +598,34 @@ function IdeaCardPanel({ item, panelSource, profile, onClose, onSaved, onNavigat
     } finally {
       setSaving(false)
     }
+  }
+
+  function retryFetch() {
+    setData(null)
+    setLoading(true)
+    setError(null)
+    setSelectedAngle(null)
+    setSaveSuccess(false)
+    setSaveError(null)
+    async function doFetch() {
+      try {
+        const resp = await fetch('http://localhost:3001/api/research/angles', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ opportunity: item, profile }),
+        })
+        const json = await resp.json()
+        if (!resp.ok) throw new Error(json.error || 'Failed to load angles')
+        setData(json)
+        const rec = json.recommendedAngleId
+        if (rec) setExpandedAngle(rec)
+      } catch (err) {
+        setError(err.message)
+      } finally {
+        setLoading(false)
+      }
+    }
+    doFetch()
   }
 
   if (!item) return null
@@ -634,7 +662,10 @@ function IdeaCardPanel({ item, panelSource, profile, onClose, onSaved, onNavigat
         {error && (
           <div className="p-5">
             <div className="vorta-idea-error rounded-lg p-4" style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.12)' }}>
-              <div className="flex items-start gap-2"><AlertCircle size={14} className="text-red-400 shrink-0 mt-0.5" /><p className="text-xs text-red-300">{error}</p></div>
+              <div className="flex items-start gap-2 mb-3"><AlertCircle size={14} className="text-red-400 shrink-0 mt-0.5" /><p className="text-xs text-red-300">{error}</p></div>
+              <button onClick={retryFetch} className="vorta-btn vorta-btn-ghost text-[11px] flex items-center gap-1.5 text-red-300">
+                <RotateCcw size={10} />Retry
+              </button>
             </div>
           </div>
         )}
@@ -930,7 +961,7 @@ function EditProfileModal({ profile, onClose, onSave }) {
   const handleSuggest = useCallback(async () => {
     setSuggestionsLoading(true); setError('')
     try {
-      const resp = await fetch('/api/research/suggestions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ niche: niche.trim(), subFocus: subFocus.trim() }) })
+      const resp = await fetch('http://localhost:3001/api/research/suggestions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ niche: niche.trim(), subFocus: subFocus.trim() }) })
       const data = await resp.json()
       if (!resp.ok) throw new Error(data.error || 'Failed to get suggestions')
       setAngleSuggestions(data.angles || []); setToneSuggestions(data.tones || [])
@@ -1046,7 +1077,7 @@ function ResearchDashboard({ profile, onBack, onNavigate, onEditProfile }) {
     try {
       const filters = { dateRange: compFilterDate, sortBy: compFilterSort }
       if (compFilterMinViews) filters.minViews = parseInt(compFilterMinViews)
-      const resp = await fetch('/api/research/competitors/filtered', {
+      const resp = await fetch('http://localhost:3001/api/research/competitors/filtered', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ profile, filters }),
@@ -1100,11 +1131,18 @@ function ResearchDashboard({ profile, onBack, onNavigate, onEditProfile }) {
     setPanelErrors({ trending: null, gaps: null, competitors: null })
 
     try {
-      const resp = await fetch('/api/research/discover/stream', {
+      // Connect directly to Express — Vite's http-proxy buffers text/event-stream
+      const resp = await fetch('http://localhost:3001/api/research/discover/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ profile }),
       })
+
+      if (!resp.ok) {
+        let msg = `Server error ${resp.status}`
+        try { const body = await resp.json(); msg = body.error || msg } catch {}
+        throw new Error(msg)
+      }
 
       const reader = resp.body.getReader()
       const decoder = new TextDecoder()
@@ -1161,7 +1199,7 @@ function ResearchDashboard({ profile, onBack, onNavigate, onEditProfile }) {
     setPanelLoading(prev => ({ ...prev, [panelName]: true }))
     setPanelErrors(prev => ({ ...prev, [panelName]: null }))
     try {
-      const resp = await fetch(`/api/research/discover?panel=${panelName}`, {
+      const resp = await fetch(`http://localhost:3001/api/research/discover?panel=${panelName}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ profile }),

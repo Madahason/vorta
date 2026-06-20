@@ -2416,6 +2416,25 @@ function sceneDur(scene, fps) {
 
 ---
 
+## Session 22 — Fix: Scene repeat bug after transition system changes
+**Commit:** `fix: scene repeat bug after transition system changes + add frame-count assertion`
+**Date:** 2026-06-20
+
+### Root cause
+`VideoPlayer.jsx` and `PreviewPlayer.jsx` computed `durationInFrames` using a hardcoded all-dissolve formula (`(scenes.length - 1) * 12`) that didn't account for variable transition types introduced in Session 18 (cut=1fr, dip=8fr, dissolve=12fr). They also used `MIN_SCENE_FRAMES=30` while Documentary.jsx uses `MIN_SCENE_FRAMES=13` (fixed in Session 21). This created a frame count mismatch between the Player and the composition — the Player timeline was shorter than the actual content, causing TransitionSeries to wrap/repeat the first scene.
+
+### Fix
+- **`VideoPlayer.jsx`** — replaced ad-hoc `totalFrames` formula with `calculateDocumentaryDuration(inputProps.scenes, fps)` imported from Documentary.jsx. Player and composition now use the exact same function.
+- **`PreviewPlayer.jsx`** — same fix: replaced `calcTotalFrames()` with `calculateDocumentaryDuration()`. Also replaced manual scene start frame loops with `computeSceneStartFrames()` for the progress bar markers and current-scene tracking.
+- **`Documentary.jsx`** — exported `computeSceneStartFrames()` so PreviewPlayer can reuse it. Added permanent frame-count assertion: if `configDuration !== calculateDocumentaryDuration(uniqueScenes, fps)`, logs a warning with the exact diff. This surfaces any future mismatch immediately in the console.
+
+### Files changed
+- `client/src/components/video-creator/VideoPlayer.jsx` — import + use `calculateDocumentaryDuration`
+- `client/src/components/video-creator/PreviewPlayer.jsx` — import + use `calculateDocumentaryDuration` and `computeSceneStartFrames`
+- `remotion/src/compositions/Documentary.jsx` — export `computeSceneStartFrames`, add frame-count assertion
+
+---
+
 ## Phase VR-1 — Channel Profile Setup ✅ COMPLETE
 **Commit:** `feature: VR-1 channel profile setup — fresh and existing channel paths`
 **Date:** 2026-06-17
