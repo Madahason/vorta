@@ -353,6 +353,13 @@ router.post('/compose', async (req, res) => {
   }
 });
 
+// GET /api/title-thumbnail/library
+router.get('/library', (req, res) => {
+  const library = loadLibrary();
+  const sorted = library.slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  res.json({ briefs: sorted });
+});
+
 // --- Version helpers ---
 
 function appendVersion(entry, type, instruction, data) {

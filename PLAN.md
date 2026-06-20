@@ -3425,3 +3425,62 @@ Position is `{ x, y }` — normalized 0.0-1.0 percentages, resolution-independen
 - [x] All CSS classes use vorta- prefix
 - [x] Client build clean — zero errors, zero warnings
 - [x] PLAN.md updated with TT-4 completion entry
+
+---
+
+### Phase TT-5 — Library Browser, Script Writer Handoff, Polish ✅ COMPLETE
+
+**What was built:**
+- `GET /api/title-thumbnail/library` — returns all briefs sorted most-recent-first
+- `client/src/components/title-thumbnail/LibraryGrid.jsx` (NEW) — grid of all briefs across projects:
+  - Each card: composited thumbnail (or base image), selected title, niche, status badge (titled/thumbnailed/composed), created date
+  - Filter bar: by styleMode (6 modes from TT-2), by status, plus text search matching idea/angle/title/niche
+  - Click a card → fully restores that brief into the editor (title, thumbnails, overlay state, chat thread, version history)
+  - Loading/empty states
+- "Library" toggle button in the page header — switches between editor and library grid
+- "Send to Script Writer →" button (visible when status >= titled):
+  - Saves `tt_selected_brief` to localStorage with briefId, idea, angle, title, thumbnailPath, linkedVrIdeaId, savedAt
+  - Navigates to Script Writer via existing onNavigate pattern
+- `TitleThumbnailBrief` component in ScriptWriter.jsx:
+  - Renders below the existing ResearchBrief panel when `tt_selected_brief` is present
+  - Shows the chosen title in quotes with "The script should fulfill the curiosity this title creates" guidance
+  - Thumbnail preview if available
+  - Mismatch warning if `linkedVrIdeaId` differs between VR idea and TT brief
+  - "Clear" action with confirmation modal — removes from Script Writer display only, not from library
+  - Blue left border (distinct from ResearchBrief's purple) to visually differentiate
+- Error/empty/loading state audit: all async actions across TT-1 through TT-4 confirmed to have visible feedback
+
+**Production-readiness checklist:**
+- [x] GET /library returns all briefs correctly sorted
+- [x] LibraryGrid renders cards with correct thumbnail/title/status/date
+- [x] Filters (styleMode, status) and search correctly narrow results
+- [x] Clicking a card fully restores the brief including chat/version history
+- [x] Empty state renders when no briefs exist
+- [x] "Send to Script Writer" only enabled at status >= titled
+- [x] tt_selected_brief saves correctly and navigates to Script Writer
+- [x] ScriptWriter displays title/thumbnail brief alongside Video Research brief
+- [x] Mismatch warning shows when linkedVrIdeaId differs
+- [x] "Clear" removes from display without deleting library entry
+- [x] All async actions have visible loading/error/empty states
+- [x] All CSS classes use vorta- prefix
+- [x] Client build clean — zero errors, zero warnings
+- [x] PLAN.md updated with TT-5 and module summary
+
+---
+
+## Title & Thumbnail Module — Fully Complete
+
+| Phase | What it does | Status |
+|-------|-------------|--------|
+| TT-1 | Module shell + title generation (6-8 candidates, strategy tags, VR handoff) | ✅ |
+| TT-2 | Thumbnail image generation (Higgsfield, 6 style modes, 3 parallel variations) | ✅ |
+| TT-3 | Text overlay compositor (sharp SVG burn-in, drag positioning, exclusion zone, 4 bundled fonts, background pill) | ✅ |
+| TT-4 | Chat editing (intent routing, image-reference editing, overlay editing, conversation memory, append-only version history with restore) | ✅ |
+| TT-5 | Library browser, Script Writer handoff, error/empty/loading polish | ✅ |
+
+**Pipeline position:** Video Research → **Title & Thumbnail** → Script Writer → Video Creator
+
+**Data flow:**
+- Reads from: `vr_selected_idea` + `vr_channel_profile` (optional, via "Load from Video Research" button)
+- Writes to: `tt_current_brief` (localStorage working state), `titleThumbnailLibrary.json` (persistent server-side library), `tt_selected_brief` (handoff to Script Writer)
+- Assets: `library/thumbnails/[briefId]/` — base images, edited images, final composited output

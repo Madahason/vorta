@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ImageIcon, Loader2, AlertCircle, ChevronRight, RefreshCw, Check, Type, Sparkles, ArrowRight, Image, AlertTriangle, Download, Save, AlignLeft, AlignRight, AlignCenter, ArrowUp, ArrowDown, Move } from 'lucide-react'
+import { ImageIcon, Loader2, AlertCircle, ChevronRight, RefreshCw, Check, Type, Sparkles, ArrowRight, Image, AlertTriangle, Download, Save, AlignLeft, AlignRight, AlignCenter, ArrowUp, ArrowDown, Move, Library, PenLine } from 'lucide-react'
 import ChatPanel from '../components/title-thumbnail/ChatPanel'
+import LibraryGrid from '../components/title-thumbnail/LibraryGrid'
 
 const LS_KEY = 'tt_current_brief'
 
@@ -1096,6 +1097,7 @@ export default function TitleThumbnail({ onNavigate }) {
     if (saved?.titleCandidates?.length > 0) return 'selection'
     return 'setup'
   })
+  const [showLibrary, setShowLibrary] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
@@ -1183,9 +1185,80 @@ export default function TitleThumbnail({ onNavigate }) {
     setView('thumbnails')
   }
 
+  function handleOpenBrief(libraryBrief) {
+    const restored = {
+      idea: libraryBrief.idea,
+      angle: libraryBrief.angle,
+      niche: libraryBrief.niche,
+      targetAudience: libraryBrief.targetAudience || '',
+      briefId: libraryBrief.briefId,
+      titleCandidates: libraryBrief.titleCandidates || [],
+      selectedTitle: libraryBrief.selectedTitle || null,
+      selectedThumbnail: libraryBrief.baseImages?.[0] || null,
+      linkedVrIdeaId: libraryBrief.linkedVrIdeaId || null,
+      styleMode: libraryBrief.styleMode || null,
+      thumbnailImages: (libraryBrief.baseImages || []).map(p => ({ path: p })),
+      thumbnailPrompt: libraryBrief.thumbnailPrompt || null,
+      overlayState: libraryBrief.overlayState || null,
+      finalImagePath: libraryBrief.finalImagePath || null,
+    }
+    saveJson(LS_KEY, restored)
+    setBrief(restored)
+    setTitles(restored.titleCandidates)
+    setSelectedTitle(restored.selectedTitle)
+    setSelectedThumbnail(restored.selectedThumbnail)
+    if (restored.overlayState || restored.finalImagePath) setView('overlay')
+    else if (restored.selectedTitle) setView('thumbnails')
+    else if (restored.titleCandidates.length > 0) setView('selection')
+    else setView('setup')
+    setShowLibrary(false)
+  }
+
+  function handleSendToScriptWriter() {
+    const currentBrief = loadJson(LS_KEY) || {}
+    const payload = {
+      briefId: currentBrief.briefId,
+      idea: currentBrief.idea || '',
+      angle: currentBrief.angle || '',
+      title: currentBrief.selectedTitle || '',
+      thumbnailPath: currentBrief.finalImagePath || currentBrief.selectedThumbnail || null,
+      linkedVrIdeaId: currentBrief.linkedVrIdeaId || null,
+      savedAt: new Date().toISOString(),
+    }
+    saveJson('tt_selected_brief', payload)
+    if (onNavigate) onNavigate('script-writer')
+  }
+
+  const canSendToScriptWriter = selectedTitle && (brief?.briefId || loadJson(LS_KEY)?.briefId)
+
   return (
     <div className="vorta-title-thumbnail p-8">
-      {error && (
+      {/* Library toggle + Send to Script Writer */}
+      <div className="max-w-4xl mx-auto flex items-center justify-end gap-2 mb-4">
+        <button
+          onClick={() => setShowLibrary(!showLibrary)}
+          className="vorta-btn vorta-btn-ghost text-xs flex items-center gap-1.5"
+          style={{ color: showLibrary ? '#c4b5fd' : 'rgba(255,255,255,0.4)' }}
+        >
+          <Library size={12} />{showLibrary ? 'Back to editor' : 'Library'}
+        </button>
+        {canSendToScriptWriter && !showLibrary && (
+          <button
+            onClick={handleSendToScriptWriter}
+            className="vorta-btn vorta-btn-primary text-xs flex items-center gap-1.5 px-3 py-1.5"
+          >
+            <PenLine size={12} />Send to Script Writer
+          </button>
+        )}
+      </div>
+
+      {showLibrary && (
+        <div className="max-w-4xl mx-auto">
+          <LibraryGrid onOpenBrief={handleOpenBrief} />
+        </div>
+      )}
+
+      {!showLibrary && error && (
         <div className="max-w-2xl mx-auto mb-6">
           <div className="flex items-start gap-2 rounded-lg px-3 py-2.5 text-sm" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.15)', color: '#fca5a5' }}>
             <AlertCircle size={14} className="shrink-0 mt-0.5" />
@@ -1194,18 +1267,18 @@ export default function TitleThumbnail({ onNavigate }) {
         </div>
       )}
 
-      {loading && (
+      {!showLibrary && loading && (
         <div className="max-w-2xl mx-auto text-center py-16">
           <Loader2 size={28} className="animate-spin text-purple-400 mx-auto mb-4" />
           <p className="text-sm text-white/50">Generating title candidates...</p>
         </div>
       )}
 
-      {!loading && view === 'setup' && (
+      {!showLibrary && !loading && view === 'setup' && (
         <SetupForm onBriefReady={handleBriefReady} initialBrief={brief} />
       )}
 
-      {!loading && view === 'selection' && titles.length > 0 && (
+      {!showLibrary && !loading && view === 'selection' && titles.length > 0 && (
         <TitleSelection
           brief={brief}
           titles={titles}
@@ -1218,7 +1291,7 @@ export default function TitleThumbnail({ onNavigate }) {
         />
       )}
 
-      {!loading && view === 'thumbnails' && selectedTitle && (
+      {!showLibrary && !loading && view === 'thumbnails' && selectedTitle && (
         <ThumbnailGeneration
           brief={brief}
           selectedTitle={selectedTitle}
@@ -1228,7 +1301,7 @@ export default function TitleThumbnail({ onNavigate }) {
         />
       )}
 
-      {!loading && view === 'overlay' && selectedTitle && (
+      {!showLibrary && !loading && view === 'overlay' && selectedTitle && (
         <OverlayEditor
           brief={brief}
           selectedTitle={selectedTitle}

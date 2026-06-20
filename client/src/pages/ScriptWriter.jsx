@@ -10,6 +10,8 @@ const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 const LS_SELECTED_IDEA = 'vr_selected_idea'
 const LS_PROFILE = 'vr_channel_profile'
 const LS_BRIEF_DISMISSED = 'vr_brief_dismissed_in_scriptwriter'
+const LS_TT_BRIEF = 'tt_selected_brief'
+const LS_TT_DISMISSED = 'tt_brief_dismissed_in_scriptwriter'
 
 function loadJson(key) {
   try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : null } catch { return null }
@@ -142,6 +144,64 @@ function ResearchBrief({ idea, profile, onNavigate, onDismiss }) {
   )
 }
 
+function TitleThumbnailBrief({ ttBrief, vrIdea, onNavigate, onDismiss }) {
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
+  const isMismatch = vrIdea && ttBrief.linkedVrIdeaId && vrIdea.ideaId && ttBrief.linkedVrIdeaId !== vrIdea.ideaId
+
+  function handleClear() {
+    try { localStorage.setItem(LS_TT_DISMISSED, 'true') } catch {}
+    setShowClearConfirm(false)
+    if (onDismiss) onDismiss()
+  }
+
+  return (
+    <div className="rounded-xl mb-6" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderLeft: '3px solid rgba(59,130,246,0.5)' }}>
+      {isMismatch && (
+        <div className="flex items-center gap-2 px-5 py-2 text-xs" style={{ background: 'rgba(245,158,11,0.06)', borderBottom: '1px solid rgba(245,158,11,0.1)', color: '#fbbf24' }}>
+          <AlertTriangle size={12} />
+          This title/thumbnail was created for a different idea than the current Video Research brief.
+        </div>
+      )}
+      <div className="px-5 pt-4 pb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-white">Title & Thumbnail</h3>
+          <span className="px-1.5 py-0.5 rounded text-[9px] font-medium" style={{ background: 'rgba(59,130,246,0.1)', color: '#93c5fd' }}>From T&T Module</span>
+        </div>
+      </div>
+      <div className="px-5 pb-3">
+        <h4 className="text-base font-semibold text-white mb-2">"{ttBrief.title}"</h4>
+        <p className="text-xs text-white/40">The script should fulfill the curiosity this title creates.</p>
+      </div>
+      {ttBrief.thumbnailPath && (
+        <div className="px-5 pb-3">
+          <div className="rounded-lg overflow-hidden max-w-xs" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
+            <img src={ttBrief.thumbnailPath} alt="Thumbnail" className="w-full aspect-video object-cover" onError={e => { e.target.style.display = 'none' }} />
+          </div>
+        </div>
+      )}
+      <div className="px-5 py-3 flex items-center justify-between" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+        <span className="text-[10px] text-white/20">Saved {formatSavedDate(ttBrief.savedAt)}</span>
+        <div className="flex items-center gap-3">
+          <button onClick={() => onNavigate('title-thumbnail')} className="vorta-btn vorta-btn-ghost text-[11px] text-white/40 hover:text-white/60">Edit title</button>
+          <button onClick={() => setShowClearConfirm(true)} className="vorta-btn vorta-btn-ghost text-[11px] text-white/40 hover:text-white/60">Clear</button>
+        </div>
+      </div>
+      {showClearConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)' }} onClick={() => setShowClearConfirm(false)}>
+          <div className="rounded-xl p-6 max-w-sm mx-4" style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }} onClick={e => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-white mb-2">Remove title & thumbnail brief?</h3>
+            <p className="text-xs text-white/50 mb-4">The brief remains saved in the T&T library.</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setShowClearConfirm(false)} className="vorta-btn vorta-btn-ghost text-xs">Cancel</button>
+              <button onClick={handleClear} className="vorta-btn vorta-btn-danger text-xs">Clear Brief</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function parseSSEStream(text) {
   return text.split('\n')
     .filter(line => line.startsWith('data:'))
@@ -155,8 +215,12 @@ function parseSSEStream(text) {
 export default function ScriptWriter({ onNavigate }) {
   const idea = useMemo(() => loadJson(LS_SELECTED_IDEA), [])
   const profile = useMemo(() => loadJson(LS_PROFILE), [])
+  const ttBrief = useMemo(() => loadJson(LS_TT_BRIEF), [])
   const [dismissed, setDismissed] = useState(() => {
     try { return localStorage.getItem(LS_BRIEF_DISMISSED) === 'true' } catch { return false }
+  })
+  const [ttDismissed, setTtDismissed] = useState(() => {
+    try { return localStorage.getItem(LS_TT_DISMISSED) === 'true' } catch { return false }
   })
 
   const [topic, setTopic] = useState(() => idea?.topic || '')
@@ -177,6 +241,7 @@ export default function ScriptWriter({ onNavigate }) {
   const [error, setError] = useState('')
 
   const showBrief = idea && !dismissed
+  const showTtBrief = ttBrief && !ttDismissed
 
   const addPassLog = useCallback((entry) => {
     setPassLog(prev => {
@@ -348,6 +413,10 @@ export default function ScriptWriter({ onNavigate }) {
 
           {showBrief && (
             <ResearchBrief idea={idea} profile={profile} onNavigate={onNavigate} onDismiss={() => setDismissed(true)} />
+          )}
+
+          {showTtBrief && (
+            <TitleThumbnailBrief ttBrief={ttBrief} vrIdea={idea} onNavigate={onNavigate} onDismiss={() => setTtDismissed(true)} />
           )}
 
           {!showBrief && onNavigate && (
