@@ -1008,4 +1008,28 @@ router.post('/idea/save', async (req, res) => {
   });
 });
 
+// POST /api/research/competitors/filtered
+router.post('/competitors/filtered', async (req, res) => {
+  const { profile, filters } = req.body;
+
+  if (!profile?.competitors || !Array.isArray(profile.competitors) || profile.competitors.length === 0) {
+    return res.status(400).json({ error: 'profile.competitors must be a non-empty array' });
+  }
+
+  if (!process.env.YOUTUBE_API_KEY) {
+    return res.status(500).json({ error: 'YOUTUBE_API_KEY not configured' });
+  }
+
+  try {
+    const videos = await competitorService.getFilteredCompetitorVideos(
+      profile.competitors,
+      filters || {}
+    );
+    res.json({ videos, appliedFilters: filters || {}, resultCount: videos.length });
+  } catch (err) {
+    console.error('[research/competitors/filtered] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

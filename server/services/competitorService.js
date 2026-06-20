@@ -104,4 +104,105 @@ async function getAllCompetitorData(competitorHandles) {
   });
 }
 
-module.exports = { getCompetitorVideos, getAllCompetitorData };
+const filteredCache = new Map();
+
+function getFilteredCacheKey(channels, filters) {
+  return JSON.stringify({ c: channels.map(c => c.toLowerCase()).sort(), f: filters });
+}
+
+async function getFilteredCompetitorVideos(channelHandles, filters = {}) {
+  if (!process.env.YOUTUBE_API_KEY) throw new Error('YOUTUBE_API_KEY not configured');
+  if (!channelHandles || channelHandles.length === 0) return [];
+
+  const { dateRange = 'all', minViews, maxViews, minSubs, maxSubs, sortBy = 'views' } = filters;
+  const cacheKey = getFilteredCacheKey(channelHandles, filters);
+
+  const cachedEntry = filteredCache.get(cacheKey);
+  if (cachedEntry && Date.now() - cachedEntry.fetchedAt < CACHE_TTL_MS) {
+    console.log('[competitor/filtered] cache hit');
+    return cachedEntry.data;
+  }
+
+  const dateThreshold = dateRange !== 'all' ? (() => {
+    const now = Date.now();
+    const ms = { '7d': 7, '30d': 30, '90d': 90, '1y': 365 }[dateRange];
+    return ms ? new Date(now - ms * 86400000).toISOString() : null;
+  })() : null;
+
+  const results = await Promise.allSettled(
+    channelHandles.map(async (handle) => {
+      const channelId = await resolveChannelId(handle);
+      if (!channelId) throw new Error(`Channel not found: ${handle}`);
+
+      const channelData = await ytFetch('channels', { part: 'snippet,statistics', id: channelId });
+      const ch = channelData.items?.[0];
+      if (!ch) throw new Error(`Channel data not found: ${handle}`);
+
+      const channelName = ch.snippet.title;
+      const subscriberCount = parseInt(ch.statistics.subscriberCount || '0');
+      const subsHidden = ch.statistics.hiddenSubscriberCount === true;
+
+      if (minSubs && subscriberCount < minSubs) return [];
+      if (maxSubs && subscriberCount > maxSubs) return [];
+
+      const searchParams = {
+        part: 'snippet', channelId, maxResults: 50, order: 'date', type: 'video',
+      };
+      if (dateThreshold) searchParams.publishedAfter = dateThreshold;
+
+      const searchData = await ytFetch('search', searchParams);
+      const videoIds = (searchData.items || []).map(i => i.id?.videoId).filter(Boolean);
+      if (videoIds.length === 0) return [];
+
+      const statsData = await ytFetch('videos', { part: 'statistics,snippet,contentDetails', id: videoIds.join(',') });
+
+      return (statsData.items || []).map(v => {
+        const views = parseInt(v.statistics.viewCount || '0');
+        return {
+          videoId: v.id,
+          title: v.snippet.title,
+          channelName,
+          channelId,
+          channelHandle: handle,
+          viewCount: views,
+          channelSubscriberCount: subscriberCount,
+          viewsPerSubscriber: subsHidden || subscriberCount === 0 ? null : Math.round((views / subscriberCount) * 100) / 100,
+          publishedAt: v.snippet.publishedAt,
+          thumbnails: {
+            default: v.snippet.thumbnails?.default?.url || null,
+            medium: v.snippet.thumbnails?.medium?.url || null,
+            high: v.snippet.thumbnails?.high?.url || null,
+          },
+          url: `https://www.youtube.com/watch?v=${v.id}`,
+          duration: v.contentDetails?.duration || '',
+        };
+      });
+    })
+  );
+
+  let videos = [];
+  for (let i = 0; i < results.length; i++) {
+    if (results[i].status === 'fulfilled') {
+      const vids = results[i].value;
+      if (Array.isArray(vids)) videos.push(...vids);
+    } else {
+      console.warn(`[competitor/filtered] failed for ${channelHandles[i]}:`, results[i].reason?.message);
+    }
+  }
+
+  if (minViews) videos = videos.filter(v => v.viewCount >= minViews);
+  if (maxViews) videos = videos.filter(v => v.viewCount <= maxViews);
+
+  if (sortBy === 'viewsPerSubscriber') {
+    videos.sort((a, b) => (b.viewsPerSubscriber ?? -1) - (a.viewsPerSubscriber ?? -1));
+  } else if (sortBy === 'recency') {
+    videos.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+  } else {
+    videos.sort((a, b) => b.viewCount - a.viewCount);
+  }
+
+  filteredCache.set(cacheKey, { data: videos, fetchedAt: Date.now() });
+  return videos;
+}
+
+module.exports = { getCompetitorVideos, getAllCompetitorData, getFilteredCompetitorVideos };

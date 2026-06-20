@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Search, X, Loader2, AlertCircle, ChevronRight, ChevronLeft, RefreshCw, Sparkles, Globe, TrendingUp, Target, Users, BarChart3, Flame, Compass, Eye, Clock, ArrowRight, RotateCcw, Check, ChevronDown, Star, PenLine, BookOpen, History, Trash2, Edit3 } from 'lucide-react'
+import { Search, X, Loader2, AlertCircle, ChevronRight, ChevronLeft, RefreshCw, Sparkles, Globe, TrendingUp, Target, Users, BarChart3, Flame, Compass, Eye, Clock, ArrowRight, RotateCcw, Check, ChevronDown, Star, PenLine, BookOpen, History, Trash2, Edit3, Filter } from 'lucide-react'
+import DeepCompetitorPanel from '../components/video-research/DeepCompetitorPanel'
 
 const LS_KEY = 'vr_channel_profile'
 const LS_HISTORY = 'vr_research_history'
@@ -449,14 +450,15 @@ function SkeletonCards() {
 }
 
 // --- Panel Column ---
-function PanelColumn({ title, subtitle, icon: Icon, items, loading, error, panelName, onRetry, onExplore, savedTopic }) {
+function PanelColumn({ title, subtitle, icon: Icon, items, loading, error, panelName, onRetry, onExplore, savedTopic, headerExtra }) {
   const sorted = useMemo(() => (items || []).slice().sort((a, b) => (b.opportunityScore || 0) - (a.opportunityScore || 0)), [items])
   return (
     <div className="vorta-panel-column flex flex-col min-w-0">
       <div className="mb-4">
         <div className="flex items-center gap-2 mb-1">
           <Icon size={16} className="text-purple-400 shrink-0" />
-          <h3 className="text-sm font-semibold text-white">{title}</h3>
+          <h3 className="text-sm font-semibold text-white flex-1">{title}</h3>
+          {headerExtra}
         </div>
         <p className="text-[11px] text-white/35">{subtitle}</p>
       </div>
@@ -1031,6 +1033,42 @@ function ResearchDashboard({ profile, onBack, onNavigate, onEditProfile }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [reportDataSources, setReportDataSources] = useState(null)
   const [dsPopoverOpen, setDsPopoverOpen] = useState(false)
+  const [deepDiveOpen, setDeepDiveOpen] = useState(false)
+  const [compFilterDate, setCompFilterDate] = useState('all')
+  const [compFilterMinViews, setCompFilterMinViews] = useState('')
+  const [compFilterSort, setCompFilterSort] = useState('views')
+  const [compFilteredItems, setCompFilteredItems] = useState(null)
+  const [compFilterLoading, setCompFilterLoading] = useState(false)
+
+  async function applyCompetitorFilters() {
+    if (!profile?.competitors?.length) return
+    setCompFilterLoading(true)
+    try {
+      const filters = { dateRange: compFilterDate, sortBy: compFilterSort }
+      if (compFilterMinViews) filters.minViews = parseInt(compFilterMinViews)
+      const resp = await fetch('/api/research/competitors/filtered', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile, filters }),
+      })
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.error)
+      const mapped = (data.videos || []).slice(0, 10).map(v => ({
+        title: v.title,
+        channel: v.channelName,
+        summary: `${v.viewCount?.toLocaleString()} views`,
+        opportunityScore: v.viewsPerSubscriber !== null ? Math.min(10, Math.round(v.viewsPerSubscriber * 2)) : 5,
+        subscriberCount: v.channelSubscriberCount,
+        realViews: v.viewCount,
+        suggestedAngle: null,
+      }))
+      setCompFilteredItems(mapped)
+    } catch {} finally { setCompFilterLoading(false) }
+  }
+
+  function resetCompFilters() {
+    setCompFilterDate('all'); setCompFilterMinViews(''); setCompFilterSort('views'); setCompFilteredItems(null)
+  }
 
   function handleExplore(item, panelName) { setHistoryOpen(false); setExploreItem(item); setExplorePanel(panelName) }
   function handleOpenHistory() { setExploreItem(null); setHistoryOpen(true) }
@@ -1216,8 +1254,14 @@ function ResearchDashboard({ profile, onBack, onNavigate, onEditProfile }) {
           items={panelData.gaps} loading={panelLoading.gaps} error={panelErrors.gaps}
           panelName="gaps" onRetry={() => retryPanel('gaps')} onExplore={(item) => handleExplore(item, 'gaps')} savedTopic={savedTopic} />
         <PanelColumn title="Competitor Watch" subtitle="Overperforming videos from competitor channels" icon={Eye}
-          items={panelData.competitors} loading={panelLoading.competitors} error={panelErrors.competitors}
-          panelName="competitors" onRetry={() => retryPanel('competitors')} onExplore={(item) => handleExplore(item, 'competitors')} savedTopic={savedTopic} />
+          items={compFilteredItems || panelData.competitors} loading={compFilterLoading || panelLoading.competitors} error={panelErrors.competitors}
+          panelName="competitors" onRetry={() => retryPanel('competitors')} onExplore={(item) => handleExplore(item, 'competitors')} savedTopic={savedTopic}
+          headerExtra={
+            <button onClick={() => setDeepDiveOpen(true)} className="vorta-btn vorta-btn-ghost text-[9px] flex items-center gap-1 shrink-0" style={{ color: '#c4b5fd' }}>
+              <Filter size={9} />Deep dive
+            </button>
+          }
+        />
       </div>
 
       {/* Idea Card slide-in (right) */}
@@ -1233,6 +1277,14 @@ function ResearchDashboard({ profile, onBack, onNavigate, onEditProfile }) {
         <>
           <div className="fixed inset-0 z-30" style={{ background: 'rgba(0,0,0,0.3)' }} onClick={() => setHistoryOpen(false)} />
           <HistoryPanel onClose={() => setHistoryOpen(false)} currentReportId={report?.reportId} onLoadReport={handleLoadReport} onClearAll={handleClearAll} />
+        </>
+      )}
+
+      {/* Deep competitor panel (right slide-in) */}
+      {deepDiveOpen && (
+        <>
+          <div className="fixed inset-0 z-30" style={{ background: 'rgba(0,0,0,0.3)' }} onClick={() => setDeepDiveOpen(false)} />
+          <DeepCompetitorPanel profile={profile} onClose={() => setDeepDiveOpen(false)} />
         </>
       )}
     </div>

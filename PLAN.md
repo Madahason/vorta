@@ -3484,3 +3484,50 @@ Position is `{ x, y }` — normalized 0.0-1.0 percentages, resolution-independen
 - Reads from: `vr_selected_idea` + `vr_channel_profile` (optional, via "Load from Video Research" button)
 - Writes to: `tt_current_brief` (localStorage working state), `titleThumbnailLibrary.json` (persistent server-side library), `tt_selected_brief` (handoff to Script Writer)
 - Assets: `library/thumbnails/[briefId]/` — base images, edited images, final composited output
+
+---
+
+### Phase VR-7 — Targeted Competitor Research ✅ COMPLETE
+
+**What was built:**
+- `server/services/competitorService.js` — added `getFilteredCompetitorVideos(channelHandles, filters)`:
+  - Filters: `dateRange` (7d/30d/90d/1y/all), `minViews`/`maxViews`, `minSubs`/`maxSubs` (channel-level), `sortBy` (views/viewsPerSubscriber/recency)
+  - `viewsPerSubscriber` — new derived field per video: `viewCount / channelSubscriberCount`, null when subscriber count hidden (guards against division by zero)
+  - `thumbnails` — captures `snippet.thumbnails` (default/medium/high URLs) from YouTube API response, previously uncaptured
+  - Separate filter-aware cache with key hashed from channels + filters — different filter combinations don't collide
+  - `Promise.allSettled` across channels — one channel failing doesn't block others
+  - Returns: array of video objects with videoId, title, channelName, channelId, viewCount, channelSubscriberCount, viewsPerSubscriber, publishedAt, thumbnails, url
+- `POST /api/research/competitors/filtered` — validates profile.competitors non-empty, calls getFilteredCompetitorVideos, returns `{ videos, appliedFilters, resultCount }`
+- `client/src/components/video-research/DeepCompetitorPanel.jsx` (NEW) — 600px right slide-in panel:
+  - Full filter set: date range, min/max views, min/max subscribers, sort dropdown
+  - Subscriber presets: "Similar size" (0.5x–2x own subs), "10× my size" (5x–20x), "Mega (1M+)"
+  - Result grid: real thumbnail images (from thumbnails.medium URL), title with external link, channel name, view count, subscriber count, views-per-subscriber ratio, publish date
+  - "Pin as reference" per video — saves to `vr_pinned_references` in localStorage (capped at 20)
+  - Pinned references strip at the bottom with thumbnail previews, click to unpin
+  - Loading, empty, and error states
+- `PanelColumn` component extended with `headerExtra` prop for the "Deep dive" button
+- Competitor Watch column in ResearchDashboard updated:
+  - "Deep dive →" button in the column header opens DeepCompetitorPanel
+  - Quick filter state (date range, min views, sort) wired in the dashboard for inline re-filtering
+
+**Production-readiness checklist:**
+- [x] POST /competitors/filtered with empty profile.competitors → 400
+- [x] Valid request with no filters → behaves equivalently to current unfiltered pull
+- [x] dateRange correctly excludes videos outside the window
+- [x] minViews/maxViews correctly bound results
+- [x] minSubs/maxSubs correctly filter which channels are queried
+- [x] viewsPerSubscriber computed correctly; null when subs unavailable
+- [x] thumbnails field present and populated on returned videos
+- [x] Cache differentiates between different filter combinations (key includes filters hash)
+- [x] One channel API failure doesn't block others (Promise.allSettled)
+- [x] DeepCompetitorPanel opens correctly from "Deep dive" link
+- [x] All filter inputs function and combine correctly
+- [x] Preset subscriber buttons fill correct ranges
+- [x] Result grid renders real thumbnail images
+- [x] "Pin as reference" saves to vr_pinned_references, capped at 20
+- [x] Empty state renders when filters produce zero results
+- [x] Loading state renders during query
+- [x] Existing VR-1 through VR-6 functionality unaffected
+- [x] All CSS classes use vorta- prefix
+- [x] Client build clean — zero errors, zero warnings
+- [x] PLAN.md updated with VR-7 completion entry
