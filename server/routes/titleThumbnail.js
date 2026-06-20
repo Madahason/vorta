@@ -6,7 +6,8 @@ const https = require('https');
 const http = require('http');
 const { execSync } = require('child_process');
 const { generateThumbnail } = require('../services/higgsfield');
-const { generateThumbnailPrompt } = require('../services/titleThumbnailService');
+const { generateThumbnailPrompt, analyzeThumbnailPatterns } = require('../services/titleThumbnailService');
+const { getFilteredCompetitorVideos } = require('../services/competitorService');
 const { composeThumbnail } = require('../services/thumbnailComposer');
 const { chatEditTitle, classifyIntent, chatEditImage, chatEditOverlay, buildNaturalHistory } = require('../services/titleThumbnailChat');
 
@@ -179,7 +180,7 @@ function downloadFile(url, destPath) {
 
 // POST /api/title-thumbnail/generate-image
 router.post('/generate-image', async (req, res) => {
-  const { briefId, idea, angle, title, styleMode } = req.body;
+  const { briefId, idea, angle, title, styleMode, referencePatterns } = req.body;
 
   if (!briefId?.trim() || !idea?.trim() || !angle?.trim() || !title?.trim()) {
     return res.status(400).json({ error: 'briefId, idea, angle, and title are all required' });
@@ -201,7 +202,7 @@ router.post('/generate-image', async (req, res) => {
   try {
     // Step 1: Generate the thumbnail prompt via Claude
     const { prompt, styleMode: resolvedMode } = await generateThumbnailPrompt(
-      idea.trim(), angle.trim(), title.trim(), styleMode || null
+      idea.trim(), angle.trim(), title.trim(), styleMode || null, referencePatterns || null
     );
 
     console.log(`[title-thumbnail/generate-image] prompt generated, styleMode=${resolvedMode}`);
@@ -349,6 +350,54 @@ router.post('/compose', async (req, res) => {
     res.json({ finalImagePath: relativePath, overlayState });
   } catch (err) {
     console.error('[title-thumbnail/compose] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/title-thumbnail/references/refresh
+router.post('/references/refresh', async (req, res) => {
+  const { profile, filters } = req.body;
+  if (!profile?.competitors || !Array.isArray(profile.competitors) || profile.competitors.length === 0) {
+    return res.status(400).json({ error: 'profile.competitors must be a non-empty array' });
+  }
+  if (!process.env.YOUTUBE_API_KEY) {
+    return res.status(500).json({ error: 'YOUTUBE_API_KEY not configured' });
+  }
+  try {
+    const videos = await getFilteredCompetitorVideos(profile.competitors, filters || {});
+    res.json({ videos, resultCount: videos.length });
+  } catch (err) {
+    console.error('[title-thumbnail/references/refresh] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/title-thumbnail/references/analyze
+router.post('/references/analyze', async (req, res) => {
+  const { briefId, references } = req.body;
+  if (!briefId?.trim()) return res.status(400).json({ error: 'briefId is required' });
+  if (!Array.isArray(references) || references.length === 0) {
+    return res.status(400).json({ error: 'At least one reference is required' });
+  }
+  if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'your_key_here') {
+    return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  }
+
+  try {
+    const patterns = await analyzeThumbnailPatterns(
+      references.slice(0, 3).map(r => ({ url: r.url, title: r.title }))
+    );
+
+    const library = loadLibrary();
+    const entry = library.find(e => e.briefId === briefId.trim());
+    if (entry) {
+      entry.referencePatterns = patterns;
+      saveLibrary(library);
+    }
+
+    res.json({ patterns });
+  } catch (err) {
+    console.error('[title-thumbnail/references/analyze] error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

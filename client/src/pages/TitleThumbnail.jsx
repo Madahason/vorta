@@ -260,6 +260,153 @@ const STYLE_MODES = [
   { id: 'scene_dramatization', label: 'Scene Drama', desc: 'Dramatized real-world moment' },
 ]
 
+const LS_PINNED = 'vr_pinned_references'
+
+function ReferenceSection({ briefId, profile, onPatternsReady }) {
+  const [refs, setRefs] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(LS_PINNED) || '[]') } catch { return [] }
+  })
+  const [selected, setSelected] = useState([])
+  const [analyzing, setAnalyzing] = useState(false)
+  const [patterns, setPatterns] = useState(null)
+  const [error, setError] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [showRefreshFilters, setShowRefreshFilters] = useState(false)
+  const [rfDate, setRfDate] = useState('all')
+  const [rfMinViews, setRfMinViews] = useState('')
+  const [rfSort, setRfSort] = useState('views')
+
+  function toggleSelect(ref) {
+    setSelected(prev => {
+      const exists = prev.find(s => s.videoId === ref.videoId)
+      if (exists) return prev.filter(s => s.videoId !== ref.videoId)
+      if (prev.length >= 3) return prev
+      return [...prev, ref]
+    })
+  }
+
+  async function handleRefresh() {
+    if (!profile?.competitors?.length) return
+    setRefreshing(true)
+    setError(null)
+    try {
+      const filters = { dateRange: rfDate, sortBy: rfSort }
+      if (rfMinViews) filters.minViews = parseInt(rfMinViews)
+      const resp = await fetch('/api/title-thumbnail/references/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile, filters }),
+      })
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.error || 'Refresh failed')
+      setRefs((data.videos || []).filter(v => v.thumbnails?.medium))
+      setSelected([])
+    } catch (err) { setError(err.message) } finally { setRefreshing(false) }
+  }
+
+  async function handleAnalyze() {
+    if (selected.length === 0) return
+    setAnalyzing(true)
+    setError(null)
+    try {
+      const resp = await fetch('/api/title-thumbnail/references/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          briefId,
+          references: selected.map(s => ({ url: s.thumbnails?.high || s.thumbnails?.medium, title: s.title })),
+        }),
+      })
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.error || 'Analysis failed')
+      setPatterns(data.patterns)
+      if (onPatternsReady) onPatternsReady(data.patterns)
+    } catch (err) { setError(err.message) } finally { setAnalyzing(false) }
+  }
+
+  const formatK = n => n >= 1000000 ? `${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
+
+  return (
+    <div className="vorta-reference-section rounded-xl mb-6" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+      <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+        <span className="text-[11px] font-medium text-white/50">Reference Thumbnails</span>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowRefreshFilters(!showRefreshFilters)} className="vorta-btn vorta-btn-ghost text-[9px] flex items-center gap-1" style={{ color: '#c4b5fd' }}>
+            <RefreshCw size={9} />{showRefreshFilters ? 'Hide filters' : 'Refresh'}
+          </button>
+          <button onClick={handleAnalyze} disabled={selected.length === 0 || analyzing}
+            className="vorta-btn vorta-btn-ghost text-[9px] flex items-center gap-1"
+            style={{ color: selected.length > 0 ? '#86efac' : 'rgba(255,255,255,0.2)', opacity: analyzing ? 0.5 : 1 }}>
+            {analyzing ? <><Loader2 size={9} className="animate-spin" />Analyzing...</> : <>Analyze {selected.length > 0 ? `(${selected.length})` : ''}</>}
+          </button>
+        </div>
+      </div>
+
+      {showRefreshFilters && (
+        <div className="px-4 py-2 flex items-center gap-2 flex-wrap" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+          <select value={rfDate} onChange={e => setRfDate(e.target.value)} className="vorta-input text-[9px]" style={{ width: 'auto', padding: '3px 6px' }}>
+            <option value="all">All time</option><option value="7d">7 days</option><option value="30d">30 days</option><option value="90d">90 days</option>
+          </select>
+          <input className="vorta-input text-[9px] w-20" value={rfMinViews} onChange={e => setRfMinViews(e.target.value.replace(/\D/g, ''))} placeholder="Min views" style={{ padding: '3px 6px' }} />
+          <select value={rfSort} onChange={e => setRfSort(e.target.value)} className="vorta-input text-[9px]" style={{ width: 'auto', padding: '3px 6px' }}>
+            <option value="views">Views</option><option value="viewsPerSubscriber">Views/Subs</option><option value="recency">Recent</option>
+          </select>
+          <button onClick={handleRefresh} disabled={refreshing} className="vorta-btn vorta-btn-primary text-[9px] px-2 py-1" style={{ opacity: refreshing ? 0.5 : 1 }}>
+            {refreshing ? 'Loading...' : 'Go'}
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <div className="px-4 py-2 flex items-center gap-1.5 text-[10px]" style={{ color: '#fca5a5' }}>
+          <AlertCircle size={10} />{error}
+        </div>
+      )}
+
+      <div className="px-4 py-3">
+        {refs.length === 0 ? (
+          <p className="text-[10px] text-white/20 text-center py-4">No pinned references yet — pin some in Video Research's Deep Competitor panel, or refresh above.</p>
+        ) : (
+          <>
+            <div className="grid grid-cols-4 gap-2 mb-2">
+              {refs.slice(0, 12).map(r => {
+                const isSel = selected.some(s => s.videoId === r.videoId)
+                return (
+                  <button key={r.videoId} onClick={() => toggleSelect(r)} className="vorta-ref-card rounded overflow-hidden text-left transition-all"
+                    style={{ border: `2px solid ${isSel ? 'rgba(139,92,246,0.5)' : 'rgba(255,255,255,0.04)'}`, opacity: !isSel && selected.length >= 3 ? 0.4 : 1 }}>
+                    <div className="aspect-video bg-black/30">
+                      <img src={r.thumbnails?.medium} alt="" className="w-full h-full object-cover" onError={e => { e.target.style.display = 'none' }} />
+                    </div>
+                    <div className="p-1.5">
+                      <p className="text-[8px] text-white/50 leading-tight line-clamp-1">{r.title}</p>
+                      <span className="text-[7px] text-white/25">{formatK(r.viewCount || 0)} views</span>
+                    </div>
+                    {isSel && <div className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center" style={{ background: 'rgba(139,92,246,0.9)' }}><Check size={8} className="text-white" /></div>}
+                  </button>
+                )
+              })}
+            </div>
+            <p className="text-[8px] text-white/15">Select up to 3 references · {selected.length}/3 selected</p>
+          </>
+        )}
+      </div>
+
+      {patterns && (
+        <div className="px-4 py-3" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+          <span className="text-[10px] font-medium text-green-400/60 block mb-2">Pattern analysis</span>
+          <div className="space-y-1.5 text-[10px] text-white/45">
+            <p><span className="text-white/25">Palette:</span> {patterns.dominantPalette}</p>
+            <p><span className="text-white/25">Placement:</span> {patterns.subjectPlacementPattern}</p>
+            <p><span className="text-white/25">Typography:</span> {patterns.typographyStyle}</p>
+            <p><span className="text-white/25">Mood:</span> {patterns.moodDescriptor}</p>
+            {patterns.compositionNotes && <p><span className="text-white/25">Notes:</span> {patterns.compositionNotes}</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // --- State C: Thumbnail Generation ---
 function ThumbnailGeneration({ brief, selectedTitle, onContinue, onBack, persistBrief }) {
   const [styleMode, setStyleMode] = useState(() => {
@@ -278,6 +425,13 @@ function ThumbnailGeneration({ brief, selectedTitle, onContinue, onBack, persist
   const [error, setError] = useState(null)
   const [failedCount, setFailedCount] = useState(0)
   const [prompt, setPrompt] = useState(null)
+  const [refPatterns, setRefPatterns] = useState(() => {
+    const saved = loadJson('tt_current_brief')
+    return saved?.referencePatterns || null
+  })
+
+  const profile = loadJson('vr_channel_profile')
+  const currentBriefId = brief?.briefId || loadJson('tt_current_brief')?.briefId
 
   async function handleGenerate(overrideMode) {
     const modeToUse = overrideMode !== undefined ? overrideMode : styleMode
@@ -295,6 +449,7 @@ function ThumbnailGeneration({ brief, selectedTitle, onContinue, onBack, persist
           angle: brief?.angle || currentBrief.angle,
           title: selectedTitle,
           styleMode: modeToUse,
+          referencePatterns: refPatterns || undefined,
         }),
       })
       const data = await resp.json()
@@ -341,6 +496,25 @@ function ThumbnailGeneration({ brief, selectedTitle, onContinue, onBack, persist
         </div>
         <button onClick={onBack} className="vorta-btn vorta-btn-ghost text-xs text-white/40">← Back to titles</button>
       </div>
+
+      {/* Reference thumbnails */}
+      {currentBriefId && (
+        <ReferenceSection
+          briefId={currentBriefId}
+          profile={profile}
+          onPatternsReady={(p) => { setRefPatterns(p); persistBrief({ referencePatterns: p }) }}
+        />
+      )}
+
+      {/* Pattern context badge */}
+      {refPatterns && (
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'rgba(34,197,94,0.08)', color: '#86efac', border: '1px solid rgba(34,197,94,0.15)' }}>
+            Pattern context active — {refPatterns.moodDescriptor || 'analyzed'}
+          </span>
+          <button onClick={() => { setRefPatterns(null); persistBrief({ referencePatterns: null }) }} className="vorta-btn vorta-btn-ghost text-[9px] text-white/25">Clear</button>
+        </div>
+      )}
 
       {/* Style mode selector */}
       <div className="mb-6">

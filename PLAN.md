@@ -3477,6 +3477,7 @@ Position is `{ x, y }` — normalized 0.0-1.0 percentages, resolution-independen
 | TT-3 | Text overlay compositor (sharp SVG burn-in, drag positioning, exclusion zone, 4 bundled fonts, background pill) | ✅ |
 | TT-4 | Chat editing (intent routing, image-reference editing, overlay editing, conversation memory, append-only version history with restore) | ✅ |
 | TT-5 | Library browser, Script Writer handoff, error/empty/loading polish | ✅ |
+| TT-6 | Thumbnail reference library — pattern analysis via Claude vision, VR-7 integration, pattern-informed Higgsfield generation | ✅ |
 
 **Pipeline position:** Video Research → **Title & Thumbnail** → Script Writer → Video Creator
 
@@ -3531,3 +3532,48 @@ Position is `{ x, y }` — normalized 0.0-1.0 percentages, resolution-independen
 - [x] All CSS classes use vorta- prefix
 - [x] Client build clean — zero errors, zero warnings
 - [x] PLAN.md updated with VR-7 completion entry
+
+---
+
+### Phase TT-6 — Thumbnail Reference Library ✅ COMPLETE
+
+**What was built:**
+- `server/services/titleThumbnailService.js` — extended with:
+  - `analyzeThumbnailPatterns(referenceImages)` — downloads reference thumbnail images, converts to base64, sends as vision content blocks to Claude Sonnet 4.6 in a single call
+  - Claude prompt explicitly instructs: analyze patterns COMMON ACROSS the set, never describe a single image in isolated reproducible detail, synthesize general creative direction not a copy recipe
+  - Returns structured JSON: `{ dominantPalette, subjectPlacementPattern, typographyStyle, moodDescriptor, compositionNotes }`
+  - `downloadToBuffer(url)` — lightweight HTTP(S) download returning a Buffer, with redirect following
+  - `Promise.allSettled` for image downloads — one broken URL doesn't fail the whole analysis
+  - `generateThumbnailPrompt()` — extended with optional `referencePatterns` parameter; when present, folds pattern description into the Higgsfield prompt alongside (not replacing) the existing universal composition rules
+- `server/routes/titleThumbnail.js` — 2 new endpoints:
+  - `POST /references/refresh` — proxies to VR-7's `getFilteredCompetitorVideos` (reuses, does not duplicate filtering logic)
+  - `POST /references/analyze` — accepts up to 3 references, calls analyzeThumbnailPatterns, stores result as `referencePatterns` on the library entry
+  - `POST /generate-image` — now accepts optional `referencePatterns` parameter, passes through to generateThumbnailPrompt
+- `client/src/pages/TitleThumbnail.jsx` — `ReferenceSection` component added to State C (thumbnail generation):
+  - Default state reads `vr_pinned_references` from localStorage — displays as a 4-column grid with thumbnail images, title, view count
+  - Checkbox selection, capped at 3 with visual feedback ("Select up to 3 references · X/3 selected")
+  - "Refresh" button with inline filter controls (date range, min views, sort) — calls VR-7's existing filtering
+  - "Analyze" button — calls vision endpoint, shows "Analyzing..." loading state
+  - Pattern result card: displays palette, placement, typography, mood, composition notes
+  - "Pattern context active" badge shown when patterns are loaded, wired through to the generate-image call
+  - "Clear" to remove pattern context
+
+**Design constraint enforced:**
+Pattern analysis describes STYLE across multiple references (e.g. "high contrast red/black palette, subject in right third, bold 3-word white caps text top-left"), never reproduces or closely describes any single specific reference image. This constraint is built into both the Claude system prompt and user prompt text, not just documented.
+
+**Production-readiness checklist:**
+- [x] Reference grid renders real thumbnail images from vr_pinned_references
+- [x] Empty state renders when no pinned references exist
+- [x] Checkbox selection caps at 3, disables further selection past that
+- [x] Refresh calls VR-7's filtering logic without duplicating it
+- [x] Refresh clears prior selections
+- [x] Analyze button disabled until 1+ references selected
+- [x] POST /references/analyze downloads images and converts to base64
+- [x] One broken URL doesn't fail the whole analysis
+- [x] Pattern output describes general patterns, not individual images
+- [x] Pattern stored on library entry as referencePatterns
+- [x] Pattern correctly flows into generateThumbnailPrompt()
+- [x] Generated prompt includes pattern context alongside universal rules
+- [x] All CSS classes use vorta- prefix
+- [x] Client build clean — zero errors, zero warnings
+- [x] PLAN.md updated with TT-6 completion entry
