@@ -2416,6 +2416,41 @@ function sceneDur(scene, fps) {
 
 ---
 
+## Session 24 — Enforce 8-second max scene duration
+**Commit:** `feature: enforce 8-second max scene duration with auto-split safety net`
+**Date:** 2026-06-20
+
+### Problem
+Some generated scenes ran 17-24 seconds — far too long for fast-cut documentary style.
+
+### Changes
+
+**`server/services/claude.js`**:
+- Updated `duration_seconds` field rule in system prompt: "HARD MAXIMUM 8.0 seconds per scene" with explicit instruction to SPLIT long excerpts into multiple scenes with varied visuals
+- Added `MAX_SCENE_SECONDS = 8.0` and `MIN_SCENE_SECONDS = 2.0` constants
+- Added `enforceMaxSceneDuration(scenes)` — post-processing safety net that auto-splits any scene exceeding 8s into N chunks (each ≤ 8s), tagging them `_auto_split: true` and logging a warning. Applied before `postProcessScenes` so IDs get re-sequenced
+- `duration_seconds` field in `postProcessScenes` now clamped to `[MIN_SCENE_SECONDS, MAX_SCENE_SECONDS]`
+
+**`server/routes/voiceover.js`**:
+- `POST /sync-timings` now caps scene duration at 8s even when narration audio is longer
+- Warns loudly when a narration file exceeds 8s (indicates the script excerpt itself needs splitting)
+- New response field `durationWarnings: [{ scene_id, audio_duration, capped_to }]` surfaces the issue to the client
+
+**`client/src/components/video-creator/SceneGrid.jsx`**:
+- Duration badge turns amber when scene is at 8s cap
+- "auto-split" label shown on scenes that were auto-split by the safety net
+
+**`client/src/components/video-creator/VoiceoverPanel.jsx`**:
+- Logs `durationWarnings` from sync-timings response to console
+
+### Rules
+- Maximum scene duration: 8.0s (hard cap, enforced at prompt, post-processing, AND sync-timings)
+- Minimum scene duration: 2.0s
+- Target average: 4-6s
+- Auto-split is a fallback — Claude should split long scenes with varied visuals in the prompt response; the auto-split safety net reuses the same visual (flagged for review)
+
+---
+
 ## Session 23 — Fix: Voiceover repeat/echo bug (three passes)
 **Commits:**
 1. `fix: voiceover repeat/echo bug — remove duplicate narration audio render path` (2026-06-20)

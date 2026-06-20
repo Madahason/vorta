@@ -221,7 +221,8 @@ function SceneCard({
         <div className="flex items-center gap-3 mb-3 ml-10 text-[11px] text-white/25">
           <span>mood: <span className="text-white/40">{scene.mood}</span></span>
           <span>·</span>
-          <span>{scene.duration_seconds}s</span>
+          <span style={scene.duration_seconds >= 8 ? { color: 'rgba(251,191,36,0.7)' } : undefined}>{scene.duration_seconds}s</span>
+          {scene._auto_split && <span style={{ color: 'rgba(251,191,36,0.6)', fontSize: 10 }}>auto-split</span>}
           {scene.clip_search_tags?.length > 0 && (
             <><span>·</span><span className="text-amber-400/50">{scene.clip_search_tags.slice(0, 3).join(', ')}</span></>
           )}

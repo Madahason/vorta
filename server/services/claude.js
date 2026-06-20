@@ -222,7 +222,7 @@ FIELD RULES
 - scene_id: "001", "002", etc.
 - script_excerpt: the exact sentences from the script this scene covers — must end with terminal punctuation, be 15-60 words, and contain no stage directions or bracketed text
 - globe_markers: only for shot_type "3d_graphic" — array of { lat, lng, label, color } objects for key locations; [] otherwise
-- duration_seconds: 4 for punchy single moments; 5-6 for standard scenes; 7-8 for complex establishing shots or emotional peaks
+- duration_seconds: HARD MAXIMUM 8.0 seconds per scene. Minimum 2.0 seconds. Target average 4-6 seconds. 4 for punchy single moments; 5-6 for standard scenes; 7-8 for complex establishing shots or emotional peaks. NEVER exceed 8.0 — if a script_excerpt requires more than 8 seconds of narration, SPLIT it into multiple consecutive scenes with varied visuals (different camera angle, cut to supporting visual) rather than one long scene
 - higgsfield_prompt: cinematographer's shot note — SUBJECT + COMPOSITION + LIGHTING + PERIOD DETAIL + ATMOSPHERE. MINIMUM 40 characters of subject-specific content. No style instructions (style lock is appended automatically).
 - composition: "close_up" | "medium" | "wide" | "aerial" | "low_angle" | "over_shoulder" — assign based on dramatic purpose (see COMPOSITION FIELD rules above). Default "medium" if uncertain.
 - motion_graphic_type: AnimatedCounter | TimelineBar | ComparisonChart | QuoteCard | MapHighlight
@@ -407,11 +407,43 @@ function extractJSON(text) {
   throw new Error(`Could not parse Claude response (length: ${text.length}). Last 100 chars: ${text.slice(-100)}`);
 }
 
+// ─── Enforce max scene duration — auto-split safety net ─────────────────────
+
+const MAX_SCENE_SECONDS = 8.0;
+const MIN_SCENE_SECONDS = 2.0;
+
+function enforceMaxSceneDuration(scenes) {
+  const result = [];
+  for (const scene of scenes) {
+    const dur = scene.duration_seconds || 5;
+    if (dur <= MAX_SCENE_SECONDS) {
+      result.push(scene);
+      continue;
+    }
+    const numSplits = Math.ceil(dur / MAX_SCENE_SECONDS);
+    const splitDuration = parseFloat((dur / numSplits).toFixed(2));
+    console.warn(
+      `[claude] auto-splitting scene ${scene.scene_id}: ${dur}s → ${numSplits}× ${splitDuration}s ` +
+      `(Claude exceeded ${MAX_SCENE_SECONDS}s max — split will reuse visuals)`
+    );
+    for (let i = 0; i < numSplits; i++) {
+      result.push({
+        ...scene,
+        scene_id: `${scene.scene_id}_${i + 1}`,
+        duration_seconds: splitDuration,
+        _auto_split: true,
+      });
+    }
+  }
+  return result;
+}
+
 // ─── Post-process: apply style lock, IDs, defaults ──────────────────────────
 
 function postProcessScenes(scenes, defaults = {}) {
   const style = defaults.style || {};
-  return validateAndGroundPrompts(scenes).map((scene, i) => {
+  const capped = enforceMaxSceneDuration(scenes);
+  return validateAndGroundPrompts(capped).map((scene, i) => {
     const subjectPrompt = (scene.higgsfield_prompt || '').trim();
 
     let finalPrompt = '';
@@ -437,7 +469,7 @@ function postProcessScenes(scenes, defaults = {}) {
       transition_out:         scene.transition_out || style.transition || 'dissolve',
       grade:                  scene.shot_type === 'image' ? (scene.grade || style.grade || 'cool_blue') : null,
       letterbox:              scene.shot_type !== 'motion_graphic',
-      duration_seconds:       scene.duration_seconds || style.durationSeconds || 5,
+      duration_seconds:       Math.max(MIN_SCENE_SECONDS, Math.min(MAX_SCENE_SECONDS, scene.duration_seconds || style.durationSeconds || 5)),
       audio_cut:              scene.audio_cut              || 'hard',
       audio_overlap_seconds:  Number(scene.audio_overlap_seconds) || 0,
       globe_markers:          scene.globe_markers          || [],

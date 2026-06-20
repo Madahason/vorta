@@ -440,6 +440,12 @@ export default function VoiceoverPanel({
           })
           const count = data.updatedScenes.filter(s => s.audio_duration).length
           console.log('[voiceover] sync-timings — synced', count, 'scenes')
+          if (data.durationWarnings?.length > 0) {
+            console.warn('[voiceover] duration warnings:', data.durationWarnings)
+            data.durationWarnings.forEach(w => {
+              console.warn(`  scene ${w.scene_id}: narration ${w.audio_duration}s capped to ${w.capped_to}s — consider splitting this scene's script excerpt`)
+            })
+          }
           return
         }
       } catch (err) {

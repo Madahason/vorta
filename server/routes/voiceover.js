@@ -272,11 +272,15 @@ router.post('/preview', async (req, res) => {
 // POST /api/voiceover/sync-timings
 // Re-measures audio durations from disk and returns updated scene objects.
 // Called automatically after Generate All completes and by the Sync Timings button.
+const MAX_SCENE_SECONDS = 8.0
+
 router.post('/sync-timings', async (req, res) => {
   const { scenes, projectId } = req.body
   if (!Array.isArray(scenes) || !projectId) {
     return res.status(400).json({ error: 'scenes array and projectId required' })
   }
+
+  const durationWarnings = []
 
   const updatedScenes = await Promise.all(scenes.map(async (scene) => {
     const audioPath = path.resolve(PROJECTS_DIR, projectId, 'audio', `scene_${scene.scene_id}.mp3`)
@@ -285,17 +289,28 @@ router.post('/sync-timings', async (req, res) => {
     if (!duration) return scene
     const CROSSFADE_SECONDS = 12 / 30
     const END_BUFFER        = 0.8
+    let sceneDuration = parseFloat((duration + CROSSFADE_SECONDS + END_BUFFER).toFixed(2))
+
+    if (sceneDuration > MAX_SCENE_SECONDS) {
+      console.warn(`[voiceover] scene ${scene.scene_id} narration is ${duration.toFixed(1)}s → scene would be ${sceneDuration}s (exceeds ${MAX_SCENE_SECONDS}s cap). Script excerpt may need splitting.`)
+      durationWarnings.push({ scene_id: scene.scene_id, audio_duration: parseFloat(duration.toFixed(2)), capped_to: MAX_SCENE_SECONDS })
+      sceneDuration = MAX_SCENE_SECONDS
+    }
+
     return {
       ...scene,
       audio_path:       `/projects/${projectId}/audio/scene_${scene.scene_id}.mp3`,
       audio_duration:   duration,
-      duration_seconds: parseFloat((duration + CROSSFADE_SECONDS + END_BUFFER).toFixed(2)),
+      duration_seconds: sceneDuration,
     }
   }))
 
   const synced = updatedScenes.filter(s => s.audio_duration).length
   console.log(`[voiceover] sync-timings — synced ${synced} / ${scenes.length} scenes`)
-  res.json({ success: true, updatedScenes })
+  if (durationWarnings.length > 0) {
+    console.warn(`[voiceover] ${durationWarnings.length} scene(s) capped at ${MAX_SCENE_SECONDS}s — narration audio exceeds max scene duration`)
+  }
+  res.json({ success: true, updatedScenes, durationWarnings })
 })
 
 module.exports = router
