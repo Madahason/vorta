@@ -46,6 +46,8 @@ function downloadToBuffer(url) {
   });
 }
 
+// Only called with user-selected references (1-3 items) — never call this with the
+// full search/browse result set, to avoid unnecessary downloads and vision API cost.
 async function analyzeThumbnailPatterns(referenceImages) {
   const client = new Anthropic();
 
