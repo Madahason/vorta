@@ -1,5 +1,5 @@
 import { useMemo }                                                            from 'react'
-import { AbsoluteFill, Audio, Sequence, interpolate, useVideoConfig, useCurrentFrame } from 'remotion'
+import { AbsoluteFill, Audio, Sequence, interpolate, useVideoConfig } from 'remotion'
 import { TransitionSeries, springTiming, linearTiming }                      from '@remotion/transitions'
 import { fade }                                                              from '@remotion/transitions/fade'
 import ImageScene             from '../components/ImageScene'
@@ -180,12 +180,13 @@ export function Documentary({
     [uniqueScenes, fps]
   )
 
-  // Build narration spec map keyed by scene_id
-  const validSceneIds = new Set(uniqueScenes.map(s => s.scene_id))
-  const audioSpecMap  = {}
-  audioSpecs.forEach(spec => {
-    if (validSceneIds.has(spec.scene_id)) audioSpecMap[spec.scene_id] = spec
-  })
+  // Build narration spec map keyed by scene_id — memoized so audio props stay stable
+  const audioSpecMap = useMemo(() => {
+    const validIds = new Set(uniqueScenes.map(s => s.scene_id))
+    const map = {}
+    audioSpecs.forEach(spec => { if (validIds.has(spec.scene_id)) map[spec.scene_id] = spec })
+    return map
+  }, [uniqueScenes, audioSpecs])
 
   const expectedFrames = calculateDocumentaryDuration(uniqueScenes, fps)
   if (expectedFrames !== configDuration) {
@@ -283,7 +284,10 @@ export function Documentary({
   //   - narrationStart < 0 (j_cut on scene 0) → clamp to 0
   //   - Never j/l on dip transitions or the last scene → fall back to "hard"
 
-  const narrationTracks = uniqueScenes.map((scene, index) => {
+  // Narration tracks — memoized so volumeFn closures and the track array maintain
+  // stable references across Remotion's 30fps re-renders. Without memoization,
+  // new volumeFn references every frame can cause Remotion's <Audio> to restart playback.
+  const narrationTracks = useMemo(() => uniqueScenes.map((scene, index) => {
     const spec        = audioSpecMap[scene.scene_id] || null
     const narrationUrl = spec?.narration?.url || scene.audio_path || null
     if (!isValidUrl(narrationUrl)) return null
@@ -297,13 +301,11 @@ export function Documentary({
     const inT     = index === 0 ? null : getTransition(uniqueScenes[index - 1], prevDur)
     const inDelay = index === 0 ? 0 : (inT?.narrationIn ?? 0)
 
-    // Determine effective audio_cut — fall back to "hard" when conditions aren't met
     const rawCut      = scene.audio_cut || 'hard'
     const isDip       = outT.type === 'dip_black' || outT.type === 'dip_white'
     const isLastScene = index === uniqueScenes.length - 1
     const effectiveCut = (rawCut === 'hard' || isDip || isLastScene) ? 'hard' : rawCut
 
-    // overlap in seconds — minimum 0.8s when a j/l cut is active
     const rawOverlapSec  = Number(scene.audio_overlap_seconds) || (effectiveCut !== 'hard' ? 1.0 : 0)
     const overlapSec     = effectiveCut !== 'hard' ? Math.max(rawOverlapSec, 0.8) : 0
     const overlapFr      = Math.round(overlapSec * fps)
@@ -311,36 +313,29 @@ export function Documentary({
     let narrationStart, sequenceDuration
 
     if (effectiveCut === 'j_cut') {
-      // Narration starts BEFORE the visual cut — no inDelay (the whole point)
       narrationStart   = Math.max(0, sceneStart - overlapFr)
       sequenceDuration = sceneEnd - narrationStart
     } else if (effectiveCut === 'l_cut') {
-      // Normal start, but audio runs overlapFr frames past scene end
       narrationStart   = sceneStart + inDelay
       sequenceDuration = sceneEnd + overlapFr - narrationStart
     } else {
-      // hard — classic: start after incoming transition, fade before outgoing
       narrationStart   = sceneStart + inDelay
       sequenceDuration = sceneEnd - narrationStart
     }
 
     sequenceDuration = Math.max(sequenceDuration, 1)
 
-    // Volume fn — `frame` is sequence-local (0 = narrationStart in global space)
-    const localSceneEnd = sceneEnd - narrationStart  // when scene's visual ends, in local frames
+    const localSceneEnd = sceneEnd - narrationStart
 
     let volumeFn
     if (effectiveCut === 'j_cut') {
+      const fadeOutStart = localSceneEnd - outT.outgoingFade - 9
       volumeFn = (frame) => {
-        // Fade in over 6 frames — narration is starting under the previous scene's visual
         if (frame < 6) return interpolate(frame, [0, 6], [0, 1.0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
-        // Fade out before outgoing transition
-        const fadeOutStart = localSceneEnd - outT.outgoingFade - 9
         if (frame >= fadeOutStart) return interpolate(frame, [fadeOutStart, localSceneEnd], [1.0, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
         return 1.0
       }
     } else if (effectiveCut === 'l_cut') {
-      // Sustain past scene end, fade out over 6 frames at the overlap boundary
       const localNarrationEnd  = localSceneEnd + overlapFr
       const localFadeOutStart  = localNarrationEnd - 6
       volumeFn = (frame) => {
@@ -348,7 +343,6 @@ export function Documentary({
         return 1.0
       }
     } else {
-      // hard — fade out ahead of the outgoing transition (preserves original behaviour)
       const fadeOutStart = localSceneEnd - outT.outgoingFade - 9
       volumeFn = (frame) => {
         if (frame >= fadeOutStart) return interpolate(frame, [fadeOutStart, localSceneEnd], [1.0, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
@@ -357,7 +351,7 @@ export function Documentary({
     }
 
     return { key: `narr-${scene.scene_id}`, narrationStart, sequenceDuration, narrationUrl, volumeFn }
-  }).filter(Boolean)
+  }).filter(Boolean), [uniqueScenes, audioSpecMap, sceneStartFrames, fps])
 
   // Regression guard: warn if any narration URL appears more than once
   const narrationUrlCounts = {}
