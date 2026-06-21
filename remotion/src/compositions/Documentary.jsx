@@ -188,18 +188,16 @@ export function Documentary({
     return map
   }, [uniqueScenes, audioSpecs])
 
-  const expectedFrames = calculateDocumentaryDuration(uniqueScenes, fps)
-  if (expectedFrames !== configDuration) {
-    console.warn(
-      `[Documentary] FRAME MISMATCH: composition durationInFrames=${configDuration} ` +
-      `but calculateDocumentaryDuration=${expectedFrames} (diff=${configDuration - expectedFrames}). ` +
-      `This causes the scene repeat bug — the Player and composition disagree on total length.`
-    )
-  }
-
-  const narrationCount = Object.values(audioSpecMap).filter(s => s.narration?.url).length
-  console.log('[Documentary] scenes:', scenes.length, '→ unique:', uniqueScenes.length,
-    '| narration:', narrationCount, '/', audioSpecs.length)
+  // Frame mismatch assertion — only log once when values change, not on every 30fps render
+  useMemo(() => {
+    const expectedFrames = calculateDocumentaryDuration(uniqueScenes, fps)
+    if (expectedFrames !== configDuration) {
+      console.warn(
+        `[Documentary] FRAME MISMATCH: composition durationInFrames=${configDuration} ` +
+        `but calculateDocumentaryDuration=${expectedFrames} (diff=${configDuration - expectedFrames})`
+      )
+    }
+  }, [uniqueScenes, fps, configDuration])
 
   if (!uniqueScenes.length) {
     return (
@@ -353,14 +351,14 @@ export function Documentary({
     return { key: `narr-${scene.scene_id}`, narrationStart, sequenceDuration, narrationUrl, volumeFn }
   }).filter(Boolean), [uniqueScenes, audioSpecMap, sceneStartFrames, fps])
 
-  // Regression guard: warn if any narration URL appears more than once
-  const narrationUrlCounts = {}
-  narrationTracks.forEach(t => {
-    narrationUrlCounts[t.narrationUrl] = (narrationUrlCounts[t.narrationUrl] || 0) + 1
-  })
-  Object.entries(narrationUrlCounts).forEach(([url, count]) => {
-    if (count > 1) console.warn(`[Documentary] DUPLICATE NARRATION: "${url}" renders ${count}× — this causes echo/stutter`)
-  })
+  // Regression guard: warn if any narration URL appears more than once (runs once when tracks change)
+  useMemo(() => {
+    const counts = {}
+    narrationTracks.forEach(t => { counts[t.narrationUrl] = (counts[t.narrationUrl] || 0) + 1 })
+    Object.entries(counts).forEach(([url, count]) => {
+      if (count > 1) console.warn(`[Documentary] DUPLICATE NARRATION: "${url}" renders ${count}×`)
+    })
+  }, [narrationTracks])
 
   return (
     <AbsoluteFill style={{ background: '#000' }}>

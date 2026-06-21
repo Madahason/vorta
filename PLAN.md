@@ -2416,6 +2416,29 @@ function sceneDur(scene, fps) {
 
 ---
 
+## Session 25 — Fix: voiceover repeat bug — audio tag pool exhaustion + render-phase overhead
+**Commit:** `fix: infinite re-render loop causing voiceover repeat bug (Maximum update depth exceeded)`
+**Date:** 2026-06-21
+
+### Root cause
+Two compounding issues:
+
+1. **`numberOfSharedAudioTags` far too low** — VideoPlayer had 20, PreviewPlayer had 32. PLAN.md specifies 256. With N narration Audio elements active, Remotion's internal audio tag pool was exhausted. When the pool runs out, Remotion creates non-shared tags during render, which triggers internal setState calls that can cascade into "Maximum update depth exceeded" — the actual error the user saw.
+
+2. **Render-phase side effects running 30× per second** — Documentary.jsx had a `console.log` and an object-allocating duplicate-warning loop running unconditionally in the render body (not in useMemo). At 30fps playback, these ran 30+ times per second, creating GC pressure and potential DevTools interaction feedback loops.
+
+### Fix
+- **`VideoPlayer.jsx`** — `numberOfSharedAudioTags={20}` → `{256}`
+- **`PreviewPlayer.jsx`** — `numberOfSharedAudioTags={32}` → `{256}`
+- **`Documentary.jsx`** — removed render-phase `console.log`; moved frame mismatch assertion and duplicate narration warning into `useMemo` blocks so they run once when deps change, not on every frame render
+
+### Prior investigation sessions (23a, 23b)
+- Pass 1 removed a duplicate legacy sticky player (correct hygiene, not the root cause)
+- Pass 2 memoized narrationTracks (correct — prevented volumeFn churn, but insufficient alone)
+- This pass fixes the actual audio tag pool exhaustion that caused Remotion's internal re-render loop
+
+---
+
 ## Session 24 — Enforce 8-second max scene duration
 **Commit:** `feature: enforce 8-second max scene duration with auto-split safety net`
 **Date:** 2026-06-20

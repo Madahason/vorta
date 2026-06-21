@@ -278,7 +278,7 @@ export function PreviewPlayer({
                   controls={false}
                   loop={false}
                   clickToPlay={false}
-                  numberOfSharedAudioTags={32}
+                  numberOfSharedAudioTags={256}
                   acknowledgeRemotionLicense
                 />
               </div>
