@@ -2416,6 +2416,29 @@ function sceneDur(scene, fps) {
 
 ---
 
+## Session 26 — Fix: voiceover repeat bug — Chrome autoplay AbortError retry loop
+**Commit:** `fix: voiceover repeat bug - root cause was browser autoplay AbortError retry loop, not React state`
+**Date:** 2026-06-21
+
+### Root cause (confirmed via console output)
+Chrome's power-saving policy paused unmuted `<Video>` elements it classified as "video-only background media," producing repeated `AbortError: The play() request was interrupted because video-only background media was paused to save power` errors (11+ times per session). Remotion's default error recovery silently muted and retried `play()` on each interrupt — each retry restarted the media element from its Sequence start point, producing the millisecond-offset playback stutter.
+
+The unmuted element was `<Video>` in `FootageScene.jsx` (stock footage clips). Stock footage audio was playing when only narration audio should have been heard.
+
+### Fix
+- **`remotion/src/components/FootageScene.jsx`** — added `muted` and `volume={0}` to the `<Video>` element. Stock footage is visual-only; narration carries the soundtrack via separate `<Audio>` elements.
+- **`client/src/components/video-creator/VideoPlayer.jsx`** — added `acknowledgeRemotionLicense` prop.
+
+### Investigation summary (Sessions 23-26)
+| Session | Hypothesis | Outcome |
+|---------|-----------|---------|
+| 23a | Duplicate `<Audio>` render path from legacy sticky player | Fixed (hygiene), not the root cause |
+| 23b | Unmemoized narrationTracks creating new volumeFn refs per frame | Fixed (correct optimization), not the root cause |
+| 25 | numberOfSharedAudioTags too low → internal setState loop | Fixed (20/32 → 256), partially contributed |
+| **26** | **Chrome autoplay AbortError on unmuted `<Video>` → Remotion retry-restart loop** | **Confirmed root cause via console output** |
+
+---
+
 ## Session 25 — Fix: voiceover repeat bug — audio tag pool exhaustion + render-phase overhead
 **Commit:** `fix: infinite re-render loop causing voiceover repeat bug (Maximum update depth exceeded)`
 **Date:** 2026-06-21

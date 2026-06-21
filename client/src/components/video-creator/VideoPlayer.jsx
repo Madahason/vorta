@@ -87,6 +87,7 @@ export function VideoPlayer({ scenes, imagePaths, selectedClips, globalSettings,
       autoPlay={autoPlay}
       doubleClickToFullscreen
       numberOfSharedAudioTags={256}
+      acknowledgeRemotionLicense
       {...(initialFrame !== undefined ? { initialFrame } : {})}
     />
   )

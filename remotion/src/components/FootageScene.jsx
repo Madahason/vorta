@@ -21,6 +21,8 @@ export const FootageScene = ({ clip, scene }) => {
       <Video
         src={staticFile(`clips/${filename}`)}
         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+        muted
+        volume={0}
         onError={() => setError(true)}
       />
       <ColorGrade grade={grade} />
