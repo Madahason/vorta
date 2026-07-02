@@ -4,7 +4,7 @@ const assert = require('assert')
 const {
   FPS, DIP_FADE, DIP_MID, MIN_SCENE_FRAMES, TRANSITION_FRAMES, CUT_FRAMES,
   MAX_SCENE_SECONDS, NARRATION_BUFFER_SECONDS, BOUNDARY_SAFETY_MARGIN_SECONDS,
-  ACTION_CUT_BUFFER_SECONDS, PACING_VALUES,
+  ACTION_CUT_BUFFER_SECONDS, PACING_VALUES, VALID_TRANSITIONS,
   minDurationSeconds, canUseDipTransition, isValidTransition, validateSceneUpdate,
   getTransition, sceneDur, calculateDocumentaryDuration,
   maxBoundaryOffsetSeconds, validateBoundaryUpdate, resolveManualOverlapSeconds,
@@ -304,5 +304,34 @@ console.log('PASS: resetActionCutBoundaryOffsets leaves a boundary untouched whe
 const rangeNoManual = [{ scene_id: 'A' }, { scene_id: 'B' }]
 assert.deepStrictEqual(resetActionCutBoundaryOffsets(rangeNoManual, ['A', 'B']), rangeNoManual, 'no-op when nothing is manually overridden')
 console.log('PASS: resetActionCutBoundaryOffsets is a no-op when nothing is manually overridden')
+
+// ── FT-6: match cut renders via the exact same code path as 'cut' ────────────
+assert.deepStrictEqual(VALID_TRANSITIONS, ['dissolve', 'dip_black', 'dip_white', 'cut', 'match'])
+console.log('PASS: VALID_TRANSITIONS includes "match"')
+
+assert.deepStrictEqual(
+  getTransition({ transition_out: 'match' }, 150),
+  getTransition({ transition_out: 'cut' }, 150),
+  'match must produce the exact same descriptor as cut — no new transition math'
+)
+console.log('PASS: getTransition("match") produces an identical descriptor to getTransition("cut") — same code path, not new math')
+
+assert.deepStrictEqual(getTransition({ transition_out: 'match' }, 150), { type: 'cut', frames: CUT_FRAMES })
+console.log('PASS: getTransition("match") normalizes to type: "cut" so every downstream consumer checking outT.type === "cut" handles it with zero new code')
+
+// calculateDocumentaryDuration must deduct the same amount for 'match' as for 'cut'
+const sceneMatch = { scene_id: 'M', duration_seconds: 5, transition_out: 'match' }
+const sceneCut    = { scene_id: 'X', duration_seconds: 5, transition_out: 'cut' }
+const sceneEnd    = { scene_id: 'E', duration_seconds: 5, transition_out: 'dissolve' }
+const durationWithMatch = calculateDocumentaryDuration([sceneMatch, sceneEnd], 30)
+const durationWithCut   = calculateDocumentaryDuration([sceneCut, sceneEnd], 30)
+assert.strictEqual(durationWithMatch, durationWithCut, 'a match-cut boundary must deduct exactly the same frames as a cut boundary')
+console.log('PASS: calculateDocumentaryDuration treats a match-cut boundary identically to a cut boundary')
+
+// validateSceneUpdate accepts 'match' as a transition_out value (needed so the client can
+// PATCH transition_out: "match" when accepting a suggestion, or select it manually)
+errs = validateSceneUpdate({ duration_seconds: 5 }, { transition_out: 'match' })
+assert.strictEqual(errs.length, 0, 'match must be accepted as a valid transition_out value')
+console.log('PASS: validateSceneUpdate accepts transition_out: "match"')
 
 console.log('\nAll frameMath.test.js checks passed.')

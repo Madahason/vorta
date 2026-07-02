@@ -3954,3 +3954,68 @@ Also verified manually:
 - [x] No match cut, split-screen, cutaway, or montage flag added
 - [x] Client build clean — zero errors
 - [x] PLAN.md updated with FT-5 completion entry
+
+---
+
+### Phase FT-6 — Fine-Tune stage: match cut suggestion ✅ COMPLETE
+
+**Existing scene-analysis flow reviewed before making changes:** `server/services/claude.js`'s public entry point is `analyzeScript({ script, metadata, defaults })` (called once by `server/routes/analyze.js`), which runs `attemptAnalysis` (or falls back to `attemptAnalysisSimplified` on failure), then `postProcessScenes()` to finalize `scene_id`, the style-locked `higgsfield_prompt`, defaults, etc. This is the single, correct place to hook in a post-analysis comparison pass — it already runs exactly once per script, not on every Fine-Tune page load.
+
+**What was built:**
+- One new optional scene field: `match_cut_candidate` (boolean, default `false`) — defaulted in `postProcessScenes` for schema consistency, alongside the other defaulted fields (`audio_cut`, `letterbox`, etc.).
+- `server/services/claude.js` — `detectMatchCutCandidates(scenes, claudeCaller = callClaude)`:
+  - Builds the list of consecutive scene pairs where BOTH scenes have a meaningful visual prompt (`image`/`real_footage` shot types only — `motion_graphic`/`3d_graphic` scenes have no analogous field and are excluded from every pair entirely).
+  - Sends **one single batched Claude call** (haiku, via the existing `callClaude` helper) covering every pair at once, rather than one call per pair — for a 65-scene script that's 1 call instead of 64, both far cheaper and far less likely to time out.
+  - The system prompt instructs Claude to judge genuine visual continuity (matching shapes/silhouettes, composition/framing, motion direction, color/lighting) — not narrative/thematic similarity — and to return a JSON array of the **outgoing** scene_ids of qualifying boundaries.
+  - `claudeCaller` is injectable (defaults to the real `callClaude`) specifically so tests can supply a fake verdict without real API credentials — `callClaude` is invoked as a plain local function reference inside `detectMatchCutCandidates`, so monkey-patching `module.exports.callClaude` from outside would not actually reach the call; dependency injection was the correct fix here, not a require-cache trick.
+  - `parseMatchCutResponse()` — a small **dedicated** parser, deliberately not the existing shared `extractJSON()`. `extractJSON` assumes a non-empty scene array (every one of its fallback paths requires `parsed.length > 0`) and would throw on a legitimate `"[]"` response — which is a common, valid answer here ("no match cuts in this script"). Reusing it would have risked misinterpreting "no candidates" as a parse failure, and modifying `extractJSON` itself risked the main scene-analysis flow, which the guardrails explicitly protect.
+  - `analyzeScript()` now calls `detectMatchCutCandidates(processed)` after `postProcessScenes`, wrapped in a single `try/catch`: any failure (API error, malformed response, timeout) is caught, logged, and the function returns the scenes exactly as `postProcessScenes` produced them (`match_cut_candidate: false` for everyone) — the main analysis result is never blocked, delayed by a failed comparison, or lost.
+- `remotion/src/compositions/Documentary.jsx` and `server/services/frameMath.js` (its server-side mirror) — `getTransition()`'s switch statement now has `case 'match':` falling through to the exact same branch as `case 'cut':`, returning `{ type: 'cut', frames: CUT_FRAMES, ... }` — **not** a new `'match'` descriptor type. Since `transition_out` is only ever read inside `getTransition()` in Documentary.jsx (confirmed via a full-file grep before making changes), and every downstream consumer (`seriesChildren`'s flatMap, the narration-track builder, `calculateDocumentaryDuration`) only ever inspects the *returned* `outT.type`, normalizing `'match'` to `'cut'` at this single point means literally zero other code anywhere needed to change — exactly the "do not add new transition math" requirement.
+- `VALID_TRANSITIONS` (`frameMath.js`, used by `validateSceneUpdate`) gained `'match'` — the one explicitly-authorized additive change to FT-1's existing validator (adding an enum value, not altering any existing field's validation behavior; re-verified the full FT-1 test suite still passes unmodified).
+- `client/src/pages/wizard/FineTuneStep.jsx`:
+  - `TRANSITIONS` (the dropdown FineTuneCard's "Transition Out" select uses, untouched from FT-1) gained a `{ value: 'match', label: 'Match Cut' }` entry — required simply so the dropdown displays correctly once a scene's `transition_out` is `'match'`, not a new feature.
+  - `BoundaryControl` (FT-4's component) now shows a "✂ Match cut suggested" badge whenever `outgoingScene.match_cut_candidate` is true, with an "Accept" button. Accepting calls the **existing** `PATCH /:sceneId` endpoint with `{ transition_out: 'match' }` — no new endpoint was needed, since this is just a plain field update FT-1 already supports (now that `'match'` is a valid value). `match_cut_candidate` is never included in that request body, so it's never disturbed.
+  - Revert is the **existing, untouched** FT-1 "Transition Out" revert on the scene card itself (`revertField('transition')`, comparing `transition_out` against the Fine-Tune snapshot) — accepting a match cut just changes `transition_out`, which that mechanism already knows how to revert. No new revert machinery was built for this.
+
+**Guardrail interaction handled explicitly:** the accept/revert flow only ever touches `transition_out`; `match_cut_candidate` is set once during analysis and never written to again by any Fine-Tune action, satisfying "match_cut_candidate itself persists regardless, since it reflects analysis, not a user edit" without any special-casing needed in the revert path.
+
+**Known, deliberate limitation (consistent with FT-5's precedent, not a new regression):** `FineTuneCard`'s "Transition Out" dropdown holds its displayed value in local `useState`, synced only by that same card's own commit/revert handlers (an intentional FT-1 design choice to avoid a `react-hooks/set-state-in-effect` violation). An externally-driven `transition_out` change — via `BoundaryControl`'s Accept button here, or FT-5's bulk action-cut before it — updates the underlying scene data correctly (verified by tests) but the dropdown's own visual state may lag until the next natural re-render trigger (e.g. leaving and returning to the Fine-Tune step, which fully remounts it). This is the same class of cosmetic-only gap FT-5 already shipped with, not something newly introduced here, and fixing it would mean touching FT-1/FT-5's card-state architecture, which the guardrails protect.
+
+**Testing — commands run and results:**
+```
+$ node server/services/claude.test.js
+```
+11/11 assertions passed, using dependency injection (a fake `claudeCaller`) rather than the real Anthropic API — fast, deterministic, no credentials needed: a genuinely similar test pair (two wide shots of a lone figure in a symmetrical, cool-blue-lit space — a corridor and a parking garage) produces `match_cut_candidate: true` on the outgoing scene; a clearly dissimilar pair (that same corridor shot vs. an extreme close-up birthday cake with warm bokeh) does not; the actual prompt sent to Claude is asserted to contain every real pair's specific visual details, proving the comparison genuinely inspects `higgsfield_prompt`/`composition` content rather than guessing; a `motion_graphic` scene (no visual prompt) is confirmed excluded from every pair and never flagged; a thrown error from the comparison step is caught via the exact same `try/catch` pattern `analyzeScript` uses, and the scene set still completes intact and unflagged — proving graceful degradation; an empty `"[]"` verdict (no candidates) is handled without error, unlike what the shared `extractJSON` would have done; and `parseMatchCutResponse`/`buildMatchCutPrompt` are unit-tested directly for markdown-fence stripping, empty-array handling, and malformed-input rejection.
+
+```
+$ node server/services/frameMath.test.js
+```
+51/51 assertions passed (46 from FT-1/FT-2/FT-4/FT-5 unchanged, plus 5 new): `VALID_TRANSITIONS` includes `'match'`; `getTransition('match')` produces a descriptor **deeply equal** to `getTransition('cut')` (proving zero new math, not just similar behavior) and normalizes to `type: 'cut'`; `calculateDocumentaryDuration` deducts the exact same frame count for a `'match'`-boundary scene as it would for an identical `'cut'`-boundary scene, proving Documentary.jsx's actual render-timing math treats them identically; `validateSceneUpdate` accepts `transition_out: 'match'`.
+
+```
+$ node server/routes/scenes.test.js
+```
+63/63 assertions passed (57 from FT-1/FT-2/FT-4/FT-5 unchanged, plus 6 new): accepting sets `transition_out: 'match'` via the existing `PATCH /:sceneId` endpoint without disturbing `match_cut_candidate`; the accepted value persists to `scenes.json`; reverting (sending the prior `transition_out` value, exactly as the client's existing snapshot-based revert does) restores it while `match_cut_candidate` remains `true` throughout — verified both in the response and by re-reading the persisted file; a second scene never part of the flow is confirmed completely unaffected; `transition_out: 'match'` is confirmed valid on the standard per-scene endpoint (needed for both the Accept button and a manual dropdown pick to work).
+
+Also verified manually:
+- `node -e "require(...)"` on `claude.js` — loads without error, confirmed all 5 exports (`analyzeScript`, `callClaude`, `detectMatchCutCandidates`, `parseMatchCutResponse`, `buildMatchCutPrompt`) present
+- A full-file `grep` confirming `transition_out` is read *only* inside `getTransition()` in Documentary.jsx, before deciding that changing just that one function's switch statement was sufficient
+- `npx eslint src/pages/wizard/FineTuneStep.jsx` — clean
+- `npx vite build` — clean production build
+- Re-ran the full FT-1/FT-2/FT-3/FT-4/FT-5 test suites (`frameMath.test.js`, `scenes.test.js`, `imageSwap.test.js`, `images.test.js`, `higgsfieldRegenerate.test.js`) after all FT-6 changes — all still pass
+- Against the live dev server (nodemon auto-restarted on the file changes): `curl -X PATCH /api/scenes/001` with `{"transition_out":"match"}` and no `projectId` correctly returned `400 {"error":"projectId required"}` — confirming the request reached validation past the `transition_out` check (i.e., `'match'` didn't get rejected earlier in the pipeline)
+
+**Production-readiness checklist:**
+- [x] Match-cut comparison runs once during scene analysis (`analyzeScript`), not on every Fine-Tune page load — result persists on the scene object
+- [x] `match_cut_candidate` (boolean, default `false`) added to the scene schema, set `true` on the outgoing scene of a boundary Claude judges visually similar
+- [x] A single batched Claude call covers every consecutive pair, not one call per pair
+- [x] A comparison-step failure is caught and never blocks, slows, or crashes the main scene-analysis flow — verified with a fake that throws
+- [x] `FineTuneStep.jsx`'s boundary control shows a "Match cut suggested" badge when `match_cut_candidate` is true
+- [x] Accepting sets `transition_out: 'match'` via the existing `PATCH /:sceneId` endpoint — no new endpoint needed
+- [x] `'match'` added as a valid `transition_out` value in both the scene schema (`VALID_TRANSITIONS`) and Documentary.jsx's transition handling
+- [x] Documentary.jsx renders `'match'` via the exact same code path as `'cut'` — verified via deep-equal descriptor comparison and identical `calculateDocumentaryDuration` output, not just "similar" behavior
+- [x] Revert restores the prior `transition_out` value (via the existing, untouched FT-1 revert mechanism) while `match_cut_candidate` persists untouched
+- [x] FT-1/FT-2/FT-3/FT-4/FT-5 logic untouched beyond the one additive `'match'` enum value
+- [x] No split-screen, cutaway, or montage flag added
+- [x] Client build clean — zero errors
+- [x] PLAN.md updated with FT-6 completion entry

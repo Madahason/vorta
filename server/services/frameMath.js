@@ -20,7 +20,7 @@ const MIN_SCENE_FRAMES  = TRANSITION_FRAMES + 1       // 13
 const MAX_SCENE_SECONDS        = 8.0
 const NARRATION_BUFFER_SECONDS = 0.8
 
-const VALID_TRANSITIONS = ['dissolve', 'dip_black', 'dip_white', 'cut']
+const VALID_TRANSITIONS = ['dissolve', 'dip_black', 'dip_white', 'cut', 'match']
 const PACING_VALUES     = ['standard', 'action', 'montage']
 
 function minDurationSeconds(audioDuration) {
@@ -121,6 +121,9 @@ function getTransition(scene, sceneDurationFrames) {
 
   switch (type) {
     case 'cut':
+    // FT-6: match cut renders via the exact same 'cut' code path — semantic/suggested
+    // only, no new transition math. Mirrors Documentary.jsx's getTransition() exactly.
+    case 'match':
       return { type: 'cut', frames: CUT_FRAMES }
     case 'dip_black':
       return { type: 'dip_black', frames: DIP_FADE }

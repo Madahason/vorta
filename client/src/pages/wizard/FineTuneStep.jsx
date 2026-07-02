@@ -20,6 +20,10 @@ const TRANSITIONS = [
   { value: 'cut',       label: 'Cut' },
   { value: 'dip_black', label: 'Dip to black' },
   { value: 'dip_white', label: 'Dip to white' },
+  // FT-6: renders via the exact same hard-cut path as 'cut' in Documentary.jsx — this is a
+  // separate dropdown entry only so it displays correctly and so an accepted/manually-picked
+  // "match" selection isn't visually indistinguishable from "cut".
+  { value: 'match',     label: 'Match Cut' },
 ]
 
 const DEFAULT_MIX = { narration: 1.0, music: 0.12, ambient: 0.06 }
@@ -739,6 +743,8 @@ function BoundaryControl({ outgoingScene, nextScene, projectId, onSceneUpdate })
   const [lcut, setLcut] = useState(outgoingScene.lcut_offset ?? 0)
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState(null)
+  const [matchCutSaving, setMatchCutSaving] = useState(false)
+  const [matchCutError,  setMatchCutError]  = useState(null)
 
   const isManual = outgoingScene.is_manual_offset === true &&
     outgoingScene.boundary_partner_scene_id === nextScene.scene_id
@@ -781,6 +787,29 @@ function BoundaryControl({ outgoingScene, nextScene, projectId, onSceneUpdate })
       setError(err.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  // FT-6: accepting a match-cut suggestion is just a transition_out: "match" update on the
+  // outgoing scene — reuses the existing PATCH /:sceneId endpoint (no new endpoint needed).
+  // match_cut_candidate is never sent here, so it's never disturbed by accepting or by the
+  // existing generic "Transition Out" revert on the scene card (it reflects analysis, not a
+  // user edit — see the FineTuneCard/revertField('transition') path, unchanged from FT-1).
+  const acceptMatchCut = async () => {
+    setMatchCutSaving(true); setMatchCutError(null)
+    try {
+      const res  = await fetch(`${SERVER_URL}/api/scenes/${outgoingScene.scene_id}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId, transition_out: 'match' }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to accept match cut')
+      onSceneUpdate(data.scene)
+    } catch (err) {
+      setMatchCutError(err.message)
+    } finally {
+      setMatchCutSaving(false)
     }
   }
 
@@ -835,6 +864,31 @@ function BoundaryControl({ outgoingScene, nextScene, projectId, onSceneUpdate })
       )}
       {error && (
         <div className="text-[9px] text-red-400/80 mt-1">{error}</div>
+      )}
+
+      {outgoingScene.match_cut_candidate && (
+        <div className="mt-2 pt-2 border-t border-white/[0.06] flex items-center justify-between">
+          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-purple-500/10 border border-purple-500/25 text-purple-300">
+            ✂ Match cut suggested
+          </span>
+          <div className="flex items-center gap-2">
+            {matchCutSaving && <Loader2 size={10} className="animate-spin text-blue-400" />}
+            {outgoingScene.transition_out === 'match' ? (
+              <span className="text-[9px] text-white/25">Accepted</span>
+            ) : (
+              <button
+                onClick={acceptMatchCut}
+                disabled={matchCutSaving}
+                className="text-[10px] px-2 py-1 bg-purple-500/10 hover:bg-purple-500/20 disabled:opacity-40 border border-purple-500/25 rounded text-purple-300 transition-colors"
+              >
+                Accept
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {matchCutError && (
+        <div className="text-[9px] text-red-400/80 mt-1">{matchCutError}</div>
       )}
     </div>
   )

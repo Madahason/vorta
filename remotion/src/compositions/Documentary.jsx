@@ -51,6 +51,12 @@ function getTransition(scene, sceneDurationFrames) {
 
   switch (type) {
     case 'cut':
+    // FT-6: match cut is semantic/suggested only — visually and in every downstream
+    // consumer (seriesChildren's flatMap, narration timing) it IS a cut. Returning
+    // type: 'cut' here (not a new 'match' descriptor type) means every consumer already
+    // checking `outT.type === 'cut'` handles it with zero new code, per the task's explicit
+    // "do not add new transition math for this."
+    case 'match':
       return { type: 'cut', frames: CUT_FRAMES, outgoingFade: CUT_FRAMES, narrationIn: CUT_FRAMES }
     case 'dip_black':
       return { type: 'dip_black', frames: DIP_FADE, outgoingFade: DIP_FADE, narrationIn: DIP_FADE, color: '#000000' }

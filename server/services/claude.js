@@ -38,9 +38,10 @@ For every video you analyze, distribute scene types as follows:
 - 45% image (Higgsfield AI images with Ken Burns animation)
 - 40% motion_graphic (animated data visualizations, stats, quotes, timelines)
 
-For a 10-scene video: 2 real_footage, 4-5 image, 3-4 motion_graphic
-For a 15-scene video: 2 real_footage, 7 image, 6 motion_graphic
-For a 20-scene video: 3 real_footage, 9 image, 8 motion_graphic
+For a 20-scene video:  3 real_footage,  9 image,  8 motion_graphic
+For a 40-scene video:  6 real_footage, 18 image, 16 motion_graphic
+For a 65-scene video: 10 real_footage, 29 image, 26 motion_graphic
+For a 100-scene video: 15 real_footage, 45 image, 40 motion_graphic
 
 REAL_FOOTAGE scenes — assign when:
 - The script describes a location, environment, or atmosphere (city, office, nature)
@@ -89,7 +90,9 @@ GOOD real_footage: "Workers at Foxconn's Zhengzhou factory assembled the first i
 
 SCENE BREAKDOWN DISCIPLINE
 
-One scene = one visual idea. If a paragraph contains multiple distinct images, break it into multiple scenes. Aim for 10-18 scenes for a 5-minute script.
+One scene = one visual idea. If a paragraph contains multiple distinct images, break it into multiple scenes.
+Scale with script length: ~1 scene per 20 words (each scene reads for ~9 seconds). A 5-minute script (~650 words) → ~33 scenes. A 10-minute script (~1300 words) → ~65 scenes. A 15-minute script (~2000 words) → ~100 scenes.
+Every word of the script must appear in exactly one scene's script_excerpt — cover the full script.
 
 MOOD VALUES — use ONLY these exact values for the mood field:
 tense, triumphant, somber, neutral, dramatic, reflective, anticipatory, institutional, intimate
@@ -109,10 +112,10 @@ SCENE TEXT RULES FOR VOICEOVER
 
 Every script_excerpt will be read aloud by an AI narrator. It must be TTS-safe:
 1. Always end with terminal punctuation — period, exclamation mark, or question mark. Never cut mid-sentence.
-2. Minimum 15 words. If a natural scene break falls under 15 words, merge it with the adjacent scene.
-3. Maximum 60 words. If a paragraph exceeds 60 words, split at a sentence boundary — never mid-sentence.
+2. Minimum 8 words. If a natural scene break falls under 8 words, merge with the adjacent scene.
+3. Target 12–22 words per scene (5–10 seconds of narration). Maximum 25 words. If a sentence exceeds 25 words, split at a comma, dash, or conjunction.
 4. Remove any stage directions, speaker labels, parenthetical asides, or bracketed text.
-5. Each excerpt must represent one complete thought or narrative beat — something a narrator would say in a single breath without pausing.
+5. Each excerpt must represent one complete thought or narrative beat.
 
 HIGGSFIELD PROMPT RULES — CINEMATOGRAPHIC STANDARD
 
@@ -222,17 +225,18 @@ FIELD RULES
 - scene_id: "001", "002", etc.
 - script_excerpt: the exact sentences from the script this scene covers — must end with terminal punctuation, be 15-60 words, and contain no stage directions or bracketed text
 - globe_markers: only for shot_type "3d_graphic" — array of { lat, lng, label, color } objects for key locations; [] otherwise
-- duration_seconds: HARD MAXIMUM 8.0 seconds per scene. Minimum 2.0 seconds. Target average 4-6 seconds. 4 for punchy single moments; 5-6 for standard scenes; 7-8 for complex establishing shots or emotional peaks. NEVER exceed 8.0 — if a script_excerpt requires more than 8 seconds of narration, SPLIT it into multiple consecutive scenes with varied visuals (different camera angle, cut to supporting visual) rather than one long scene
+- duration_seconds: Set to 5 for all scenes. The pipeline overrides this with the actual narration time calculated from the word count of script_excerpt, so your value is a placeholder only.
 - higgsfield_prompt: cinematographer's shot note — SUBJECT + COMPOSITION + LIGHTING + PERIOD DETAIL + ATMOSPHERE. MINIMUM 40 characters of subject-specific content. No style instructions (style lock is appended automatically).
 - composition: "close_up" | "medium" | "wide" | "aerial" | "low_angle" | "over_shoulder" — assign based on dramatic purpose (see COMPOSITION FIELD rules above). Default "medium" if uncertain.
 - motion_graphic_type: AnimatedCounter | TimelineBar | ComparisonChart | QuoteCard | MapHighlight
 - clip_search_tags: 3-6 lowercase tags, specific enough to find real footage
 
-SCENE COUNT LIMIT
+SCENE COUNT — SCALE WITH SCRIPT LENGTH
 
-Generate between 8 and 20 scenes maximum regardless of script length.
-For long scripts, combine related paragraphs into single scenes rather than splitting every sentence.
-Never exceed 20 scenes total — this is a hard limit.
+Cover EVERY sentence of the script. Do not skip, summarize, or compress content.
+The user message will tell you the target scene count based on word count — hit that target.
+Minimum 8 scenes. No hard maximum — use as many scenes as needed to cover the full script.
+Each scene should cover 30–50 words of script. Never leave script content unassigned.
 
 AUDIO CUT RULES
 
@@ -261,7 +265,7 @@ COMPACT JSON RULES — CRITICAL FOR RESPONSE LENGTH
 
 Keep each scene JSON compact to avoid truncation. Hard limits per field:
 - higgsfield_prompt: maximum 40 words
-- script_excerpt: maximum 30 words (trim at a sentence boundary if longer)
+- script_excerpt: 12–22 words per scene (must end at a sentence boundary). This keeps each scene to 5–10 seconds of narration. If a sentence is longer than 22 words, split at a comma or natural pause.
 - subject_anchors: maximum 4 items
 - clip_search_tags: maximum 4 items
 These limits are mandatory. Verbose responses get truncated and fail. Compact = complete.
@@ -407,43 +411,28 @@ function extractJSON(text) {
   throw new Error(`Could not parse Claude response (length: ${text.length}). Last 100 chars: ${text.slice(-100)}`);
 }
 
-// ─── Enforce max scene duration — auto-split safety net ─────────────────────
+// ─── Narration duration from word count ─────────────────────────────────────
+// TTS reads at ~130 wpm. We use this to set scene duration so the video length
+// matches the script length without needing voiceover pre-generation.
+// After real TTS audio is generated, duration_seconds is overridden by actual length.
 
-const MAX_SCENE_SECONDS = 8.0;
+const WORDS_PER_MIN    = 130;
 const MIN_SCENE_SECONDS = 2.0;
 
-function enforceMaxSceneDuration(scenes) {
-  const result = [];
-  for (const scene of scenes) {
-    const dur = scene.duration_seconds || 5;
-    if (dur <= MAX_SCENE_SECONDS) {
-      result.push(scene);
-      continue;
-    }
-    const numSplits = Math.ceil(dur / MAX_SCENE_SECONDS);
-    const splitDuration = parseFloat((dur / numSplits).toFixed(2));
-    console.warn(
-      `[claude] auto-splitting scene ${scene.scene_id}: ${dur}s → ${numSplits}× ${splitDuration}s ` +
-      `(Claude exceeded ${MAX_SCENE_SECONDS}s max — split will reuse visuals)`
-    );
-    for (let i = 0; i < numSplits; i++) {
-      result.push({
-        ...scene,
-        scene_id: `${scene.scene_id}_${i + 1}`,
-        duration_seconds: splitDuration,
-        _auto_split: true,
-      });
-    }
-  }
-  return result;
+function narratedDuration(scriptExcerpt) {
+  const words = (scriptExcerpt || '').trim().split(/\s+/).filter(Boolean).length;
+  if (words < 3) return null;
+  // +0.6s tail buffer for sentence-final pauses and SSML breaks
+  // Capped at 10s — if a scene excerpt is too long, TTS will override this after generation
+  const raw = (words / WORDS_PER_MIN) * 60 + 0.6;
+  return parseFloat(Math.min(raw, 10.0).toFixed(2));
 }
 
 // ─── Post-process: apply style lock, IDs, defaults ──────────────────────────
 
 function postProcessScenes(scenes, defaults = {}) {
   const style = defaults.style || {};
-  const capped = enforceMaxSceneDuration(scenes);
-  return validateAndGroundPrompts(capped).map((scene, i) => {
+  return validateAndGroundPrompts(scenes).map((scene, i) => {
     const subjectPrompt = (scene.higgsfield_prompt || '').trim();
 
     let finalPrompt = '';
@@ -455,6 +444,11 @@ function postProcessScenes(scenes, defaults = {}) {
         finalPrompt = `${fallback}, ${STYLE_LOCK}`;
       }
     }
+
+    // Duration driven by word count so the video length matches narration time.
+    // Falls back to Claude's estimate only if the excerpt is missing/too short.
+    const duration = narratedDuration(scene.script_excerpt)
+      ?? Math.max(MIN_SCENE_SECONDS, scene.duration_seconds || style.durationSeconds || 5);
 
     return {
       ...scene,
@@ -469,10 +463,11 @@ function postProcessScenes(scenes, defaults = {}) {
       transition_out:         scene.transition_out || style.transition || 'dissolve',
       grade:                  scene.shot_type === 'image' ? (scene.grade || style.grade || 'cool_blue') : null,
       letterbox:              scene.shot_type !== 'motion_graphic',
-      duration_seconds:       Math.max(MIN_SCENE_SECONDS, Math.min(MAX_SCENE_SECONDS, scene.duration_seconds || style.durationSeconds || 5)),
+      duration_seconds:       Math.max(MIN_SCENE_SECONDS, duration),
       audio_cut:              scene.audio_cut              || 'hard',
       audio_overlap_seconds:  Number(scene.audio_overlap_seconds) || 0,
       globe_markers:          scene.globe_markers          || [],
+      match_cut_candidate:    false, // FT-6: set true per-boundary by detectMatchCutCandidates below
       higgsfield_prompt: finalPrompt,
       real_footage_flag: scene.shot_type === 'real_footage',
       clip_search_tags:  scene.clip_search_tags || [],
@@ -485,20 +480,49 @@ function postProcessScenes(scenes, defaults = {}) {
 async function attemptAnalysis(script, metadata, defaults) {
   const client = new Anthropic();
 
+  const wordCount = script.trim().split(/\s+/).length;
+  const td        = metadata.targetDuration; // number (minutes) | 'full' | undefined
+
+  let targetScenes, coverageInstruction;
+
+  if (td && td !== 'full') {
+    const targetWords = Math.min(wordCount, Math.round(td * WORDS_PER_MIN));
+    targetScenes      = Math.min(100, Math.max(8, Math.ceil(targetWords / 20)));
+    const pct         = Math.round((targetWords / wordCount) * 100);
+
+    if (targetWords >= wordCount) {
+      coverageInstruction = `Cover EVERY sentence — the full script fits within the ${td}-minute target.`;
+    } else {
+      coverageInstruction =
+        `Select and cover the most important ~${targetWords} words (${pct}% of script) to produce a ${td}-minute video. ` +
+        `Prioritise key narrative beats, turning points, data moments, and memorable lines. ` +
+        `Skip transitional filler, repeated context, and padding. ` +
+        `TARGET: ${targetScenes} scenes of 12–22 words each.`;
+    }
+  } else {
+    targetScenes        = Math.min(100, Math.max(8, Math.ceil(wordCount / 20)));
+    coverageInstruction = `Cover EVERY sentence — do not skip any part of the script. TARGET: ${targetScenes} scenes (~20 words each, 8–10 seconds per scene).`;
+  }
+
+  // 180 tokens per scene JSON object is a safe estimate
+  const maxTokens = Math.min(64000, Math.max(16000, targetScenes * 180));
+
+  console.log(`[claude] script ${wordCount} words | target ${td ?? 'full'} | ${targetScenes} scenes | max_tokens ${maxTokens}`);
+
   const userMessage = `VIDEO TITLE: ${metadata.title || 'Untitled'}
 NICHE: ${metadata.niche || 'General'}
 STYLE PRESET: ${metadata.stylePreset || 'Dark Cinematic'}
 NARRATOR TONE: ${metadata.narratorTone || 'Authoritative'}
 
-SCRIPT:
+SCRIPT (${wordCount} words):
 ${script}
 
-Analyze the full script and return the complete scenes array.
-REMINDER: Maximum 20 scenes. Keep all field values compact (see COMPACT JSON RULES).`;
+${coverageInstruction}
+Keep all field values compact (see COMPACT JSON RULES).`;
 
   const message = await client.messages.create({
     model:      'claude-sonnet-4-6',
-    max_tokens: 16000,
+    max_tokens: maxTokens,
     system:     SYSTEM_PROMPT,
     messages:   [{ role: 'user', content: userMessage }],
   });
@@ -516,19 +540,38 @@ async function attemptAnalysisSimplified(script, metadata) {
   const client = new Anthropic();
   console.log('[claude] running simplified fallback analysis...');
 
+  const wordCount = script.trim().split(/\s+/).length;
+  const td        = metadata.targetDuration;
+
+  let targetScenes, coverageNote;
+  if (td && td !== 'full') {
+    const targetWords = Math.min(wordCount, Math.round(td * WORDS_PER_MIN));
+    targetScenes      = Math.min(90, Math.max(8, Math.ceil(targetWords / 20)));
+    coverageNote      = targetWords >= wordCount
+      ? `Cover the full script.`
+      : `Select the most important ~${targetWords} words for a ${td}-minute video. Target ${targetScenes} scenes of 12–22 words each.`;
+  } else {
+    targetScenes = Math.min(90, Math.max(8, Math.ceil(wordCount / 20)));
+    coverageNote = `Cover the full script. Target ${targetScenes} scenes of 12–22 words each.`;
+  }
+
+  const maxTokens   = Math.min(48000, Math.max(16000, targetScenes * 160));
+  const scriptSlice = script.slice(0, Math.max(4000, wordCount * 6));
+
   const message = await client.messages.create({
     model:      'claude-sonnet-4-6',
-    max_tokens: 16000,
+    max_tokens: maxTokens,
     messages:   [{
       role:    'user',
       content: `Analyze this documentary script and return a JSON array of scenes.
 
-Script: ${script.slice(0, 4000)}
+Script (${wordCount} words): ${scriptSlice}
 
-Return ONLY a valid JSON array. Maximum 15 scenes. Each scene object needs ONLY these fields:
+Return ONLY a valid JSON array. ${coverageNote}
+Each scene object needs ONLY these fields:
 - scene_id (string, zero-padded: "001")
 - shot_type ("image" | "motion_graphic" | "real_footage")
-- script_excerpt (max 20 words, complete sentence)
+- script_excerpt (20-50 words, complete sentence — cover a full thought)
 - mood ("tense"|"triumphant"|"somber"|"neutral"|"dramatic"|"reflective"|"anticipatory"|"institutional")
 - higgsfield_prompt (max 25 words, only for image/real_footage scenes, else "")
 - motion_graphic_type (one of: "AnimatedCounter"|"QuoteCard"|"TimelineBar"|"ComparisonChart"|"MapHighlight" — only for motion_graphic, else "")
@@ -554,6 +597,74 @@ Return ONLY the JSON array, no markdown, no explanation.`,
   return extractJSON(raw);
 }
 
+// ─── FT-6: match cut suggestion ──────────────────────────────────────────────
+// Runs once, after the main scene breakdown, comparing each consecutive scene pair's
+// visual prompt/composition for match-cut potential (shape/color/framing/subject
+// continuity — not narrative similarity). Sets match_cut_candidate: true on the OUTGOING
+// scene of any boundary Claude judges to qualify. Deliberately a single batched Claude call
+// covering every pair at once, rather than one call per pair — for a 65-scene script that's
+// 1 call instead of 64, which is both far cheaper and far less likely to time out.
+
+const MATCH_CUT_SYSTEM_PROMPT = `You are a film editor identifying match cut opportunities between consecutive documentary shots.
+
+A match cut works when two consecutive shots share strong VISUAL continuity: matching shapes or silhouettes, similar composition/framing, continuous motion direction, or color/lighting continuity — NOT just thematic or narrative similarity. Be selective; most consecutive shots do not qualify.
+
+You will be given a numbered list of consecutive scene pairs, each with the outgoing shot's description and the incoming shot's description.
+
+Return ONLY a raw JSON array of the outgoing scene_id strings (as strings, e.g. "003") where that pair has genuine match-cut potential. Return [] if none qualify. No markdown, no explanation, no other text.`;
+
+function buildMatchCutPrompt(pairs) {
+  const lines = pairs.map((p, idx) =>
+    `${idx + 1}. OUTGOING scene ${p.a_scene_id} (${p.a_composition}): ${p.a}\n   INCOMING scene ${p.b_scene_id} (${p.b_composition}): ${p.b}`
+  ).join('\n\n');
+  return `Consecutive scene pairs to evaluate for match-cut potential:\n\n${lines}\n\nReturn the JSON array of outgoing scene_id strings that qualify.`;
+}
+
+// Dedicated minimal parser — NOT extractJSON. extractJSON assumes a non-empty scene array
+// (its every fallback path requires parsed.length > 0) and throws on a legitimate "[]"
+// response, which is a common and valid answer here ("no match cuts in this script"). Reusing
+// it would risk misinterpreting "no candidates" as a parse failure.
+function parseMatchCutResponse(text) {
+  const clean = (text || '').trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/i, '')
+    .trim();
+  const parsed = JSON.parse(clean);
+  if (!Array.isArray(parsed)) throw new Error('match-cut response was not a JSON array');
+  return parsed;
+}
+
+// claudeCaller is injectable (defaults to the real callClaude below) so tests can supply a
+// fake without needing real API credentials or monkey-patching module internals — callClaude
+// is invoked here as a plain local function reference, so patching module.exports.callClaude
+// from outside would not actually reach this call.
+async function detectMatchCutCandidates(scenes, claudeCaller = callClaude) {
+  if (!Array.isArray(scenes) || scenes.length < 2) return scenes;
+
+  // Only image/real_footage scenes have a meaningful visual prompt to compare —
+  // motion_graphic/3d_graphic scenes have no analogous field, skip those pairs entirely.
+  const pairs = [];
+  for (let i = 0; i < scenes.length - 1; i++) {
+    const a = scenes[i], b = scenes[i + 1];
+    const aVisual = (a.shot_type === 'image' || a.shot_type === 'real_footage') ? a.higgsfield_prompt : null;
+    const bVisual = (b.shot_type === 'image' || b.shot_type === 'real_footage') ? b.higgsfield_prompt : null;
+    if (!aVisual || !bVisual) continue;
+    pairs.push({
+      a_scene_id: a.scene_id, a_composition: a.composition || 'medium', a: aVisual,
+      b_scene_id: b.scene_id, b_composition: b.composition || 'medium', b: bVisual,
+    });
+  }
+
+  if (!pairs.length) return scenes;
+
+  const raw = await claudeCaller(buildMatchCutPrompt(pairs), MATCH_CUT_SYSTEM_PROMPT);
+  const candidateIds = new Set(parseMatchCutResponse(raw).map(String));
+
+  console.log(`[claude] match-cut analysis: ${candidateIds.size}/${pairs.length} boundary pair(s) flagged as candidates`);
+
+  return scenes.map(s => candidateIds.has(String(s.scene_id)) ? { ...s, match_cut_candidate: true } : s);
+}
+
 // ─── Public analyzeScript with retry ────────────────────────────────────────
 
 async function analyzeScript({ script, metadata, defaults = {} }) {
@@ -566,7 +677,17 @@ async function analyzeScript({ script, metadata, defaults = {} }) {
     scenes = await attemptAnalysisSimplified(script, metadata);
   }
 
-  return postProcessScenes(scenes, defaults);
+  const processed = postProcessScenes(scenes, defaults);
+
+  // FT-6: best-effort — must never block or crash the main scene-analysis flow. Any failure
+  // (API error, malformed response, timeout) just leaves match_cut_candidate false for every
+  // scene, exactly as postProcessScenes already defaulted it.
+  try {
+    return await detectMatchCutCandidates(processed);
+  } catch (err) {
+    console.warn('[claude] match-cut detection failed — leaving match_cut_candidate false for all scenes:', err.message);
+    return processed;
+  }
 }
 
 // Generic Claude call for use by other services (e.g. clipIntelligence)
@@ -581,4 +702,10 @@ async function callClaude(prompt, systemPrompt = '') {
   return message.content[0].text.trim()
 }
 
-module.exports = { analyzeScript, callClaude }
+module.exports = {
+  analyzeScript,
+  callClaude,
+  detectMatchCutCandidates,
+  parseMatchCutResponse,
+  buildMatchCutPrompt,
+}

@@ -687,6 +687,78 @@ async function runPacingBoundaryAndRevertTests() {
   }
 }
 
+// FT-6: accepting a match-cut suggestion (PATCH /:sceneId transition_out: "match") and
+// reverting it, while match_cut_candidate (the suggestion flag from analysis) is left alone.
+async function runMatchCutTests() {
+  cleanup()
+  fs.mkdirSync(testDir, { recursive: true })
+  const scenes = [
+    { scene_id: 'A', script_excerpt: 'A', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', match_cut_candidate: true },
+    { scene_id: 'B', script_excerpt: 'B', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', match_cut_candidate: false },
+  ]
+  fs.writeFileSync(scenesPath, JSON.stringify(scenes, null, 2))
+
+  const app = express()
+  app.use(express.json())
+  app.use('/api/scenes', require('./scenes'))
+  const server = app.listen(0)
+  const port   = server.address().port
+  const base   = `http://localhost:${port}/api/scenes`
+
+  const patchScene = (sceneId, body) => fetch(`${base}/${sceneId}`, {
+    method:  'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ projectId: TEST_PROJECT, ...body }),
+  })
+
+  try {
+    // 1. Accept the suggestion — sets transition_out: "match"
+    let res  = await patchScene('A', { transition_out: 'match' })
+    let body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    assert.strictEqual(body.scene.transition_out, 'match')
+    assert.strictEqual(body.scene.match_cut_candidate, true, 'accepting must not disturb the analysis-set suggestion flag')
+    console.log('PASS: accepting a match-cut suggestion sets transition_out: "match" (accepted via the existing PATCH /:sceneId endpoint — no new endpoint needed)')
+
+    let onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.strictEqual(onDisk[0].transition_out, 'match')
+    console.log('PASS: the accepted transition_out persists to scenes.json')
+
+    // 2. Revert — restores the prior transition_out (from the Fine-Tune snapshot, simulated
+    // here as the client would send it: the original "dissolve"), match_cut_candidate untouched
+    res  = await patchScene('A', { transition_out: 'dissolve' })
+    body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    assert.strictEqual(body.scene.transition_out, 'dissolve', 'revert must restore the exact prior transition_out value')
+    assert.strictEqual(body.scene.match_cut_candidate, true, 'match_cut_candidate must persist regardless of accept/revert — it reflects analysis, not a user edit')
+    console.log('PASS: revert restores the prior transition_out value while leaving match_cut_candidate untouched')
+
+    onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.strictEqual(onDisk[0].transition_out, 'dissolve')
+    assert.strictEqual(onDisk[0].match_cut_candidate, true)
+    console.log('PASS: the reverted state (transition_out reverted, match_cut_candidate preserved) is persisted to scenes.json')
+
+    // 3. Scene B (never accepted, match_cut_candidate: false) is completely unaffected
+    onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.strictEqual(onDisk[1].transition_out, 'dissolve')
+    assert.strictEqual(onDisk[1].match_cut_candidate, false)
+    console.log('PASS: scene B (not part of the accept/revert flow) is untouched')
+
+    // 4. "match" is accepted by the generic transition_out validator (needed for both the
+    // Accept button and a manual dropdown selection to work)
+    res  = await patchScene('B', { transition_out: 'match' })
+    body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    assert.strictEqual(body.scene.transition_out, 'match')
+    console.log('PASS: transition_out: "match" is a valid, acceptable value on the standard per-scene endpoint')
+
+    console.log('\nAll match-cut accept/revert checks passed.')
+  } finally {
+    server.close()
+    cleanup()
+  }
+}
+
 run()
   .then(runWrappedShapeTest)
   .then(runReorderTests)
@@ -694,6 +766,7 @@ run()
   .then(runReorderAdjacencyTests)
   .then(runPacingTests)
   .then(runPacingBoundaryAndRevertTests)
+  .then(runMatchCutTests)
   .catch(err => {
     console.error('TEST FAILURE:', err)
     cleanup()
