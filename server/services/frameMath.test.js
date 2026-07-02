@@ -3,9 +3,11 @@
 const assert = require('assert')
 const {
   FPS, DIP_FADE, DIP_MID, MIN_SCENE_FRAMES, TRANSITION_FRAMES, CUT_FRAMES,
-  MAX_SCENE_SECONDS, NARRATION_BUFFER_SECONDS,
+  MAX_SCENE_SECONDS, NARRATION_BUFFER_SECONDS, BOUNDARY_SAFETY_MARGIN_SECONDS,
   minDurationSeconds, canUseDipTransition, isValidTransition, validateSceneUpdate,
   getTransition, sceneDur, calculateDocumentaryDuration,
+  maxBoundaryOffsetSeconds, validateBoundaryUpdate, resolveManualOverlapSeconds,
+  resetBrokenBoundaryAdjacency,
 } = require('./frameMath')
 
 // Constants must match remotion/src/compositions/Documentary.jsx exactly:
@@ -144,5 +146,109 @@ const idsBefore = new Set(originalOrder.map(s => s.scene_id))
 const idsAfter  = new Set(reorderedOrder.map(s => s.scene_id))
 assert.deepStrictEqual(idsBefore, idsAfter, 'both orders must contain exactly the same scene_id set')
 console.log('PASS: reorder scenario uses the identical scene_id set — duration change is purely from adjacency')
+
+// ── FT-4: manual J-cut/L-cut boundary offset ─────────────────────────────────
+assert.strictEqual(BOUNDARY_SAFETY_MARGIN_SECONDS, 0.2)
+console.log('PASS: FT-4 constants defined')
+
+// maxBoundaryOffsetSeconds
+assert.strictEqual(maxBoundaryOffsetSeconds(3, 5), 2.8)   // min(3,5) - 0.2
+assert.strictEqual(maxBoundaryOffsetSeconds(5, 3), 2.8)   // symmetric — shorter side wins
+assert.strictEqual(maxBoundaryOffsetSeconds(0.1, 5), 0)   // would go negative — floored at 0
+assert.strictEqual(maxBoundaryOffsetSeconds(undefined, 5), 0) // missing audio_duration treated as 0
+console.log('PASS: maxBoundaryOffsetSeconds bounds to the shorter adjacent audio_duration minus the safety margin')
+
+// validateBoundaryUpdate
+const outgoing = { scene_id: 'A', audio_duration: 3 }
+const next     = { scene_id: 'B', audio_duration: 5 }
+
+errs = validateBoundaryUpdate(outgoing, next, { lcut_offset: 2.8 })
+assert.strictEqual(errs.length, 0, 'exact boundary max should be valid')
+console.log('PASS: validateBoundaryUpdate accepts an offset exactly at the clamp boundary')
+
+errs = validateBoundaryUpdate(outgoing, next, { lcut_offset: 2.81 })
+assert.strictEqual(errs.length, 1)
+assert(/lcut_offset must be <= 2.8s/.test(errs[0]), `expected clamp message, got: ${errs[0]}`)
+console.log('PASS: validateBoundaryUpdate rejects an offset exceeding the clamp')
+
+errs = validateBoundaryUpdate(outgoing, next, { jcut_offset: -1 })
+assert.strictEqual(errs.length, 1)
+assert(/must be a number >= 0/.test(errs[0]))
+console.log('PASS: validateBoundaryUpdate rejects a negative offset')
+
+errs = validateBoundaryUpdate(outgoing, next, { jcut_offset: 0 })
+assert.strictEqual(errs.length, 0, '0.0 must be an accepted, intentional "no bleed" value')
+console.log('PASS: validateBoundaryUpdate accepts 0.0 as a valid intentional offset')
+
+errs = validateBoundaryUpdate(outgoing, null, { lcut_offset: 1 })
+assert.strictEqual(errs.length, 1)
+assert(/last scene/.test(errs[0]))
+console.log('PASS: validateBoundaryUpdate rejects an offset on a scene with no outgoing boundary (last scene)')
+
+errs = validateBoundaryUpdate(outgoing, null, { is_manual_offset: false })
+assert.strictEqual(errs.length, 0, 'revert must always be valid, even with no next scene')
+console.log('PASS: validateBoundaryUpdate always accepts is_manual_offset: false (revert)')
+
+errs = validateBoundaryUpdate(outgoing, next, { jcut_offset: 1, lcut_offset: 10 })
+assert.strictEqual(errs.length, 1, 'only the violating field should error')
+assert(/lcut_offset/.test(errs[0]))
+console.log('PASS: validateBoundaryUpdate reports only the field that actually violates the clamp')
+
+// resolveManualOverlapSeconds — mirrors Documentary.jsx's priority logic exactly
+const sceneA_manual = { scene_id: 'A', is_manual_offset: true, boundary_partner_scene_id: 'B', lcut_offset: 1.5 }
+const sceneB_plain  = { scene_id: 'B' }
+assert.strictEqual(resolveManualOverlapSeconds('l_cut', sceneA_manual, null, sceneB_plain), 1.5)
+console.log('PASS: resolveManualOverlapSeconds reads l_cut manual value from the scene itself')
+
+// sceneA_manual is in manual mode (paired with B) but only set lcut_offset, not jcut_offset.
+// Once a boundary is manual, an unset field defaults to 0 (an explicit "no bleed"), not to
+// the automatic calculation — so this must return 0, not null, and must NOT read lcut_offset.
+assert.strictEqual(resolveManualOverlapSeconds('j_cut', sceneB_plain, sceneA_manual, null), 0,
+  'j_cut manual value must come from prevScene\'s jcut_offset (unset -> 0), never from lcut_offset')
+console.log('PASS: resolveManualOverlapSeconds does not conflate jcut_offset and lcut_offset (unset field under manual mode defaults to 0, not automatic)')
+
+const sceneA_jmanual = { scene_id: 'A', is_manual_offset: true, boundary_partner_scene_id: 'B', jcut_offset: 0.6 }
+assert.strictEqual(resolveManualOverlapSeconds('j_cut', sceneB_plain, sceneA_jmanual, null), 0.6)
+console.log('PASS: resolveManualOverlapSeconds reads j_cut manual value from prevScene (the outgoing scene of that boundary)')
+
+// Adjacency broken — boundary_partner_scene_id no longer matches the actual next scene
+const sceneC = { scene_id: 'C' }
+assert.strictEqual(resolveManualOverlapSeconds('l_cut', sceneA_manual, null, sceneC), null,
+  'manual value must not apply once the paired next scene no longer matches')
+console.log('PASS: resolveManualOverlapSeconds falls back to automatic when adjacency is broken')
+
+assert.strictEqual(resolveManualOverlapSeconds('hard', sceneA_manual, null, sceneB_plain), null)
+console.log('PASS: resolveManualOverlapSeconds returns null for hard cuts regardless of manual flags')
+
+// resetBrokenBoundaryAdjacency
+const scenesWithIntactAdjacency = [
+  { scene_id: 'A', is_manual_offset: true, boundary_partner_scene_id: 'B' },
+  { scene_id: 'B' },
+]
+const stillIntact = resetBrokenBoundaryAdjacency(scenesWithIntactAdjacency)
+assert.strictEqual(stillIntact[0].is_manual_offset, true, 'adjacency still matches — must not reset')
+console.log('PASS: resetBrokenBoundaryAdjacency leaves an intact adjacency untouched')
+
+const scenesWithBrokenAdjacency = [
+  { scene_id: 'A', is_manual_offset: true, boundary_partner_scene_id: 'B' },
+  { scene_id: 'C' }, // reorder inserted C between A and B
+  { scene_id: 'B' },
+]
+const afterReset = resetBrokenBoundaryAdjacency(scenesWithBrokenAdjacency)
+assert.strictEqual(afterReset[0].is_manual_offset, false, 'A\'s manual offset must reset — B is no longer immediately next')
+console.log('PASS: resetBrokenBoundaryAdjacency resets is_manual_offset when a reorder breaks the pairing')
+
+const scenesWithNowLastScene = [
+  { scene_id: 'X' },
+  { scene_id: 'A', is_manual_offset: true, boundary_partner_scene_id: 'B' }, // A is now the LAST scene — no outgoing boundary at all
+]
+const afterReset2 = resetBrokenBoundaryAdjacency(scenesWithNowLastScene)
+assert.strictEqual(afterReset2[1].is_manual_offset, false, 'A has no next scene at all now — must reset')
+console.log('PASS: resetBrokenBoundaryAdjacency resets when the scene became the last scene (no outgoing boundary at all)')
+
+const scenesWithNoManualOffsets = [{ scene_id: 'A' }, { scene_id: 'B' }]
+const unchanged = resetBrokenBoundaryAdjacency(scenesWithNoManualOffsets)
+assert.deepStrictEqual(unchanged, scenesWithNoManualOffsets, 'scenes with no manual offset are untouched')
+console.log('PASS: resetBrokenBoundaryAdjacency is a no-op when nothing is manually overridden')
 
 console.log('\nAll frameMath.test.js checks passed.')

@@ -142,6 +142,92 @@ function calculateDocumentaryDuration(scenes, fps = FPS) {
   return Math.max(base - deduction, 30)
 }
 
+// ── FT-4: manual J-cut/L-cut boundary offset ────────────────────────────────
+// The manual override lives on the OUTGOING (earlier) scene of a boundary pair:
+//   l_cut — this scene's OWN audio bleeding forward into the next scene — is this scene's
+//           own outgoing boundary, so the override is read from `scene` itself.
+//   j_cut — the NEXT scene's audio bleeding backward into this scene's tail — is actually
+//           the PREVIOUS scene's outgoing boundary (audio_cut/j_cut is set on whichever
+//           scene's own narration bleeds), so the override is read from `prevScene`.
+// `boundary_partner_scene_id` records which next-scene neighbor the offset was calibrated
+// against; if a reorder (FT-2) changes that neighbor, the offset no longer has a meaningful
+// pairing and must not apply — see resetBrokenBoundaryAdjacency below and the matching
+// defensive check in Documentary.jsx.
+
+const BOUNDARY_SAFETY_MARGIN_SECONDS = 0.2
+
+// Bleeding audio further than either adjacent clip's actual narration length would produce
+// silence (or worse). max = shorter of the two adjacent audio_durations, minus a small margin.
+function maxBoundaryOffsetSeconds(sceneAudioDuration, nextSceneAudioDuration) {
+  const bound = Math.min(Number(sceneAudioDuration) || 0, Number(nextSceneAudioDuration) || 0)
+    - BOUNDARY_SAFETY_MARGIN_SECONDS
+  return Math.max(0, parseFloat(bound.toFixed(2)))
+}
+
+// Validates a PATCH .../boundary update. `scene` is the outgoing scene; `nextScene` is its
+// current next-in-array neighbor (null if `scene` is the last scene — no outgoing boundary
+// exists to configure). Returns an array of error strings — empty means valid.
+function validateBoundaryUpdate(scene, nextScene, updates) {
+  const errors = []
+
+  // Revert is always valid — no offset bounds apply, and it doesn't need a next scene either
+  // (harmless to revert a boundary that no longer has one).
+  if (updates.is_manual_offset === false) return errors
+
+  if (!nextScene) {
+    errors.push('This scene has no outgoing boundary — it is the last scene in the project')
+    return errors
+  }
+
+  const maxOffset = maxBoundaryOffsetSeconds(scene.audio_duration, nextScene.audio_duration)
+
+  for (const field of ['jcut_offset', 'lcut_offset']) {
+    if (updates[field] === undefined) continue
+    const value = updates[field]
+    if (typeof value !== 'number' || !isFinite(value) || value < 0) {
+      errors.push(`${field} must be a number >= 0`)
+    } else if (value > maxOffset) {
+      errors.push(
+        `${field} must be <= ${maxOffset}s (limited by the shorter adjacent scene's audio ` +
+        `duration minus a ${BOUNDARY_SAFETY_MARGIN_SECONDS}s safety margin)`
+      )
+    }
+  }
+
+  return errors
+}
+
+// Mirrors the priority logic in Documentary.jsx's narration-track builder exactly (see the
+// comment block there). Returns the manual overlap in seconds, or null if no manual override
+// applies (fall back to the automatic calculation).
+function resolveManualOverlapSeconds(effectiveCut, scene, prevScene, nextScene) {
+  if (effectiveCut === 'l_cut' && scene?.is_manual_offset && scene.boundary_partner_scene_id === nextScene?.scene_id) {
+    return Number(scene.lcut_offset) || 0
+  }
+  if (effectiveCut === 'j_cut' && prevScene?.is_manual_offset && prevScene.boundary_partner_scene_id === scene?.scene_id) {
+    return Number(prevScene.jcut_offset) || 0
+  }
+  return null
+}
+
+// After a reorder (FT-2), any manual boundary offset whose partner-scene pairing no longer
+// matches the actual next-in-array neighbor is stale and must be reset — the offset was
+// calibrated for a specific adjacency that no longer exists. Returns a new array (does not
+// mutate the input). Used by POST /api/scenes/reorder.
+function resetBrokenBoundaryAdjacency(scenesInNewOrder) {
+  return scenesInNewOrder.map((scene, index) => {
+    if (!scene.is_manual_offset) return scene
+    const actualNext = scenesInNewOrder[index + 1] || null
+    if (scene.boundary_partner_scene_id === actualNext?.scene_id) return scene
+    console.warn(
+      `[scenes] scene ${scene.scene_id}: reorder broke its manual boundary offset's adjacency ` +
+      `(was paired with ${scene.boundary_partner_scene_id}, now next to ` +
+      `${actualNext?.scene_id ?? 'nothing (last scene)'}) — resetting is_manual_offset to false`
+    )
+    return { ...scene, is_manual_offset: false }
+  })
+}
+
 module.exports = {
   FPS,
   TRANSITION_FRAMES,
@@ -152,6 +238,7 @@ module.exports = {
   MIN_SCENE_FRAMES,
   MAX_SCENE_SECONDS,
   NARRATION_BUFFER_SECONDS,
+  BOUNDARY_SAFETY_MARGIN_SECONDS,
   VALID_TRANSITIONS,
   minDurationSeconds,
   canUseDipTransition,
@@ -160,4 +247,8 @@ module.exports = {
   getTransition,
   sceneDur,
   calculateDocumentaryDuration,
+  maxBoundaryOffsetSeconds,
+  validateBoundaryUpdate,
+  resolveManualOverlapSeconds,
+  resetBrokenBoundaryAdjacency,
 }

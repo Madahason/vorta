@@ -11,6 +11,9 @@ const NARRATION_BUFFER_SECONDS = 0.8
 const MAX_SCENE_SECONDS        = 8.0
 const DIP_FADE                 = 9
 const DIP_MIN_SECONDS          = (DIP_FADE * 2) / FPS // 0.6s
+// FT-4: mirrors BOUNDARY_SAFETY_MARGIN_SECONDS in server/services/frameMath.js and
+// remotion/src/compositions/Documentary.jsx.
+const BOUNDARY_SAFETY_MARGIN_SECONDS = 0.2
 
 const TRANSITIONS = [
   { value: 'dissolve',  label: 'Dissolve' },
@@ -29,6 +32,14 @@ function minDurationFor(scene) {
 
 function canUseDip(durationSeconds) {
   return (durationSeconds || 0) >= DIP_MIN_SECONDS
+}
+
+function maxBoundaryOffset(outgoingScene, nextScene) {
+  const bound = Math.min(
+    Number(outgoingScene?.audio_duration) || 0,
+    Number(nextScene?.audio_duration) || 0
+  ) - BOUNDARY_SAFETY_MARGIN_SECONDS
+  return Math.max(0, parseFloat(bound.toFixed(2)))
 }
 
 function readSnapshot() {
@@ -169,33 +180,47 @@ export function FineTuneStep({
         </div>
       ) : (
         <div className="space-y-3">
-          {scenes.map((scene, i) => (
-            <FineTuneCard
-              key={scene.scene_id}
-              isDragging={dragIndex === i}
-              isDragOver={overIndex === i && dragIndex !== null && dragIndex !== i}
-              onDragHandleStart={() => setDragIndex(i)}
-              onDragHandleEnd={() => { setDragIndex(null); setOverIndex(null) }}
-              onCardDragOver={() => setOverIndex(i)}
-              onCardDrop={() => { handleDrop(dragIndex, i); setDragIndex(null); setOverIndex(null) }}
-              index={i}
-              scene={scene}
-              snapshot={snapshot[scene.scene_id]}
-              thumbnail={
-                scene.shot_type === 'image'
-                  // scene.image_path first — a Fine-Tune swap/regenerate sets this directly
-                  // and must be reflected immediately, ahead of the original generation-time
-                  // sceneStatuses/imagePaths snapshot.
-                  ? (scene.image_path || sceneStatuses[scene.scene_id]?.image_path || imagePaths[scene.scene_id])
-                  : null
-              }
-              clip={selectedClips[scene.scene_id] || null}
-              projectId={projectId}
-              onSceneUpdate={(updated) => {
-                onScenesChange(scenes.map(s => s.scene_id === scene.scene_id ? { ...s, ...updated } : s))
-              }}
-            />
-          ))}
+          {scenes.map((scene, i) => {
+            const nextScene = scenes[i + 1] || null
+            return (
+              <div key={scene.scene_id}>
+                <FineTuneCard
+                  isDragging={dragIndex === i}
+                  isDragOver={overIndex === i && dragIndex !== null && dragIndex !== i}
+                  onDragHandleStart={() => setDragIndex(i)}
+                  onDragHandleEnd={() => { setDragIndex(null); setOverIndex(null) }}
+                  onCardDragOver={() => setOverIndex(i)}
+                  onCardDrop={() => { handleDrop(dragIndex, i); setDragIndex(null); setOverIndex(null) }}
+                  index={i}
+                  scene={scene}
+                  snapshot={snapshot[scene.scene_id]}
+                  thumbnail={
+                    scene.shot_type === 'image'
+                      // scene.image_path first — a Fine-Tune swap/regenerate sets this directly
+                      // and must be reflected immediately, ahead of the original generation-time
+                      // sceneStatuses/imagePaths snapshot.
+                      ? (scene.image_path || sceneStatuses[scene.scene_id]?.image_path || imagePaths[scene.scene_id])
+                      : null
+                  }
+                  clip={selectedClips[scene.scene_id] || null}
+                  projectId={projectId}
+                  onSceneUpdate={(updated) => {
+                    onScenesChange(scenes.map(s => s.scene_id === scene.scene_id ? { ...s, ...updated } : s))
+                  }}
+                />
+                {nextScene && (
+                  <BoundaryControl
+                    outgoingScene={scene}
+                    nextScene={nextScene}
+                    projectId={projectId}
+                    onSceneUpdate={(updated) => {
+                      onScenesChange(scenes.map(s => s.scene_id === scene.scene_id ? { ...s, ...updated } : s))
+                    }}
+                  />
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
     </div>
@@ -549,6 +574,119 @@ function FineTuneCard({
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── BoundaryControl — FT-4: manual J-cut/L-cut offset, docked at the seam between two
+// adjacent scene cards. Lives on the OUTGOING (earlier) scene's fields — see the comment
+// block in remotion/src/compositions/Documentary.jsx's narration-track builder for why l_cut
+// reads from this scene and j_cut reads from the PREVIOUS scene (not relevant here, since
+// this control edits exactly this one outgoing scene's own fields either way).
+function BoundaryControl({ outgoingScene, nextScene, projectId, onSceneUpdate }) {
+  const max = maxBoundaryOffset(outgoingScene, nextScene)
+
+  const [jcut, setJcut] = useState(outgoingScene.jcut_offset ?? 0)
+  const [lcut, setLcut] = useState(outgoingScene.lcut_offset ?? 0)
+  const [saving, setSaving] = useState(false)
+  const [error,  setError]  = useState(null)
+
+  const isManual = outgoingScene.is_manual_offset === true &&
+    outgoingScene.boundary_partner_scene_id === nextScene.scene_id
+
+  const jcutError = jcut > max ? `Must be <= ${max}s` : jcut < 0 ? 'Must be >= 0' : null
+  const lcutError = lcut > max ? `Must be <= ${max}s` : lcut < 0 ? 'Must be >= 0' : null
+
+  async function patchBoundary(body) {
+    const res  = await fetch(`${SERVER_URL}/api/scenes/${outgoingScene.scene_id}/boundary`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ projectId, ...body }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Update failed')
+    return data.scene
+  }
+
+  const commitBoundary = async () => {
+    if (jcutError || lcutError) return
+    setSaving(true); setError(null)
+    try {
+      const updated = await patchBoundary({ jcut_offset: jcut, lcut_offset: lcut, is_manual_offset: true })
+      onSceneUpdate(updated)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const revertBoundary = async () => {
+    setSaving(true); setError(null)
+    try {
+      const updated = await patchBoundary({ is_manual_offset: false })
+      setJcut(updated.jcut_offset ?? 0)
+      setLcut(updated.lcut_offset ?? 0)
+      onSceneUpdate(updated)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="my-2 mx-4 rounded-lg border border-white/[0.06] bg-white/[0.015] px-3 py-2">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[10px] text-white/30 uppercase tracking-wider">
+          Boundary · Audio Bleed
+        </span>
+        <div className="flex items-center gap-2">
+          {saving && <Loader2 size={10} className="animate-spin text-blue-400" />}
+          {isManual && <RevertButton onClick={revertBoundary} label="Revert to generated" />}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-4">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] text-white/30 w-9">J-cut</span>
+          <input
+            type="number"
+            min={0} max={max} step={0.1}
+            value={jcut}
+            onChange={e => setJcut(parseFloat(e.target.value) || 0)}
+            onBlur={commitBoundary}
+            className="w-14 bg-white/[0.05] border border-white/[0.12] rounded px-1.5 py-0.5 text-[10px] text-white/80 text-right"
+          />
+          <span className="text-[9px] text-white/20">s</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] text-white/30 w-9">L-cut</span>
+          <input
+            type="number"
+            min={0} max={max} step={0.1}
+            value={lcut}
+            onChange={e => setLcut(parseFloat(e.target.value) || 0)}
+            onBlur={commitBoundary}
+            className="w-14 bg-white/[0.05] border border-white/[0.12] rounded px-1.5 py-0.5 text-[10px] text-white/80 text-right"
+          />
+          <span className="text-[9px] text-white/20">s</span>
+        </div>
+        <span className="text-[9px] text-white/15">max {max}s</span>
+      </div>
+
+      <div className="text-[9px] text-white/15 mt-1">
+        J-cut: next scene's narration starts early, under this scene's tail. L-cut: this
+        scene's narration bleeds forward into the next scene. Only takes effect if that
+        scene's audio_cut is already set to match.
+      </div>
+
+      {(jcutError || lcutError) && (
+        <div className="text-[9px] text-red-400/80 mt-1">{jcutError || lcutError}</div>
+      )}
+      {error && (
+        <div className="text-[9px] text-red-400/80 mt-1">{error}</div>
+      )}
     </div>
   )
 }

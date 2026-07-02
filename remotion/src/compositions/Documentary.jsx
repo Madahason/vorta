@@ -20,6 +20,9 @@ const DIP_MID            = DIP_FADE + 1  // 10 — plate longer than fade arm
 // MIN_SCENE_FRAMES must exceed the longest transition arm (TRANSITION_FRAMES = 12).
 // Any scene sequence shorter than its adjacent transition causes a Remotion crash.
 const MIN_SCENE_FRAMES   = TRANSITION_FRAMES + 1  // 13 — safely longer than any transition
+// FT-4: manual J-cut/L-cut boundary offset safety margin — mirrors
+// server/services/frameMath.js's BOUNDARY_SAFETY_MARGIN_SECONDS. Keep in sync.
+const BOUNDARY_SAFETY_MARGIN_SECONDS = 0.2
 
 // ── getTransition(scene, sceneDurationFrames?) ────────────────────────────────
 // Pure fn — reads scene.transition_out, returns a descriptor used by both the
@@ -294,19 +297,58 @@ export function Documentary({
     const sceneStart     = sceneStartFrames[index] ?? 0
     const sceneEnd       = sceneStart + durationFrames
 
-    const outT    = getTransition(scene, durationFrames)
-    const prevDur = index === 0 ? 0 : sceneDur(uniqueScenes[index - 1], fps)
-    const inT     = index === 0 ? null : getTransition(uniqueScenes[index - 1], prevDur)
-    const inDelay = index === 0 ? 0 : (inT?.narrationIn ?? 0)
+    const outT      = getTransition(scene, durationFrames)
+    const prevScene = index === 0 ? null : uniqueScenes[index - 1]
+    const prevDur   = index === 0 ? 0 : sceneDur(prevScene, fps)
+    const inT       = index === 0 ? null : getTransition(prevScene, prevDur)
+    const inDelay   = index === 0 ? 0 : (inT?.narrationIn ?? 0)
+    const nextScene = uniqueScenes[index + 1] || null
 
     const rawCut      = scene.audio_cut || 'hard'
     const isDip       = outT.type === 'dip_black' || outT.type === 'dip_white'
     const isLastScene = index === uniqueScenes.length - 1
     const effectiveCut = (rawCut === 'hard' || isDip || isLastScene) ? 'hard' : rawCut
 
-    const rawOverlapSec  = Number(scene.audio_overlap_seconds) || (effectiveCut !== 'hard' ? 1.0 : 0)
-    const overlapSec     = effectiveCut !== 'hard' ? Math.max(rawOverlapSec, 0.8) : 0
-    const overlapFr      = Math.round(overlapSec * fps)
+    // FT-4: manual boundary offset override — lives on the OUTGOING (earlier) scene of a
+    // boundary pair. l_cut is THIS scene's own outgoing boundary (scene -> nextScene), so the
+    // manual value is read from `scene` itself. j_cut is THIS scene's INCOMING boundary
+    // (prevScene -> scene) — which is prevScene's outgoing boundary — so the manual value is
+    // read from `prevScene`. boundary_partner_scene_id guards against a reorder (FT-2) having
+    // broken the adjacency the offset was calibrated for; scenes.js's /reorder route already
+    // resets is_manual_offset when that happens, but this is a defensive second check in case
+    // scenes.json was edited by another path.
+    let manualOverlapSec = null
+    if (effectiveCut === 'l_cut' && scene.is_manual_offset && scene.boundary_partner_scene_id === nextScene?.scene_id) {
+      manualOverlapSec = Number(scene.lcut_offset) || 0
+    } else if (effectiveCut === 'j_cut' && prevScene?.is_manual_offset && prevScene.boundary_partner_scene_id === scene.scene_id) {
+      manualOverlapSec = Number(prevScene.jcut_offset) || 0
+    } else if (effectiveCut === 'l_cut' && scene.is_manual_offset) {
+      console.warn(`[Documentary] scene ${scene.scene_id}: manual l_cut offset ignored — its paired scene changed (reorder broke adjacency)`)
+    } else if (effectiveCut === 'j_cut' && prevScene?.is_manual_offset) {
+      console.warn(`[Documentary] scene ${prevScene.scene_id}: manual j_cut offset ignored — its paired scene changed (reorder broke adjacency)`)
+    }
+
+    let overlapSec
+    if (effectiveCut === 'hard') {
+      overlapSec = 0
+    } else if (manualOverlapSec !== null) {
+      // Defensive re-clamp against actual audio durations in case persisted data is stale —
+      // 0.0 is intentionally allowed through untouched (no forced 0.8s floor like automatic).
+      const boundaryScene = effectiveCut === 'l_cut' ? scene     : prevScene
+      const partnerScene  = effectiveCut === 'l_cut' ? nextScene : scene
+      const maxAllowed = Math.max(0, Math.min(
+        Number(boundaryScene?.audio_duration) || 0,
+        Number(partnerScene?.audio_duration)  || 0
+      ) - BOUNDARY_SAFETY_MARGIN_SECONDS)
+      overlapSec = Math.min(Math.max(manualOverlapSec, 0), maxAllowed)
+      if (overlapSec !== manualOverlapSec) {
+        console.warn(`[Documentary] scene ${boundaryScene?.scene_id}: manual ${effectiveCut} offset ${manualOverlapSec}s clamped to ${overlapSec}s (audio duration safety margin)`)
+      }
+    } else {
+      const rawOverlapSec = Number(scene.audio_overlap_seconds) || 1.0
+      overlapSec = Math.max(rawOverlapSec, 0.8)
+    }
+    const overlapFr = Math.round(overlapSec * fps)
 
     let narrationStart, sequenceDuration
 

@@ -320,9 +320,184 @@ async function runReorderTests() {
   }
 }
 
+// FT-4: PATCH /api/scenes/:sceneId/boundary — manual J-cut/L-cut offset override.
+async function runBoundaryTests() {
+  cleanup()
+  fs.mkdirSync(testDir, { recursive: true })
+  const scenes = [
+    { scene_id: 'A', script_excerpt: 'scene A', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', audio_cut: 'l_cut', audio_duration: 3.0 },
+    { scene_id: 'B', script_excerpt: 'scene B', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', audio_cut: 'j_cut', audio_duration: 5.0 },
+    { scene_id: 'C', script_excerpt: 'scene C (last scene)', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', audio_duration: 2.0 },
+  ]
+  fs.writeFileSync(scenesPath, JSON.stringify(scenes, null, 2))
+
+  const app = express()
+  app.use(express.json())
+  app.use('/api/scenes', require('./scenes'))
+  const server = app.listen(0)
+  const port   = server.address().port
+  const base   = `http://localhost:${port}/api/scenes`
+
+  const patchBoundary = (sceneId, body) => fetch(`${base}/${sceneId}/boundary`, {
+    method:  'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ projectId: TEST_PROJECT, ...body }),
+  })
+
+  try {
+    // 1. Valid offset within bounds — A/B: min(3.0, 5.0) - 0.2 = 2.8 max
+    let res  = await patchBoundary('A', { lcut_offset: 1.2, jcut_offset: 0.5, is_manual_offset: true })
+    let body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    assert.strictEqual(body.scene.lcut_offset, 1.2)
+    assert.strictEqual(body.scene.jcut_offset, 0.5)
+    assert.strictEqual(body.scene.is_manual_offset, true)
+    assert.strictEqual(body.scene.boundary_partner_scene_id, 'B', 'must record which next-scene neighbor this was calibrated against')
+    console.log('PASS: valid boundary offset within bounds returns 200 and persists all fields')
+
+    let onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.strictEqual(onDisk[0].lcut_offset, 1.2, 'must persist to scenes.json')
+    console.log('PASS: boundary offset persists to scenes.json')
+
+    // 2. Offset exceeding the clamp — rejected (not silently clamped or accepted)
+    res  = await patchBoundary('A', { lcut_offset: 2.81 })
+    body = await res.json()
+    assert.strictEqual(res.status, 400, `expected 400, got ${res.status}`)
+    assert(/lcut_offset must be <= 2.8s/.test(body.error), `expected clamp error, got: ${body.error}`)
+    console.log('PASS: offset exceeding the clamp is rejected (400), not silently overflowed')
+
+    onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.strictEqual(onDisk[0].lcut_offset, 1.2, 'rejected update must not overwrite the previously-persisted value')
+    console.log('PASS: rejected offset was not persisted (value from step 1 still intact)')
+
+    // 2b. Negative offset — rejected
+    res  = await patchBoundary('A', { jcut_offset: -0.5 })
+    assert.strictEqual(res.status, 400)
+    console.log('PASS: negative offset is rejected (400)')
+
+    // 2c. Exactly at the clamp boundary — accepted
+    res  = await patchBoundary('A', { lcut_offset: 2.8 })
+    body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    console.log('PASS: offset exactly at the clamp boundary is accepted')
+
+    // 3. 0.0 is a valid, intentional value
+    res  = await patchBoundary('A', { lcut_offset: 0, jcut_offset: 0, is_manual_offset: true })
+    body = await res.json()
+    assert.strictEqual(res.status, 200)
+    assert.strictEqual(body.scene.lcut_offset, 0)
+    console.log('PASS: 0.0 is accepted as an intentional "no bleed" value, not treated as absent')
+
+    // 4. Revert — is_manual_offset: false always succeeds regardless of stored offset values
+    res  = await patchBoundary('A', { is_manual_offset: false })
+    body = await res.json()
+    assert.strictEqual(res.status, 200)
+    assert.strictEqual(body.scene.is_manual_offset, false)
+    console.log('PASS: revert (is_manual_offset: false) succeeds and clears manual mode')
+
+    // 5. Last scene has no outgoing boundary — rejected
+    res  = await patchBoundary('C', { lcut_offset: 0.5 })
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/last scene/.test(body.error))
+    console.log('PASS: setting an offset on the last scene (no outgoing boundary) is rejected (400)')
+
+    // 6. Unknown scene / project / missing projectId
+    res = await patchBoundary('999', { lcut_offset: 0.1 })
+    assert.strictEqual(res.status, 404)
+    res = await fetch(`${base}/A/boundary`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: '__no_such_project__', lcut_offset: 0.1 }),
+    })
+    assert.strictEqual(res.status, 404)
+    res = await fetch(`${base}/A/boundary`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lcut_offset: 0.1 }),
+    })
+    assert.strictEqual(res.status, 400)
+    console.log('PASS: unknown scene_id (404), unknown projectId (404), and missing projectId (400) all handled')
+
+    console.log('\nAll boundary checks passed.')
+  } finally {
+    server.close()
+    cleanup()
+  }
+}
+
+// FT-4: a reorder that breaks a manual boundary offset's adjacency must reset it, since the
+// task explicitly requires "not silently keeping a now-meaningless manual value."
+async function runReorderAdjacencyTests() {
+  cleanup()
+  fs.mkdirSync(testDir, { recursive: true })
+  const scenes = [
+    { scene_id: 'A', script_excerpt: 'A', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', audio_duration: 3.0, is_manual_offset: true, boundary_partner_scene_id: 'B', lcut_offset: 1.0 },
+    { scene_id: 'B', script_excerpt: 'B', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', audio_duration: 5.0 },
+    { scene_id: 'D', script_excerpt: 'D', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', audio_duration: 4.0 },
+  ]
+  fs.writeFileSync(scenesPath, JSON.stringify(scenes, null, 2))
+
+  const app = express()
+  app.use(express.json())
+  app.use('/api/scenes', require('./scenes'))
+  const server = app.listen(0)
+  const port   = server.address().port
+  const base   = `http://localhost:${port}/api/scenes`
+
+  const reorder = (order) => fetch(`${base}/reorder`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ projectId: TEST_PROJECT, order }),
+  })
+
+  try {
+    // 1. Reorder that keeps A immediately followed by B — manual offset must survive
+    let res  = await reorder(['D', 'A', 'B'])
+    let body = await res.json()
+    assert.strictEqual(res.status, 200)
+    let sceneA = body.scenes.find(s => s.scene_id === 'A')
+    assert.strictEqual(sceneA.is_manual_offset, true, 'A is still immediately followed by B — manual offset must survive')
+    assert.strictEqual(sceneA.lcut_offset, 1.0)
+    console.log('PASS: a reorder that preserves A->B adjacency leaves the manual boundary offset intact')
+
+    // Reset fixture to the original order for a clean second scenario
+    fs.writeFileSync(scenesPath, JSON.stringify(scenes, null, 2))
+
+    // 2. Reorder that inserts D between A and B — breaks the adjacency the offset was for
+    res  = await reorder(['A', 'D', 'B'])
+    body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    sceneA = body.scenes.find(s => s.scene_id === 'A')
+    assert.strictEqual(sceneA.is_manual_offset, false, 'A->B adjacency broke (D is now between them) — manual offset must reset')
+    console.log('PASS: a reorder that breaks A->B adjacency resets is_manual_offset to false (not silently kept)')
+
+    let onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    const persistedA = onDisk.find(s => s.scene_id === 'A')
+    assert.strictEqual(persistedA.is_manual_offset, false, 'the reset must be persisted to scenes.json, not just returned in the response')
+    console.log('PASS: the reset is persisted to disk')
+
+    // Reset fixture again for the last-scene scenario
+    fs.writeFileSync(scenesPath, JSON.stringify(scenes, null, 2))
+
+    // 3. Reorder that makes A the last scene — it has no outgoing boundary anymore at all
+    res  = await reorder(['B', 'D', 'A'])
+    body = await res.json()
+    assert.strictEqual(res.status, 200)
+    sceneA = body.scenes.find(s => s.scene_id === 'A')
+    assert.strictEqual(sceneA.is_manual_offset, false, 'A became the last scene — no outgoing boundary exists — must reset')
+    console.log('PASS: a reorder that makes the scene the last one also resets its manual boundary offset')
+
+    console.log('\nAll reorder-adjacency checks passed.')
+  } finally {
+    server.close()
+    cleanup()
+  }
+}
+
 run()
   .then(runWrappedShapeTest)
   .then(runReorderTests)
+  .then(runBoundaryTests)
+  .then(runReorderAdjacencyTests)
   .catch(err => {
     console.error('TEST FAILURE:', err)
     cleanup()

@@ -3853,3 +3853,55 @@ Also verified manually:
 - [x] Fixed the render/preview pipeline to actually honor `scene.image_path` (previously dead code — this phase's endpoints would have had zero visible effect without it)
 - [x] Client build clean — zero errors
 - [x] PLAN.md updated with FT-3 completion entry
+
+---
+
+### Phase FT-4 — Fine-Tune stage: manual J-cut/L-cut boundary offset ✅ COMPLETE
+
+**Existing mechanism reviewed before making changes:** Documentary.jsx's narration-track builder already supports automatic J-cut/L-cut audio bleed via two per-scene fields — `audio_cut` (`'hard' | 'j_cut' | 'l_cut'`) and `audio_overlap_seconds`. Critically, both describe the scene's *own* narration track relative to *its own* boundaries: `l_cut` on scene N means N's audio extends past its own end into N+1 (N's own **outgoing** boundary); `j_cut` on scene N means N's audio starts early, bleeding backward into the *previous* scene N-1's tail (i.e., from the N-1/N boundary's perspective, this is actually **N-1's outgoing boundary**, expressed via N's own field). This asymmetry drove the field design below.
+
+**What was built:**
+- Two new optional scene fields, both stored on the **outgoing** (earlier) scene of a boundary pair, default absent/0.0: `jcut_offset`, `lcut_offset` (seconds), plus `is_manual_offset` (boolean) and `boundary_partner_scene_id` (the next scene's `scene_id` this offset was calibrated against — internal bookkeeping needed to detect a reorder breaking the pairing, see below). An explicit boolean rather than overloading `0.0`/`null`, exactly as the task required, since `0.0` is a valid intentional "no bleed" value.
+- `remotion/src/compositions/Documentary.jsx` — the narration-track builder's overlap calculation now checks for a manual override *first*:
+  - For `l_cut` (this scene's own outgoing boundary): reads `scene.is_manual_offset`/`scene.lcut_offset`, keyed on `scene.boundary_partner_scene_id === nextScene?.scene_id`.
+  - For `j_cut` (this scene's incoming boundary — actually the *previous* scene's outgoing boundary): reads `prevScene.is_manual_offset`/`prevScene.jcut_offset`, keyed on `prevScene.boundary_partner_scene_id === scene.scene_id`.
+  - Falls back to the existing automatic calculation only when no manual value applies (offset absent, `is_manual_offset` false, or the partner check fails). A manual `0.0` is honored exactly as entered (unlike automatic, which floors at 0.8s) — the whole point of a manual override is to let the user go below that floor.
+  - A defensive second clamp re-checks the manual value against actual `audio_duration`s at render time (in case `scenes.json` was hand-edited or reached this state through another path) and `console.warn`s if it had to adjust anything.
+  - This is the only change to Documentary.jsx's narration logic — `calculateDocumentaryDuration`, the transition frame math, and the FT-1 narration-volume override are untouched (verified by diff).
+- `server/services/frameMath.js` — added `BOUNDARY_SAFETY_MARGIN_SECONDS` (0.2s — mirrored in both Documentary.jsx and FineTuneStep.jsx), `maxBoundaryOffsetSeconds()`, `validateBoundaryUpdate()`, `resolveManualOverlapSeconds()` (a pure duplicate of the priority logic above, for testing without needing the ESM/JSX Remotion file — same reasoning as all the other duplicated constants in this file), and `resetBrokenBoundaryAdjacency()` (server-authoritative, not a Documentary.jsx mirror — see below).
+- `server/routes/scenes.js` — `PATCH /api/scenes/:sceneId/boundary`. Body: `{ projectId, jcut_offset?, lcut_offset?, is_manual_offset? }`. `is_manual_offset: false` always succeeds (revert, no bounds checked). Otherwise validates both offsets are `>= 0` and `<= maxBoundaryOffsetSeconds(scene.audio_duration, nextScene.audio_duration)` — **rejects** with a specific error listing the actual bound rather than silently clamping, matching the existing `PATCH /:sceneId` convention. Rejects outright if the scene is the last one in the project (no outgoing boundary exists). On success, records `boundary_partner_scene_id = nextScene.scene_id`.
+- **Reorder interaction (FT-2)**: `POST /api/scenes/reorder` now calls `resetBrokenBoundaryAdjacency()` on the new array before persisting. Since the offset lives on the scene object itself, it always travels with that scene through a reorder (nothing special needed there) — but if the reorder changes *who is now next* to a scene with a manual offset, that offset no longer has a meaningful pairing. The function walks the new order and, for any scene where `boundary_partner_scene_id` no longer matches the actual next neighbor (including "the scene is now last — there is no next neighbor at all"), resets `is_manual_offset` to `false` and logs a `console.warn` — exactly as the task specified, rather than silently keeping a now-meaningless manual value.
+- `client/src/pages/wizard/FineTuneStep.jsx` — new `BoundaryControl` component, docked at the seam between each pair of adjacent scene cards (not on an individual card) via a small wrapper around the existing `scenes.map(...)` render loop. Shows two number inputs (J-cut/L-cut seconds, both bounded `[0, maxBoundaryOffset(outgoingScene, nextScene)]` using the same margin/formula as the server), a "Revert to generated" button (shown only when `is_manual_offset` is actually true *and* still paired with this exact next scene), inline validation errors, and a one-line explanation of what J-cut/L-cut mean and that the boundary only takes effect if that scene's existing `audio_cut` is already set to match (this phase does not add an `audio_cut` editor — out of scope, not asked for).
+
+**Guardrails respected:** FT-1 (duration/transition/audio-mix), FT-2 (reorder's core array-permutation logic), and FT-3 (image swap/regenerate) were not touched beyond the one intentional, required reorder hook described above — confirmed via diff. No action cut, match cut, split-screen, cutaway, or montage flag was added.
+
+**Testing — commands run and results:**
+```
+$ node server/services/frameMath.test.js
+```
+34/34 assertions passed (22 from FT-1/FT-2, unchanged, plus 12 new): `BOUNDARY_SAFETY_MARGIN_SECONDS` correct; `maxBoundaryOffsetSeconds` bounds to the shorter adjacent `audio_duration` minus the margin (including the missing-`audio_duration`-treated-as-0 and would-go-negative-floored-at-0 cases); `validateBoundaryUpdate` accepts exactly at the clamp boundary, rejects just above it, rejects negative, accepts `0.0` as intentional, rejects when there's no next scene, always accepts `is_manual_offset: false`, and reports only the specific field that violates the clamp; `resolveManualOverlapSeconds` proves the l_cut-reads-`scene`/j_cut-reads-`prevScene` split with a case specifically designed to catch conflating `jcut_offset` and `lcut_offset`, falls back to automatic when the partner check fails, and returns `null` for hard cuts regardless of manual flags; `resetBrokenBoundaryAdjacency` leaves an intact pairing untouched, resets when a reorder inserts a scene between the pair, resets when the scene becomes the last scene (no boundary at all), and is a no-op on scenes with nothing manually set.
+
+```
+$ node server/routes/scenes.test.js
+```
+41/41 assertions passed (24 from FT-1/FT-2 unchanged, plus 17 new — 10 boundary-endpoint + 7 reorder-adjacency): a valid offset within bounds returns 200 and persists `jcut_offset`/`lcut_offset`/`is_manual_offset`/`boundary_partner_scene_id`; an offset exceeding the clamp is rejected (400) and the previously-persisted value survives untouched (not silently clamped or overwritten); negative offsets rejected; the exact clamp boundary accepted; `0.0` accepted as intentional; revert (`is_manual_offset: false`) always succeeds; the last scene (no outgoing boundary) is rejected; unknown scene/project/missing-projectId all handled. For reorder-adjacency: a reorder that keeps the paired scenes adjacent leaves the manual offset intact; a reorder that inserts a third scene between the pair resets `is_manual_offset` to `false` (and confirms the reset is actually persisted to `scenes.json`, not just returned in the response); a reorder that makes the scene the new last scene also resets it.
+
+Also verified manually:
+- `node -e "require(...)"` on `scenes.js` — loads without error
+- `npx eslint src/pages/wizard/FineTuneStep.jsx` — clean
+- `npx vite build` — clean production build
+- Re-ran the full FT-1/FT-2/FT-3 test suites (`frameMath.test.js`, `scenes.test.js`, `imageSwap.test.js`, `images.test.js`, `higgsfieldRegenerate.test.js`) after all FT-4 changes — all still pass
+- Against the live dev server (nodemon auto-restarted on the route file change): `curl -X PATCH /api/scenes/001/boundary` with an empty body correctly returned `400 {"error":"projectId required"}`
+
+**Production-readiness checklist:**
+- [x] Boundary control docked at the seam between adjacent scene cards, not on an individual card
+- [x] `jcut_offset`/`lcut_offset` (seconds, optional) added to the scene object; `is_manual_offset` boolean added rather than overloading `0.0`/`null`
+- [x] Offset bounded to `min(outgoing.audio_duration, next.audio_duration) - 0.2s` safety margin, both client-side (UI max) and server-side (rejected, not silently clamped, if exceeded)
+- [x] Documentary.jsx checks the manual offset first, falls back to automatic only when absent — verified directly against the priority-logic unit tests
+- [x] `PATCH /api/scenes/:sceneId/boundary` implemented, registered, persists to the correct (outgoing) scene
+- [x] "Revert to generated" clears `is_manual_offset` back to `false`
+- [x] A reorder that keeps the paired scenes adjacent preserves the manual offset; a reorder that breaks that adjacency resets `is_manual_offset` to `false` with a `console.warn`, not a silent keep
+- [x] FT-1/FT-2/FT-3 logic untouched beyond the one required reorder hook
+- [x] No action cut, match cut, split-screen, cutaway, or montage flag added
+- [x] Client build clean — zero errors
+- [x] PLAN.md updated with FT-4 completion entry
