@@ -3702,3 +3702,55 @@ Pattern analysis describes STYLE across multiple references (e.g. "high contrast
 - [x] All CSS classes use vorta- prefix
 - [x] Client build clean — zero errors, zero warnings
 - [x] PLAN.md updated with TT-6 completion entry
+
+---
+
+### Phase FT-1 — Fine-Tune stage (duration trim, transition override, audio mix override) ✅ COMPLETE
+
+**What was built:**
+- `client/src/hooks/useWizardState.js` — added `finetune` step between `voice` and `export` (6 steps total: script/scenes/visuals/voice/finetune/export). Step gating (`isAccessible`/`goTo`) is generic over the STEPS array, so no other wizard-nav changes were needed.
+- `client/src/pages/wizard/FineTuneStep.jsx` (NEW) — scene grid reusing SceneGrid's SceneCard visual pattern (rounded-xl card, mono scene number, script excerpt header). Each card shows:
+  - Current rendered thumbnail (image scenes) or selected-clip filename (real footage) or a placeholder (motion graphic) — no pre-generation prompt fields
+  - Generated narration `<audio>` player + duration, or "No narration generated yet"
+  - Duration trim: range + number input, bounded `[audio_duration + 0.8s, 8s]`; below-buffer or above-max entries show an inline error and are not saved
+  - Transition_out dropdown (dissolve/dip_black/dip_white/cut); selecting a dip transition that would be shorter than the dip-downgrade threshold (18 frames / 0.6s @ 30fps, mirrors `DIP_FADE` in Documentary.jsx) shows an inline warning and blocks the save instead of persisting an invalid state
+  - Audio mix override: three 0–1 sliders (narration/music/ambient) writing `scene.audio_mix_override`
+  - Per-field "Revert to generated" — appears once a field differs from a snapshot taken via `localStorage['vorta_finetune_snapshot']` the first time the step is ever entered (persists across step navigation)
+  - All edits auto-save via PATCH on commit (range `onMouseUp`/`onTouchEnd`, number `onBlur`, select `onChange`) — no separate Save button
+- `client/src/pages/VideoCreator.jsx` — imports and renders `FineTuneStep` in `renderStep()`; added `finetuneSnapshot` key to the `LS` map so "Clear session" wipes the snapshot too
+- `client/src/pages/wizard/VoiceStep.jsx` — button label changed from "Continue to Export →" to "Continue to Fine-Tune →" (next step in sequence)
+- `server/services/frameMath.js` (NEW) — pure, dependency-free validation module: `minDurationSeconds`, `canUseDipTransition`, `isValidTransition`, `validateSceneUpdate`. Constants (`TRANSITION_FRAMES=12`, `DIP_FADE=9`, `MIN_SCENE_FRAMES=13`) are copied from `remotion/src/compositions/Documentary.jsx` rather than imported — Documentary.jsx is an ESM/JSX file in a separate Node project with Remotion-only dependencies and cannot be `require()`'d from the server. `MAX_SCENE_SECONDS=8.0` / `NARRATION_BUFFER_SECONDS=0.8` mirror the existing constants already used in `server/routes/voiceover.js`.
+- `server/routes/scenes.js` (NEW) — `PATCH /api/scenes/:sceneId`. Body: `{ projectId, duration_seconds?, transition_out?, audio_mix_override? }`. Reads/writes `projects/[projectId]/scenes.json`, handling both on-disk shapes that exist in this codebase: the flat array `generate.js` writes at analysis time, and the wrapped `{ scenes, imagePaths, selectedClips, audio, audioSpecs }` object `render.js` overwrites the same path with after a render — sibling keys in the wrapped shape are preserved untouched. Validates via `frameMath.validateSceneUpdate` before writing; on failure returns `400` with the specific error, nothing is persisted. `audio_mix_override: null` clears the field entirely (used by Revert). Registered in `server/index.js` as `/api/scenes`.
+- `remotion/src/compositions/Documentary.jsx` — narration `volumeFn` now multiplies against `scene.audio_mix_override?.narration ?? 1.0` instead of the literal `1.0` it used before, so the narration slider actually affects the render. This is the only render-time audio track that exists in the codebase today (confirmed via `render.js`'s own comment: "music and sound effects are handled in post-production") — `calculateDocumentaryDuration` and the `(n-1)` frame-overlap math were **not** touched, per FT-2 scope boundary.
+
+**Known limitation (flagged, not silently built around):** `audio_mix_override.music` and `.ambient` are fully wired end-to-end as *data* — UI sliders, PATCH validation/persistence, revert — but there is no music or ambient audio track anywhere in the render pipeline for them to control yet. The FineTuneStep UI says this explicitly under the sliders. Wiring real music/ambient mixing is a future phase, not part of FT-1.
+
+**Testing — commands run and results:**
+```
+$ node server/services/frameMath.test.js
+```
+15/15 assertions passed — constants match Documentary.jsx (FPS=30, TRANSITION_FRAMES=12, DIP_FADE=9, MIN_SCENE_FRAMES=13, MAX_SCENE_SECONDS=8.0, NARRATION_BUFFER_SECONDS=0.8), `minDurationSeconds`, `canUseDipTransition` (including the 17-vs-18-frame rounding boundary), `isValidTransition`, and `validateSceneUpdate` (below-buffer rejection, exact-boundary acceptance, above-max rejection, non-numeric rejection, dip-too-short rejection, both-errors-at-once, valid dip acceptance, unknown-transition rejection, out-of-range mix rejection, valid mix acceptance, `null` mix always valid).
+
+```
+$ node server/routes/scenes.test.js
+```
+18/18 assertions passed against a real Express app with only the scenes router mounted, driven over HTTP with `fetch` against ephemeral ports, using disposable fixture project directories under `projects/` (created and removed by the test, verified no `__test_ft1*` directories remain afterward): valid update returns 200 and persists to disk; duration below the narration-sync buffer → 400, not persisted; duration above 8s → 400; dip transition on a too-short existing scene → 400, not persisted; the same dip transition succeeds once duration is raised; `audio_mix_override` round-trips and stays absent on scenes that never set it; out-of-range mix value → 400; `audio_mix_override: null` clears the field; unknown `scene_id` → 404; unknown `projectId` → 404; missing `projectId` → 400; empty update body → 400; schema validity assertion across every scene after every operation (required fields intact, `audio_mix_override` still optional); and a second run against the wrapped `{ scenes, imagePaths, ... }` shape confirms the PATCH persists inside `scenes[]` without flattening the object or dropping `imagePaths`/`selectedClips`/etc.
+
+Also verified manually:
+- `node -e "require('./server/routes/scenes.js')"` — loads without error
+- `npx eslint` clean on `FineTuneStep.jsx` (pre-existing unrelated lint debt in `VideoCreator.jsx`/`VoiceStep.jsx` — unused vars, empty blocks — was already present before this change and left untouched, out of scope)
+- `npx vite build` — clean production build, no errors
+- Against the live dev server (nodemon auto-restarted on the route file changes): `curl -X PATCH /api/scenes/001` with an empty body correctly returned `400 {"error":"projectId required"}`
+- Confirmed against real project data on disk (`projects/proj_*/scenes.json`, read-only) that both the flat-array and wrapped shapes the endpoint handles are exactly what's actually on disk in this project, not a guessed format
+
+**Production-readiness checklist:**
+- [x] `finetune` step appears between Voice and Export in WizardNav
+- [x] Step is skippable — Export works unchanged whether or not Fine-Tune was visited (all new scene fields optional/nullable)
+- [x] Duration trim blocked below `audio_duration + 0.8s` and above `8s`, inline message shown
+- [x] Dip transition blocked when it would violate the `DIP_FADE` clamp, inline warning shown, nothing persisted
+- [x] `audio_mix_override` fully optional; `Documentary.jsx` reads `scene.audio_mix_override?.narration ?? 1.0` (music/ambient stored only — no track to wire yet, documented above)
+- [x] `PATCH /api/scenes/:sceneId` implemented and registered; validates before writing; handles both on-disk `scenes.json` shapes
+- [x] Revert-to-generated restores the first-visit snapshot per field, persisted in localStorage across navigation
+- [x] `calculateDocumentaryDuration` and the frame-overlap math untouched (verified via diff — only the narration volume multiplier changed)
+- [x] Client build clean — zero errors
+- [x] PLAN.md updated with FT-1 completion entry

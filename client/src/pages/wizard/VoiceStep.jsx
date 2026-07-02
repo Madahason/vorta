@@ -72,7 +72,7 @@ export function VoiceStep({
             onClick={() => { wizard.markComplete('voice'); wizard.goNext() }}
             className="vorta-btn vorta-btn-primary"
           >
-            Continue to Export →
+            Continue to Fine-Tune →
           </button>
         </div>
       </div>

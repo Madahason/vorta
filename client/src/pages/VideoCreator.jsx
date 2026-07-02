@@ -9,6 +9,7 @@ import { ScriptStep }  from './wizard/ScriptStep'
 import { ScenesStep }  from './wizard/ScenesStep'
 import { VisualsStep } from './wizard/VisualsStep'
 import { VoiceStep }   from './wizard/VoiceStep'
+import { FineTuneStep } from './wizard/FineTuneStep'
 import { ExportStep }  from './wizard/ExportStep'
 import { PreviewPlayer } from '../components/video-creator/PreviewPlayer'
 
@@ -23,6 +24,7 @@ const LS = {
   clipMatches:   'vorta_clip_matches',
   selectedClips: 'vorta_selected_clips',
   sessionKey:    'vorta_session_key',
+  finetuneSnapshot: 'vorta_finetune_snapshot',
 }
 
 function lsRead(key) {
@@ -737,6 +739,18 @@ export default function VideoCreator() {
             voiceoverStatuses={voiceoverStatuses}
             onVoiceoverStatusChange={setVoiceoverStatuses}
             onScenesChange={setScenes}
+            wizard={wizard}
+          />
+        )
+      case 'finetune':
+        return (
+          <FineTuneStep
+            scenes={scenes}
+            onScenesChange={setScenes}
+            sceneStatuses={sceneStatuses}
+            imagePaths={imagePaths}
+            selectedClips={selectedClips}
+            projectId={projectId}
             wizard={wizard}
           />
         )

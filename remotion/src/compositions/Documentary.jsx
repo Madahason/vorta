@@ -325,26 +325,31 @@ export function Documentary({
 
     const localSceneEnd = sceneEnd - narrationStart
 
+    // Fine-Tune per-scene narration level override — optional, defaults to full volume
+    // (matches the literal 1.0 this multiplies against previously). Music/ambient overrides
+    // are stored on the scene but have no corresponding render-time track yet.
+    const narrationVol = scene.audio_mix_override?.narration ?? 1.0
+
     let volumeFn
     if (effectiveCut === 'j_cut') {
       const fadeOutStart = localSceneEnd - outT.outgoingFade - 9
       volumeFn = (frame) => {
-        if (frame < 6) return interpolate(frame, [0, 6], [0, 1.0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
-        if (frame >= fadeOutStart) return interpolate(frame, [fadeOutStart, localSceneEnd], [1.0, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
-        return 1.0
+        if (frame < 6) return interpolate(frame, [0, 6], [0, narrationVol], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
+        if (frame >= fadeOutStart) return interpolate(frame, [fadeOutStart, localSceneEnd], [narrationVol, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
+        return narrationVol
       }
     } else if (effectiveCut === 'l_cut') {
       const localNarrationEnd  = localSceneEnd + overlapFr
       const localFadeOutStart  = localNarrationEnd - 6
       volumeFn = (frame) => {
-        if (frame >= localFadeOutStart) return interpolate(frame, [localFadeOutStart, localNarrationEnd], [1.0, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
-        return 1.0
+        if (frame >= localFadeOutStart) return interpolate(frame, [localFadeOutStart, localNarrationEnd], [narrationVol, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
+        return narrationVol
       }
     } else {
       const fadeOutStart = localSceneEnd - outT.outgoingFade - 9
       volumeFn = (frame) => {
-        if (frame >= fadeOutStart) return interpolate(frame, [fadeOutStart, localSceneEnd], [1.0, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
-        return 1.0
+        if (frame >= fadeOutStart) return interpolate(frame, [fadeOutStart, localSceneEnd], [narrationVol, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
+        return narrationVol
       }
     }
 

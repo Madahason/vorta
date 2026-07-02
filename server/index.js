@@ -79,6 +79,7 @@ app.use('/api/generate',      require('./routes/generate'));
 app.use('/api/motion',        require('./routes/motion'));
 app.use('/api/library',       require('./routes/library'));
 app.use('/api/voiceover',     require('./routes/voiceover'));
+app.use('/api/scenes',        require('./routes/scenes'));
 app.use('/api/render',        require('./routes/render'));
 app.use('/api/clips',        require('./routes/clips'));
 app.use('/api/research',     require('./routes/research'));
