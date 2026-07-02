@@ -252,13 +252,17 @@ export default function VideoCreator() {
   }, [showPreview, previewScene, showClipLibrary, hasAnalyzed, scenes.length])
 
   // ─── Derive imagePaths from sceneStatuses for the Remotion player ────────
+  // scene.image_path takes priority when set — Fine-Tune's manual swap/regenerate
+  // (FT-3) writes it directly onto the scene, and that must override the original
+  // generation-time snapshot in sceneStatuses everywhere images are previewed.
   const imagePaths = useMemo(() => {
     const paths = {}
     Object.entries(sceneStatuses).forEach(([sid, st]) => {
       if (st.status === 'done' && st.image_path) paths[sid] = st.image_path
     })
+    scenes.forEach(s => { if (s.image_path) paths[s.scene_id] = s.image_path })
     return paths
-  }, [sceneStatuses])
+  }, [sceneStatuses, scenes])
 
   const globalSettings = useMemo(() => ({
     grainIntensity: filmGrain ? undefined : 0,

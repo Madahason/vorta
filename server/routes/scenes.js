@@ -1,27 +1,7 @@
 const express = require('express')
 const router  = express.Router()
-const path    = require('path')
-const fs      = require('fs')
 const { validateSceneUpdate } = require('../services/frameMath')
-
-const PROJECTS_DIR = path.resolve(__dirname, '../../projects')
-
-// scenes.json is written as a flat array by generate.js, but render.js overwrites the same
-// path with a wrapped { scenes, imagePaths, selectedClips, audio, audioSpecs } object once a
-// render has run. Handle both shapes so this endpoint keeps working after either write.
-function readScenesFile(projectId) {
-  const scenesPath = path.join(PROJECTS_DIR, projectId, 'scenes.json')
-  if (!fs.existsSync(scenesPath)) return null
-  const raw = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
-  const isWrapped = !Array.isArray(raw)
-  const scenes = isWrapped ? (raw.scenes || []) : raw
-  return { scenesPath, raw, isWrapped, scenes }
-}
-
-function writeScenesFile({ scenesPath, raw, isWrapped, scenes }) {
-  const out = isWrapped ? { ...raw, scenes } : scenes
-  fs.writeFileSync(scenesPath, JSON.stringify(out, null, 2))
-}
+const { readScenesFile, writeScenesFile } = require('../services/scenesFile')
 
 // PATCH /api/scenes/:sceneId
 // Body: { projectId, duration_seconds?, transition_out?, audio_mix_override? }

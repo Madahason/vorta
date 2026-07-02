@@ -3798,3 +3798,58 @@ Also verified manually:
 - [x] No image swap, split-screen, or other FT-3+ feature added
 - [x] Client build clean — zero errors
 - [x] PLAN.md updated with FT-2 completion entry
+
+---
+
+### Phase FT-3 — Fine-Tune stage: manual image swap and single-scene regeneration ✅ COMPLETE
+
+**What was built:**
+- `client/src/pages/wizard/FineTuneStep.jsx` — each `image`-shot-type scene card now has, under its thumbnail:
+  - **Swap** — a hidden `<input type="file" accept="image/png,image/jpeg,image/webp">` triggered by a button (same hidden-input-plus-button pattern `ExportPanel.jsx` already uses for audio upload), uploads via `FormData` to the new replace endpoint
+  - **Regen** — re-runs Higgsfield generation for just that scene via the new regenerate endpoint
+  - Both show a spinner while in flight (mutually exclusive via one `imageAction` state: `'uploading' | 'regenerating' | null`) and an inline error message on failure; Regen additionally shows "Can take a few minutes…" since Higgsfield generation is slow
+  - The thumbnail lookup now prioritizes `scene.image_path` over the `sceneStatuses`/`imagePaths` snapshot, so a swap/regenerate is reflected immediately in the Fine-Tune grid itself
+- `server/routes/images.js` (NEW) — `POST /api/images/:sceneId/replace`, multipart (`multer.memoryStorage()`, 15MB limit, PNG/JPEG/WEBP only). Overwrites the scene's *existing* `image_path` location (same filename) when one exists, so nothing else referencing that URL has to change; if the scene never had an image yet, derives a new filename from `scene_id` + the upload's extension, matching `generate.js`'s convention. Backs up the pre-upload file first (see below), then persists the resulting `image_path` to the project's `scenes.json`.
+- `server/routes/higgsfieldRegenerate.js` (NEW) — `POST /api/higgsfield/regenerate/:sceneId`. A thin wrapper around the *same* generation pipeline `generate.js`'s `processScene()` uses — `enhancePrompt(scene, false)` → `generateImage(prompt)` → `downloadImage(url, dest)` — reused via the module objects (`higgsfieldService.generateImage(...)`, not destructured at require-time) rather than duplicated, specifically so tests can monkey-patch each step. The prompt is always read from the project's own `scenes.json`, never trusted from the request body, so it can't be pointed at a different scene's prompt, and no other scene's state is touched. Rejects non-`image` shot types and scenes with no `higgsfield_prompt` before ever calling Higgsfield. Re-reads `scenes.json` fresh immediately before the final write (generation can take minutes; another Fine-Tune edit may have landed on the same file meanwhile) and only touches this scene's `image_path`.
+- `server/services/imageSwap.js` (NEW) — `backupOriginalIfNeeded(assetsDir, sceneId, currentImagePath)`, shared by both endpoints above. Backs up whatever is currently on disk to `scene_{sceneId}_original.jpg`, but **only if that backup doesn't already exist** — this is deliberate: the first swap/regenerate must preserve the true Higgsfield original, but a second or third swap must not clobber that backup with an already-replaced image, or the original would be lost forever.
+- Two small refactors, done because the task explicitly asked to reuse existing logic rather than duplicate it (verified with the pre-existing test suites afterward, see below):
+  - `server/services/imageDownload.js` (NEW) — `downloadImage()` extracted out of `generate.js` (identical body, zero behavior change) so `higgsfieldRegenerate.js` can call the same function instead of a second copy.
+  - `server/services/scenesFile.js` (NEW) — `readScenesFile()`/`writeScenesFile()` extracted out of `scenes.js` (identical bodies) so `images.js` and `higgsfieldRegenerate.js` read/write `scenes.json` through the same dual-shape-handling code FT-1/FT-2 already established, instead of a third copy.
+- `server/index.js` — mounted the two new routers at `/api/images` and `/api/higgsfield`.
+
+**A correctness gap found and fixed while wiring this up (not part of the original ask, but required for the feature to do anything at render time):** the render pipeline never actually read `scene.image_path` at all. `VideoCreator.jsx`'s `imagePaths` memo and `ExportPanel.jsx`'s render-trigger scene merge both sourced images *exclusively* from `sceneStatuses` (the original bulk-generation-time snapshot), and `ExportPanel.jsx` even **hard-overrode** `image_path` with `sceneStatuses[...] || null` on every render. Since `scene.image_path` was never set anywhere before FT-3, this was invisible — but it meant a Fine-Tune swap/regenerate would have updated `scenes.json` while the actual preview and render silently kept using the old image. Fixed with two one-line precedence changes (both additive — `scene.image_path` was always `undefined` pre-FT-3, so this changes nothing for any scene that never went through Fine-Tune):
+  - `VideoCreator.jsx`'s `imagePaths` useMemo now also folds in `scene.image_path` (added `scenes` to the dependency array), which fixes the sticky mini-player, the scene-preview modal, and `PreviewPlayer` all at once since they all consume this single memo.
+  - `ExportPanel.jsx`'s `scenesWithPaths` merge changed from `sceneStatuses[s.scene_id]?.image_path || null` to `s.image_path || sceneStatuses[s.scene_id]?.image_path || null`, so the actual rendered MP4 uses a Fine-Tune swap/regenerate.
+
+**Testing — commands run and results:**
+```
+$ node server/services/imageSwap.test.js
+```
+5/5 assertions passed: no-op when a scene has no `image_path` yet; no-op when the referenced file is missing from disk; first call backs up the current file; a second and third swap each overwrite the live file but never re-touch the existing backup (the true original survives repeated swaps — the core guarantee this module exists for).
+
+```
+$ node server/routes/images.test.js
+```
+11/11 assertions passed against a real Express app with only the images router mounted, driven over HTTP with `fetch`/`FormData`/`File` (Node 18+ globals), using a disposable fixture project (verified cleaned up afterward): valid upload returns 200 and keeps the same `image_path`; the live file gets the uploaded bytes; the original Higgsfield file is backed up to `scene_001_original.jpg` before the overwrite; a second upload overwrites the live file again but the backup (and its original bytes) are untouched; a scene with no prior image gets a new filename with no spurious backup; non-image file types, missing files, and missing `projectId` are all rejected with 400; unknown scene/project return 404; and an untouched `motion_graphic` scene in the same project is confirmed unaffected.
+
+```
+$ node server/routes/higgsfieldRegenerate.test.js
+```
+13/13 assertions passed, using the monkey-patch technique described in the file's header comment (patches `higgsfieldService.generateImage`, `promptEnhancer.enhancePrompt`, and `imageDownloadSvc.downloadImage` on their module-exports objects for the duration of the test, restored in a `finally` block) so the happy path runs fast and deterministically with zero real Higgsfield/Claude calls: all validation paths (missing `projectId`, unknown scene, unknown project, non-`image` shot type, empty `higgsfield_prompt`) rejected before touching the generation pipeline; the happy path confirms `enhancePrompt` receives the scene's *own* stored prompt (not something client-supplied) and `generateImage` receives exactly `enhancePrompt`'s output — proving the pipeline is reused in the same order `processScene()` uses; `downloadImage`'s output lands at the same `image_path` location; the original file is backed up before the regenerated image overwrites it; a second regenerate doesn't disturb that backup; scenes 002/003 (rejected up front) are confirmed completely untouched — proving no other scene is ever touched or re-triggered; and a thrown error from `generateImage` propagates as a clean `500` with the underlying message, with nothing persisted.
+
+Also verified manually:
+- `node -e "require(...)"` on all 4 touched/new route files — load without error
+- `npx eslint src/pages/wizard/FineTuneStep.jsx` — clean (the errors surfaced in `VideoCreator.jsx`/`ExportPanel.jsx` by a full lint pass all predate this phase — confirmed via `git diff --stat`, left untouched per guardrails)
+- `npx vite build` — clean production build
+- Re-ran the full FT-1/FT-2 test suites (`frameMath.test.js`, `scenes.test.js` — 46 assertions) after the `imageDownload.js`/`scenesFile.js` extractions — all still pass, confirming the refactor didn't change behavior
+- Against the live dev server (nodemon auto-restarted on the route/index.js changes): `curl -X POST /api/higgsfield/regenerate/001` and `curl -X POST /api/images/001/replace` (both with no `projectId`) correctly returned `400 {"error":"projectId required"}`
+
+**Production-readiness checklist:**
+- [x] Image swap file picker on each image-shot-type scene card; uploads via multipart
+- [x] Upload always backs up the pre-existing file to `scene_{sceneId}_original.jpg` exactly once, before any overwrite, regardless of how many times a scene is later swapped/regenerated
+- [x] `POST /api/images/:sceneId/replace` implemented, registered, validates file type/presence/projectId/scene existence
+- [x] Regenerate button re-runs the existing Higgsfield generation service (`enhancePrompt`/`generateImage`/`downloadImage`) reused, not duplicated, scoped to exactly one `scene_id`; no other scene is touched or re-triggered (asserted directly in tests)
+- [x] `POST /api/higgsfield/regenerate/:sceneId` implemented, registered, same backup-then-overwrite pattern as manual upload
+- [x] Fixed the render/preview pipeline to actually honor `scene.image_path` (previously dead code — this phase's endpoints would have had zero visible effect without it)
+- [x] Client build clean — zero errors
+- [x] PLAN.md updated with FT-3 completion entry

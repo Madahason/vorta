@@ -1,10 +1,9 @@
 const router = require('express').Router();
 const path = require('path');
 const fs = require('fs');
-const https = require('https');
-const http = require('http');
 const { generateImage } = require('../services/higgsfield');
 const { enhancePrompt, enhanceAllPrompts } = require('../services/promptEnhancer');
+const { downloadImage } = require('../services/imageDownload');
 
 // In-memory progress store: projectId → { progress, clients, allDone }
 const store = new Map();
@@ -19,28 +18,6 @@ function broadcast(projectId, data) {
   const entry = store.get(projectId);
   if (!entry) return;
   entry.clients.forEach(client => sendEvent(client, data));
-}
-
-function downloadImage(url, dest, hops = 0) {
-  if (hops > 5) return Promise.reject(new Error('Too many redirects'));
-  return new Promise((resolve, reject) => {
-    const proto = url.startsWith('https') ? https : http;
-    proto.get(url, res => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        resolve(downloadImage(res.headers.location, dest, hops + 1));
-        return;
-      }
-      if (res.statusCode !== 200) {
-        reject(new Error(`Image download failed: HTTP ${res.statusCode}`));
-        return;
-      }
-      const file = fs.createWriteStream(dest);
-      res.pipe(file);
-      file.on('finish', () => file.close(resolve));
-      file.on('error', err => { fs.unlink(dest, () => {}); reject(err); });
-    }).on('error', reject);
-  });
 }
 
 async function processScene(projectId, scene, assetsDir) {

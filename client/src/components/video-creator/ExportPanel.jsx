@@ -149,10 +149,13 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
       setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000))
     }, 1000)
 
-    // Merge image_path from sceneStatuses onto each scene for the render backend
+    // Merge image_path from sceneStatuses onto each scene for the render backend.
+    // scene.image_path wins when set — Fine-Tune's manual swap/regenerate (FT-3) writes it
+    // directly onto the scene, and the render must use that over the original
+    // generation-time sceneStatuses snapshot.
     const scenesWithPaths = scenes.map(s => ({
       ...s,
-      image_path: sceneStatuses[s.scene_id]?.image_path || null,
+      image_path: s.image_path || sceneStatuses[s.scene_id]?.image_path || null,
     }))
 
     try {
@@ -198,6 +201,13 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
         setRenderState('done')
         clearInterval(elapsedRef.current)
         es.close()
+        // Auto-download as soon as render completes
+        const a = document.createElement('a')
+        a.href = `${SERVER_URL}${event.outputPath}`
+        a.download = 'documentary.mp4'
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
       } else if (event.type === 'error') {
         setErrorMessage(event.message || 'Render failed')
         setErrorLogs(event.message || '')

@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react'
-import { RotateCcw, Loader2, GripVertical } from 'lucide-react'
+import { useState, useMemo, useRef } from 'react'
+import { RotateCcw, Loader2, GripVertical, Upload, RefreshCw } from 'lucide-react'
 import { calculateDocumentaryDuration } from '@remotion-compositions/compositions/Documentary'
 
 const SERVER_URL = 'http://localhost:3001'
@@ -183,7 +183,10 @@ export function FineTuneStep({
               snapshot={snapshot[scene.scene_id]}
               thumbnail={
                 scene.shot_type === 'image'
-                  ? (sceneStatuses[scene.scene_id]?.image_path || imagePaths[scene.scene_id])
+                  // scene.image_path first — a Fine-Tune swap/regenerate sets this directly
+                  // and must be reflected immediately, ahead of the original generation-time
+                  // sceneStatuses/imagePaths snapshot.
+                  ? (scene.image_path || sceneStatuses[scene.scene_id]?.image_path || imagePaths[scene.scene_id])
                   : null
               }
               clip={selectedClips[scene.scene_id] || null}
@@ -211,6 +214,9 @@ function FineTuneCard({
   const [mix,         setMix]         = useState({ ...DEFAULT_MIX, ...(scene.audio_mix_override || {}) })
   const [savingField, setSavingField] = useState(null) // 'duration' | 'transition' | 'mix' | null
   const [saveError,   setSaveError]   = useState(null)
+  const [imageAction,  setImageAction]  = useState(null) // 'uploading' | 'regenerating' | null
+  const [imageError,   setImageError]   = useState(null)
+  const fileInputRef = useRef(null)
 
   const durationError = duration < min
     ? `Must be at least ${min}s to preserve the narration-sync buffer (audio ${(scene.audio_duration || 0).toFixed(1)}s + 0.8s)`
@@ -297,6 +303,47 @@ function FineTuneCard({
     }
   }
 
+  const handleImageUpload = async (fileList) => {
+    const uploadFile = fileList?.[0]
+    if (!uploadFile) return
+    setImageAction('uploading'); setImageError(null)
+    try {
+      const formData = new FormData()
+      formData.append('image', uploadFile)
+      formData.append('projectId', projectId)
+      const res  = await fetch(`${SERVER_URL}/api/images/${scene.scene_id}/replace`, {
+        method: 'POST',
+        body:   formData,
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Upload failed')
+      onSceneUpdate({ image_path: data.image_path })
+    } catch (err) {
+      setImageError(err.message)
+    } finally {
+      setImageAction(null)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  const handleRegenerate = async () => {
+    setImageAction('regenerating'); setImageError(null)
+    try {
+      const res  = await fetch(`${SERVER_URL}/api/higgsfield/regenerate/${scene.scene_id}`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Regeneration failed')
+      onSceneUpdate({ image_path: data.image_path })
+    } catch (err) {
+      setImageError(err.message)
+    } finally {
+      setImageAction(null)
+    }
+  }
+
   const durationChanged   = snapshot && duration !== snapshot.duration_seconds
   const transitionChanged = snapshot && transition !== (snapshot.transition_out || 'dissolve')
   const mixChanged         = snapshot && JSON.stringify(mix) !== JSON.stringify({ ...DEFAULT_MIX, ...(snapshot.audio_mix_override || {}) })
@@ -332,22 +379,62 @@ function FineTuneCard({
         </div>
 
         <div className="ml-10 flex gap-4">
-          {/* Thumbnail */}
-          <div
-            className="shrink-0 w-40 rounded-lg overflow-hidden border border-white/[0.08] bg-black/40 flex items-center justify-center"
-            style={{ aspectRatio: '16/9' }}
-          >
-            {thumbnail ? (
-              <img src={thumbnail} alt={`Scene ${scene.scene_id}`} className="w-full h-full object-cover" loading="lazy" />
-            ) : clip ? (
-              <div className="w-full h-full flex flex-col items-center justify-center text-amber-400/50 text-[10px] gap-1 p-2 text-center">
-                <span>🎞</span>
-                <span className="truncate w-full">{clip.filename || clip.title || 'footage'}</span>
+          {/* Thumbnail + image swap/regenerate */}
+          <div className="shrink-0 w-40 flex flex-col gap-2">
+            <div
+              className="w-40 rounded-lg overflow-hidden border border-white/[0.08] bg-black/40 flex items-center justify-center"
+              style={{ aspectRatio: '16/9' }}
+            >
+              {thumbnail ? (
+                <img src={thumbnail} alt={`Scene ${scene.scene_id}`} className="w-full h-full object-cover" loading="lazy" />
+              ) : clip ? (
+                <div className="w-full h-full flex flex-col items-center justify-center text-amber-400/50 text-[10px] gap-1 p-2 text-center">
+                  <span>🎞</span>
+                  <span className="truncate w-full">{clip.filename || clip.title || 'footage'}</span>
+                </div>
+              ) : (
+                <span className="text-white/15 text-[10px] px-2 text-center">
+                  {scene.shot_type === 'motion_graphic' ? 'motion graphic' : 'no preview yet'}
+                </span>
+              )}
+            </div>
+
+            {scene.shot_type === 'image' && (
+              <div className="space-y-1.5">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  style={{ display: 'none' }}
+                  onChange={e => handleImageUpload(e.target.files)}
+                />
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={imageAction !== null}
+                    className="flex-1 flex items-center justify-center gap-1 text-[10px] px-2 py-1.5 bg-white/[0.05] hover:bg-white/[0.09] disabled:opacity-40 border border-white/[0.1] rounded text-white/60 transition-colors"
+                    title="Upload a replacement image for this scene"
+                  >
+                    {imageAction === 'uploading' ? <Loader2 size={10} className="animate-spin" /> : <Upload size={10} />}
+                    Swap
+                  </button>
+                  <button
+                    onClick={handleRegenerate}
+                    disabled={imageAction !== null}
+                    className="flex-1 flex items-center justify-center gap-1 text-[10px] px-2 py-1.5 bg-white/[0.05] hover:bg-white/[0.09] disabled:opacity-40 border border-white/[0.1] rounded text-white/60 transition-colors"
+                    title="Regenerate this scene's image with Higgsfield"
+                  >
+                    {imageAction === 'regenerating' ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+                    Regen
+                  </button>
+                </div>
+                {imageAction === 'regenerating' && (
+                  <div className="text-[9px] text-white/25 leading-tight">Can take a few minutes…</div>
+                )}
+                {imageError && (
+                  <div className="text-[9px] text-red-400/80 leading-tight">{imageError}</div>
+                )}
               </div>
-            ) : (
-              <span className="text-white/15 text-[10px] px-2 text-center">
-                {scene.shot_type === 'motion_graphic' ? 'motion graphic' : 'no preview yet'}
-              </span>
             )}
           </div>
 
