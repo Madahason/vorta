@@ -216,8 +216,113 @@ async function runWrappedShapeTest() {
   }
 }
 
+// FT-2: POST /api/scenes/reorder — array order changes, scene_id values never do.
+async function runReorderTests() {
+  cleanup()
+  fs.mkdirSync(testDir, { recursive: true })
+  const scenes = [
+    { scene_id: 'A', script_excerpt: 'scene A', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', audio_path: '/projects/x/audio/scene_A.mp3', image_path: '/projects/x/assets/A.png' },
+    { scene_id: 'B', script_excerpt: 'scene B', shot_type: 'image', duration_seconds: 5, transition_out: 'dip_black', audio_path: '/projects/x/audio/scene_B.mp3', image_path: '/projects/x/assets/B.png' },
+    { scene_id: 'D', script_excerpt: 'scene D', shot_type: 'image', duration_seconds: 5, transition_out: 'cut', audio_path: '/projects/x/audio/scene_D.mp3', image_path: '/projects/x/assets/D.png' },
+  ]
+  fs.writeFileSync(scenesPath, JSON.stringify(scenes, null, 2))
+
+  const app = express()
+  app.use(express.json())
+  app.use('/api/scenes', require('./scenes'))
+  const server = app.listen(0)
+  const port   = server.address().port
+  const base   = `http://localhost:${port}/api/scenes`
+
+  const reorder = (order) => fetch(`${base}/reorder`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ projectId: TEST_PROJECT, order }),
+  })
+
+  try {
+    // 1. Valid reorder — confirm persisted order matches submission exactly
+    let res  = await reorder(['B', 'D', 'A'])
+    let body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    assert.deepStrictEqual(body.scenes.map(s => s.scene_id), ['B', 'D', 'A'])
+    console.log('PASS: valid reorder returns 200 with the new order')
+
+    let onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.deepStrictEqual(onDisk.map(s => s.scene_id), ['B', 'D', 'A'], 'reordered array must persist to scenes.json')
+    console.log('PASS: reorder persists the new array order to disk')
+
+    // scene_id values themselves are untouched, and file references travel with their scene
+    const byId = Object.fromEntries(onDisk.map(s => [s.scene_id, s]))
+    assert.strictEqual(byId.A.audio_path, '/projects/x/audio/scene_A.mp3')
+    assert.strictEqual(byId.B.image_path, '/projects/x/assets/B.png')
+    assert.strictEqual(byId.D.transition_out, 'cut')
+    console.log('PASS: scene_id values and per-scene file references (audio_path/image_path) are unchanged by reorder — only array position moved')
+
+    // 2. Mismatched scene_id set — missing a scene — rejected, not silently accepted
+    res  = await reorder(['B', 'D']) // missing A
+    body = await res.json()
+    assert.strictEqual(res.status, 400, `expected 400, got ${res.status}`)
+    assert(body.errors.some(e => /missing/.test(e)), `expected a "missing" error among: ${JSON.stringify(body.errors)}`)
+    console.log('PASS: reorder missing a scene_id is rejected (400)')
+
+    onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.deepStrictEqual(onDisk.map(s => s.scene_id), ['B', 'D', 'A'], 'rejected reorder must not be persisted')
+    console.log('PASS: rejected (missing-scene) reorder was not persisted')
+
+    // 2b. Extra/unknown scene_id — rejected
+    res  = await reorder(['B', 'D', 'A', 'Z'])
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(body.errors.some(e => /unknown scene_id/.test(e)), `expected an "unknown scene_id" error among: ${JSON.stringify(body.errors)}`)
+    console.log('PASS: reorder with an unknown scene_id is rejected (400)')
+
+    // 2c. Duplicate scene_id within the submitted order — rejected
+    res  = await reorder(['B', 'B', 'D'])
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/duplicate/.test(body.error), `expected "duplicate" error, got: ${body.error}`)
+    console.log('PASS: reorder with a duplicate scene_id is rejected (400)')
+
+    onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.deepStrictEqual(onDisk.map(s => s.scene_id), ['B', 'D', 'A'], 'all rejected reorders must leave the persisted order untouched')
+    console.log('PASS: no rejected reorder variant mutated the persisted order')
+
+    // 3. Empty / malformed order -> 400
+    res = await reorder([])
+    assert.strictEqual(res.status, 400)
+    res = await fetch(`${base}/reorder`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: TEST_PROJECT }), // order missing entirely
+    })
+    assert.strictEqual(res.status, 400)
+    console.log('PASS: empty/missing order array is rejected (400)')
+
+    // 4. Unknown project -> 404
+    res = await fetch(`${base}/reorder`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: '__no_such_project__', order: ['A', 'B', 'D'] }),
+    })
+    assert.strictEqual(res.status, 404)
+    console.log('PASS: reorder against an unknown project returns 404')
+
+    // 5. Revert-style reorder back to original order works too
+    res  = await reorder(['A', 'B', 'D'])
+    body = await res.json()
+    assert.strictEqual(res.status, 200)
+    assert.deepStrictEqual(body.scenes.map(s => s.scene_id), ['A', 'B', 'D'])
+    console.log('PASS: reordering back to the original order succeeds (exercises the same path "Revert order" uses)')
+
+    console.log('\nAll reorder checks passed.')
+  } finally {
+    server.close()
+    cleanup()
+  }
+}
+
 run()
   .then(runWrappedShapeTest)
+  .then(runReorderTests)
   .catch(err => {
     console.error('TEST FAILURE:', err)
     cleanup()

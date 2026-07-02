@@ -73,4 +73,49 @@ router.patch('/:sceneId', (req, res) => {
   res.json({ scene: updatedScene })
 })
 
+// POST /api/scenes/reorder
+// Body: { projectId, order: [scene_id, ...] }
+// `order` must be a permutation of the project's existing scene_id set — same scenes,
+// new positions only. scene_id values are never renumbered or reassigned; only the
+// array position of each scene object changes, so audio_path/image_path/etc. on each
+// scene stay valid after a reorder.
+router.post('/reorder', (req, res) => {
+  const { projectId, order } = req.body || {}
+
+  if (!projectId) return res.status(400).json({ error: 'projectId required' })
+  if (!Array.isArray(order) || order.length === 0) {
+    return res.status(400).json({ error: 'order must be a non-empty array of scene_id values' })
+  }
+
+  const file = readScenesFile(projectId)
+  if (!file) return res.status(404).json({ error: `No scenes.json found for project ${projectId}` })
+
+  const currentIds   = file.scenes.map(s => String(s.scene_id))
+  const submittedIds = order.map(String)
+
+  const currentSet   = new Set(currentIds)
+  const submittedSet = new Set(submittedIds)
+
+  const errors = []
+  if (submittedIds.length !== currentIds.length) {
+    errors.push(`order has ${submittedIds.length} scene_id(s), project has ${currentIds.length}`)
+  }
+  if (submittedSet.size !== submittedIds.length) {
+    errors.push('order contains duplicate scene_id values')
+  }
+  const missing = currentIds.filter(id => !submittedSet.has(id))
+  const extra   = submittedIds.filter(id => !currentSet.has(id))
+  if (missing.length) errors.push(`order is missing scene_id(s): ${missing.join(', ')}`)
+  if (extra.length)   errors.push(`order contains unknown scene_id(s): ${extra.join(', ')}`)
+
+  if (errors.length) return res.status(400).json({ error: errors[0], errors })
+
+  const byId = new Map(file.scenes.map(s => [String(s.scene_id), s]))
+  file.scenes = submittedIds.map(id => byId.get(id))
+
+  writeScenesFile(file)
+
+  res.json({ scenes: file.scenes })
+})
+
 module.exports = router

@@ -11,8 +11,10 @@
 
 const FPS               = 30
 const TRANSITION_FRAMES = 12
+const CUT_FRAMES        = 1
 const DIP_FRAMES        = 18
 const DIP_FADE          = Math.round(DIP_FRAMES / 2) // 9
+const DIP_MID           = DIP_FADE + 1                // 10
 const MIN_SCENE_FRAMES  = TRANSITION_FRAMES + 1       // 13
 
 const MAX_SCENE_SECONDS        = 8.0
@@ -92,11 +94,61 @@ function validateSceneUpdate(existingScene, updates) {
   return errors
 }
 
+// ── FT-2: duration / frame-overlap math ─────────────────────────────────────
+// These three mirror getTransition(), sceneDur(), and calculateDocumentaryDuration()
+// in remotion/src/compositions/Documentary.jsx line-for-line, for the same reason the
+// constants above are duplicated: that file cannot be required from the server. Used to
+// verify that reordering scenes correctly changes the (n-1)-boundary frame-overlap
+// deduction, since adjacency (and therefore which transitions sit between which scenes)
+// depends on array order.
+
+function getTransition(scene, sceneDurationFrames) {
+  let type = scene?.transition_out || 'dissolve'
+
+  if ((type === 'dip_black' || type === 'dip_white') &&
+      sceneDurationFrames !== undefined &&
+      sceneDurationFrames < DIP_FADE * 2) {
+    type = 'dissolve'
+  }
+
+  switch (type) {
+    case 'cut':
+      return { type: 'cut', frames: CUT_FRAMES }
+    case 'dip_black':
+      return { type: 'dip_black', frames: DIP_FADE }
+    case 'dip_white':
+      return { type: 'dip_white', frames: DIP_FADE }
+    case 'dissolve':
+    default:
+      return { type: 'dissolve', frames: TRANSITION_FRAMES }
+  }
+}
+
+function sceneDur(scene, fps = FPS) {
+  return Math.max(Math.round((scene.duration_seconds || 5) * fps), MIN_SCENE_FRAMES)
+}
+
+function calculateDocumentaryDuration(scenes, fps = FPS) {
+  if (!scenes?.length) return 30
+  const base = scenes.reduce((sum, s) => sum + sceneDur(s, fps), 0)
+  let deduction = 0
+  for (let i = 0; i < scenes.length - 1; i++) {
+    const dur = sceneDur(scenes[i], fps)
+    const t   = getTransition(scenes[i], dur)
+    deduction += (t.type === 'dip_black' || t.type === 'dip_white')
+      ? DIP_FADE + DIP_FADE - DIP_MID
+      : t.frames
+  }
+  return Math.max(base - deduction, 30)
+}
+
 module.exports = {
   FPS,
   TRANSITION_FRAMES,
+  CUT_FRAMES,
   DIP_FRAMES,
   DIP_FADE,
+  DIP_MID,
   MIN_SCENE_FRAMES,
   MAX_SCENE_SECONDS,
   NARRATION_BUFFER_SECONDS,
@@ -105,4 +157,7 @@ module.exports = {
   canUseDipTransition,
   isValidTransition,
   validateSceneUpdate,
+  getTransition,
+  sceneDur,
+  calculateDocumentaryDuration,
 }

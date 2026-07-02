@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { RotateCcw, Loader2 } from 'lucide-react'
+import { useState, useMemo } from 'react'
+import { RotateCcw, Loader2, GripVertical } from 'lucide-react'
+import { calculateDocumentaryDuration } from '@remotion-compositions/compositions/Documentary'
 
 const SERVER_URL = 'http://localhost:3001'
 
@@ -43,6 +44,8 @@ export function FineTuneStep({
 }) {
   // Snapshot original per-scene values the first time this step is ever entered.
   // Persisted to localStorage so "Revert to generated" survives navigating away and back.
+  // `__order` is a reserved key (scene_ids are numeric-string like "001", never "__order")
+  // holding the original array order, for the whole-step "Revert order" control.
   const [snapshot] = useState(() => {
     const existing = readSnapshot()
     const next = { ...existing }
@@ -57,9 +60,64 @@ export function FineTuneStep({
         changed = true
       }
     })
+    if (!next.__order) {
+      next.__order = scenes.map(s => s.scene_id)
+      changed = true
+    }
     if (changed) writeSnapshot(next)
     return next
   })
+
+  const [dragIndex,    setDragIndex]    = useState(null)
+  const [overIndex,    setOverIndex]    = useState(null)
+  const [isReordering, setIsReordering] = useState(false)
+  const [reorderError, setReorderError] = useState(null)
+
+  const totalFrames  = useMemo(() => calculateDocumentaryDuration(scenes, 30), [scenes])
+  const totalSeconds = totalFrames / 30
+
+  const currentOrder = scenes.map(s => s.scene_id)
+  const orderChanged = snapshot.__order && JSON.stringify(currentOrder) !== JSON.stringify(snapshot.__order)
+
+  // Optimistically applies a new scene order locally (so the duration readout and the
+  // sticky mini-player above update immediately), then persists it. Rolls back on failure.
+  const applyOrder = async (nextScenes) => {
+    const prevScenes = scenes
+    onScenesChange(nextScenes)
+    setIsReordering(true); setReorderError(null)
+    try {
+      const res = await fetch(`${SERVER_URL}/api/scenes/reorder`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId, order: nextScenes.map(s => s.scene_id) }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Reorder failed')
+    } catch (err) {
+      onScenesChange(prevScenes) // roll back the optimistic update
+      setReorderError(err.message)
+    } finally {
+      setIsReordering(false)
+    }
+  }
+
+  const handleDrop = (fromIndex, toIndex) => {
+    if (fromIndex === null || fromIndex === toIndex) return
+    const next = [...scenes]
+    const [moved] = next.splice(fromIndex, 1)
+    next.splice(toIndex, 0, moved)
+    applyOrder(next)
+  }
+
+  const revertOrder = () => {
+    const byId = new Map(scenes.map(s => [s.scene_id, s]))
+    const restored = (snapshot.__order || []).map(id => byId.get(id)).filter(Boolean)
+    if (restored.length !== scenes.length) {
+      setReorderError('Cannot revert order — the set of scenes has changed since Fine-Tune was opened.')
+      return
+    }
+    applyOrder(restored)
+  }
 
   return (
     <div style={{ padding: '24px' }}>
@@ -81,6 +139,30 @@ export function FineTuneStep({
         </div>
       </div>
 
+      {scenes.length > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          marginBottom: 16, padding: '10px 14px',
+          background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>
+              {scenes.length} scene{scenes.length !== 1 ? 's' : ''} · {totalSeconds.toFixed(1)}s total (transitions included)
+            </span>
+            {isReordering && <Loader2 size={12} className="animate-spin text-blue-400" />}
+          </div>
+          {orderChanged && (
+            <RevertButton onClick={revertOrder} label="Revert order to generated" />
+          )}
+        </div>
+      )}
+
+      {reorderError && (
+        <div className="text-[11px] text-red-400/80 bg-red-500/[0.06] border border-red-500/20 rounded px-3 py-2 mb-3">
+          {reorderError}
+        </div>
+      )}
+
       {scenes.length === 0 ? (
         <div style={{ textAlign: 'center', padding: 60, color: 'rgba(255,255,255,0.25)' }}>
           No scenes yet — go back and analyze a script first.
@@ -90,6 +172,12 @@ export function FineTuneStep({
           {scenes.map((scene, i) => (
             <FineTuneCard
               key={scene.scene_id}
+              isDragging={dragIndex === i}
+              isDragOver={overIndex === i && dragIndex !== null && dragIndex !== i}
+              onDragHandleStart={() => setDragIndex(i)}
+              onDragHandleEnd={() => { setDragIndex(null); setOverIndex(null) }}
+              onCardDragOver={() => setOverIndex(i)}
+              onCardDrop={() => { handleDrop(dragIndex, i); setDragIndex(null); setOverIndex(null) }}
               index={i}
               scene={scene}
               snapshot={snapshot[scene.scene_id]}
@@ -111,7 +199,10 @@ export function FineTuneStep({
   )
 }
 
-function FineTuneCard({ index, scene, snapshot, thumbnail, clip, projectId, onSceneUpdate }) {
+function FineTuneCard({
+  index, scene, snapshot, thumbnail, clip, projectId, onSceneUpdate,
+  isDragging, isDragOver, onDragHandleStart, onDragHandleEnd, onCardDragOver, onCardDrop,
+}) {
   const min = minDurationFor(scene)
   const max = MAX_SCENE_SECONDS
 
@@ -211,10 +302,29 @@ function FineTuneCard({ index, scene, snapshot, thumbnail, clip, projectId, onSc
   const mixChanged         = snapshot && JSON.stringify(mix) !== JSON.stringify({ ...DEFAULT_MIX, ...(snapshot.audio_mix_override || {}) })
 
   return (
-    <div className="rounded-xl border border-white/[0.06] hover:border-white/[0.1] bg-white/[0.02] transition-colors">
+    <div
+      onDragOver={e => { e.preventDefault(); onCardDragOver?.() }}
+      onDrop={e => { e.preventDefault(); onCardDrop?.() }}
+      className="rounded-xl border bg-white/[0.02] transition-colors"
+      style={{
+        opacity: isDragging ? 0.4 : 1,
+        borderColor: isDragOver ? 'rgba(59,130,246,0.6)' : 'rgba(255,255,255,0.06)',
+        borderStyle: isDragOver ? 'dashed' : 'solid',
+      }}
+    >
       <div className="p-4">
         {/* Header */}
         <div className="flex items-start gap-3 mb-3">
+          <span
+            draggable
+            onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; onDragHandleStart?.() }}
+            onDragEnd={() => onDragHandleEnd?.()}
+            className="text-white/20 hover:text-white/55 mt-0.5 shrink-0 select-none"
+            style={{ cursor: 'grab', touchAction: 'none' }}
+            title="Drag to reorder"
+          >
+            <GripVertical size={14} />
+          </span>
           <span className="text-[11px] font-mono text-white/20 mt-0.5 shrink-0 w-7">
             {String(index + 1).padStart(3, '0')}
           </span>
@@ -360,10 +470,10 @@ function FieldLabel({ children }) {
   return <span className="text-[10px] text-white/40 uppercase tracking-wider">{children}</span>
 }
 
-function RevertButton({ onClick }) {
+function RevertButton({ onClick, label = 'Revert to generated' }) {
   return (
     <button onClick={onClick} className="flex items-center gap-1 text-[10px] text-white/30 hover:text-white/60 transition-colors">
-      <RotateCcw size={10} /> Revert to generated
+      <RotateCcw size={10} /> {label}
     </button>
   )
 }

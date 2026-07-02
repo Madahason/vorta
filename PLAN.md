@@ -3754,3 +3754,47 @@ Also verified manually:
 - [x] `calculateDocumentaryDuration` and the frame-overlap math untouched (verified via diff — only the narration volume multiplier changed)
 - [x] Client build clean — zero errors
 - [x] PLAN.md updated with FT-1 completion entry
+
+---
+
+### Phase FT-2 — Fine-Tune stage: scene reorder ✅ COMPLETE
+
+**What was built:**
+- `client/src/pages/wizard/FineTuneStep.jsx`:
+  - Native HTML5 drag-and-drop (no new dependency — `draggable`/`onDragStart`/`onDragOver`/`onDrop`; checked `client/package.json` first, nothing already installed for this). A `GripVertical` handle icon is the only `draggable` element on each card, so drags can only start from the handle, not from sliders/inputs/audio controls elsewhere on the card.
+  - Dragging a card reorders the local `scenes` array only — `scene_id` is never renumbered or reassigned, so `audio_path`/`image_path`/etc. stay attached to the correct scene through a reorder (asserted directly in the new backend test, see below)
+  - A header strip above the scene list now shows `{N} scenes · {X.X}s total (transitions included)`, computed via `calculateDocumentaryDuration` imported directly from `@remotion-compositions/compositions/Documentary` (the same Vite-aliased import `VideoPlayer.jsx` already uses) — this is the *real* render function, not a duplicate, so there is zero drift risk on the number the user actually sees. It recomputes via `useMemo` keyed on `scenes`, so it updates the instant a drag reorder lands (before the network request even resolves — see optimistic update below), satisfying "no stale duration shown after a reorder." The sticky mini-player `<VideoPlayer>` shown above every wizard step already computed its own scrubber length the same way, so it was already correct; this adds a visible, accurate number specifically inside the Fine-Tune step itself.
+  - Reorder commits optimistically: `applyOrder()` calls `onScenesChange(nextScenes)` immediately (updating the duration strip and the sticky mini-player before the network round-trip), then persists via the new endpoint; on failure it rolls the local state back to the previous order and shows an inline error
+  - "Revert order to generated" — a step-level (not per-card) control in the header strip, shown only when the current scene_id order differs from the snapshot. Reuses the exact FT-1 snapshot mechanism (`localStorage['vorta_finetune_snapshot']`), extended with a reserved `__order` key (scene_ids are numeric-string like `"001"`, so this can't collide) holding the array order captured the first time Fine-Tune is ever entered
+- `server/routes/scenes.js` — `POST /api/scenes/reorder`. Body: `{ projectId, order: [scene_id, ...] }`. Validates that `order` is exactly a permutation of the project's current scene_id set — checks length match, no duplicates within `order`, no missing ids, no unknown/extra ids — and returns `400` with a specific message (plus a `errors` array covering every violation found, not just the first) if any check fails; nothing is written to disk on a rejected request. Reuses the same `readScenesFile`/`writeScenesFile` helpers as the FT-1 `PATCH` route, so it transparently handles both on-disk `scenes.json` shapes. Registered under the same `/api/scenes` router already mounted in `server/index.js` — no new mount point needed.
+- `server/services/frameMath.js` — added `getTransition`, `sceneDur`, `calculateDocumentaryDuration`, and the `CUT_FRAMES`/`DIP_MID` constants, copied line-for-line from `remotion/src/compositions/Documentary.jsx` (same reasoning as the FT-1 constants: that file is ESM/JSX with Remotion-only dependencies and cannot be `require()`'d from the server). This is used only for the server-side unit test proving the frame-overlap deduction responds to reorder — it is **not** used by the reorder endpoint itself, which doesn't need duration math (it only validates and persists array order). The client uses the real function via the Vite alias instead of this duplicate, since the browser bundle can actually resolve Remotion's packages.
+
+**Guardrails respected:** FT-1's duration trim / transition override / audio mix override logic (`validateSceneUpdate`, the `PATCH /:sceneId` route, `FineTuneCard`'s commit/revert handlers) was not touched — confirmed via diff, only additions. No image swap, split-screen, or other FT-3+ feature was added.
+
+**Testing — commands run and results:**
+```
+$ node server/services/frameMath.test.js
+```
+22/22 assertions passed (15 from FT-1, unchanged, plus 7 new): FT-2 constants match Documentary.jsx (`CUT_FRAMES=1`, `DIP_MID=10`); `getTransition` matches Documentary.jsx exactly including the dip-downgrade-to-dissolve behavior on a too-short scene and the missing-`transition_out`-defaults-to-dissolve behavior; `sceneDur` matches including the `MIN_SCENE_FRAMES` floor and the missing-`duration_seconds`-defaults-to-5s behavior; and the key scenario — three 5s scenes with three different transition types (`dissolve`/`dip_black`/`cut`) computed at **430 frames** in their original order and **441 frames** once reordered (same three scenes, same scene_id set, only the array order changed) — proving the `(n-1)`-boundary frame-overlap deduction responds correctly to adjacency changes caused by a reorder.
+
+```
+$ node server/routes/scenes.test.js
+```
+24/24 assertions passed (17 from FT-1 + 1 wrapped-shape check, unchanged, plus 12 new reorder checks) against a real Express app with the scenes router mounted, driven over HTTP with `fetch`, using disposable fixture project directories (verified no `__test_ft1*` directories remain in `projects/` afterward): valid reorder returns 200 and the persisted `scenes.json` order matches the submission exactly; each scene's `audio_path`/`image_path`/`transition_out` travel with its `scene_id` through the reorder (not left behind by position); a reorder missing a scene_id is rejected (400, not persisted); a reorder with an unknown/extra scene_id is rejected (400, not persisted); a reorder with a duplicate scene_id within the submitted array is rejected (400, not persisted); empty/missing `order` is rejected (400); an unknown `projectId` returns 404; and reordering back to the original order (the same code path "Revert order" uses) succeeds.
+
+Also verified manually:
+- `npx eslint src/pages/wizard/FineTuneStep.jsx` — clean
+- `npx vite build` — clean production build; confirms the `calculateDocumentaryDuration` import from `@remotion-compositions/compositions/Documentary` resolves correctly in the client bundle
+- Against the live dev server (nodemon auto-restarted on the route file change): `curl -X POST /api/scenes/reorder` with an empty body correctly returned `400 {"error":"projectId required"}`
+
+**Production-readiness checklist:**
+- [x] Drag handle on each Fine-Tune scene card; drag-initiation is scoped to the handle only (verified: `draggable` is set only on the `GripVertical` icon, not the card or its inner controls)
+- [x] Reorder changes array position only — `scene_id` values never renumbered/reassigned (asserted directly in the reorder test)
+- [x] Total duration and the `(n-1)×12` frame-overlap deduction recompute after reorder (unit-tested with a concrete 430→441-frame reordering scenario)
+- [x] Fine-Tune step shows the recomputed total duration immediately after a reorder (optimistic local update before the network request resolves)
+- [x] `POST /api/scenes/reorder` implemented, registered, and rejects any scene_id-set mismatch (missing/extra/duplicate) with a clear `400` error, never silently accepting or crashing
+- [x] "Revert order to generated" restores the original array order from the FT-1 snapshot mechanism
+- [x] FT-1 duration trim / transition override / audio mix override logic untouched
+- [x] No image swap, split-screen, or other FT-3+ feature added
+- [x] Client build clean — zero errors
+- [x] PLAN.md updated with FT-2 completion entry
