@@ -493,11 +493,207 @@ async function runReorderAdjacencyTests() {
   }
 }
 
+// FT-5: PATCH /api/scenes/pacing — bulk action-cut apply.
+async function runPacingTests() {
+  cleanup()
+  fs.mkdirSync(testDir, { recursive: true })
+  const scenes = [
+    { scene_id: 'A', script_excerpt: 'A', shot_type: 'image', duration_seconds: 5,   transition_out: 'dissolve', audio_duration: 1.0 },
+    { scene_id: 'B', script_excerpt: 'B', shot_type: 'image', duration_seconds: 5.5, transition_out: 'dip_black', audio_duration: 2.0 },
+    { scene_id: 'C', script_excerpt: 'C', shot_type: 'image', duration_seconds: 4,   transition_out: 'dissolve', audio_duration: 1.5 },
+    { scene_id: 'D', script_excerpt: 'D (outside the range)', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', audio_duration: 3.0 },
+  ]
+  fs.writeFileSync(scenesPath, JSON.stringify(scenes, null, 2))
+
+  const app = express()
+  app.use(express.json())
+  app.use('/api/scenes', require('./scenes'))
+  const server = app.listen(0)
+  const port   = server.address().port
+  const base   = `http://localhost:${port}/api/scenes`
+
+  const applyPacing = (sceneIds, pacing = 'action') => fetch(`${base}/pacing`, {
+    method:  'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ projectId: TEST_PROJECT, scene_ids: sceneIds, pacing }),
+  })
+
+  try {
+    // 1. Valid range [A, B, C] — confirm transition_out, duration_seconds, and pacing all
+    // update correctly across the range, and D (outside the range) is left untouched.
+    let res  = await applyPacing(['A', 'B', 'C'])
+    let body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    assert.strictEqual(body.scenes.length, 3)
+
+    const byId = Object.fromEntries(body.scenes.map(s => [s.scene_id, s]))
+    for (const id of ['A', 'B', 'C']) {
+      assert.strictEqual(byId[id].pacing, 'action', `scene ${id} pacing must be "action"`)
+      assert.strictEqual(byId[id].transition_out, 'cut', `scene ${id} transition_out must be "cut"`)
+    }
+    // A: audio 1.0s -> floor 1.8s (target 1.3s loses to the floor)
+    assert.strictEqual(byId.A.duration_seconds, 1.8)
+    // B: audio 2.0s -> floor 2.8s
+    assert.strictEqual(byId.B.duration_seconds, 2.8)
+    // C: audio 1.5s -> floor 2.3s
+    assert.strictEqual(byId.C.duration_seconds, 2.3)
+    console.log('PASS: valid range updates transition_out, duration_seconds, and pacing correctly for every scene in the range')
+
+    let onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    const diskD = onDisk.find(s => s.scene_id === 'D')
+    assert.strictEqual(diskD.pacing, undefined, 'scene D (outside the range) must not get a pacing field')
+    assert.strictEqual(diskD.transition_out, 'dissolve', 'scene D (outside the range) transition_out must be untouched')
+    assert.strictEqual(diskD.duration_seconds, 5, 'scene D (outside the range) duration_seconds must be untouched')
+    console.log('PASS: scenes outside the selected range are completely untouched')
+
+    // 2. Duration clamp never goes below the FT-1 hard floor, even under action-cut's
+    // tighter buffer — already unit-tested in frameMath.test.js; confirm end-to-end here too.
+    assert.ok(byId.A.duration_seconds >= 1.0 + 0.8, 'A must never go below audio_duration + 0.8s hard floor')
+    console.log('PASS: end-to-end duration clamp respects the FT-1 hard floor (verified via the actual persisted value)')
+
+    // 3. Invalid pacing value on this endpoint — rejected (only "action" implemented)
+    res  = await applyPacing(['A'], 'montage')
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/pacing must be 'action'/.test(body.error))
+    console.log('PASS: pacing values other than "action" are rejected on this endpoint (400)')
+
+    // 4. Empty / missing scene_ids
+    res = await applyPacing([])
+    assert.strictEqual(res.status, 400)
+    res = await fetch(`${base}/pacing`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: TEST_PROJECT, pacing: 'action' }),
+    })
+    assert.strictEqual(res.status, 400)
+    console.log('PASS: empty/missing scene_ids rejected (400)')
+
+    // 5. Unknown scene_id in the array — rejected, nothing applied
+    res  = await applyPacing(['A', 'ZZZ'])
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/Unknown scene_id/.test(body.error))
+    console.log('PASS: an unknown scene_id in the array is rejected (400)')
+
+    // 6. Unknown project / missing projectId
+    res = await fetch(`${base}/pacing`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: '__no_such_project__', scene_ids: ['A'], pacing: 'action' }),
+    })
+    assert.strictEqual(res.status, 404)
+    res = await fetch(`${base}/pacing`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scene_ids: ['A'], pacing: 'action' }),
+    })
+    assert.strictEqual(res.status, 400)
+    console.log('PASS: unknown projectId (404) and missing projectId (400) handled')
+
+    console.log('\nAll pacing checks passed.')
+  } finally {
+    server.close()
+    cleanup()
+  }
+}
+
+// FT-5: interaction with an existing manual J/L-cut boundary offset (FT-4), and revert.
+async function runPacingBoundaryAndRevertTests() {
+  cleanup()
+  fs.mkdirSync(testDir, { recursive: true })
+  const scenes = [
+    // A->B has a manual boundary offset, fully inside the action-cut range [A, B] — must reset.
+    { scene_id: 'A', script_excerpt: 'A', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', audio_duration: 1.0, is_manual_offset: true, boundary_partner_scene_id: 'B', lcut_offset: 0.4 },
+    // B->C has a manual boundary offset where only B is in the range [A, B] — C is outside —
+    // must NOT reset (edge of the range).
+    { scene_id: 'B', script_excerpt: 'B', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', audio_duration: 2.0, is_manual_offset: true, boundary_partner_scene_id: 'C', jcut_offset: 0.2 },
+    { scene_id: 'C', script_excerpt: 'C', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', audio_duration: 1.0 },
+  ]
+  fs.writeFileSync(scenesPath, JSON.stringify(scenes, null, 2))
+
+  const app = express()
+  app.use(express.json())
+  app.use('/api/scenes', require('./scenes'))
+  const server = app.listen(0)
+  const port   = server.address().port
+  const base   = `http://localhost:${port}/api/scenes`
+
+  try {
+    // 1. Apply action cut to [A, B] only (not C)
+    let res  = await fetch(`${base}/pacing`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ projectId: TEST_PROJECT, scene_ids: ['A', 'B'], pacing: 'action' }),
+    })
+    let body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+
+    let onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    const diskA = onDisk.find(s => s.scene_id === 'A')
+    const diskB = onDisk.find(s => s.scene_id === 'B')
+
+    // A->B boundary: both sides in range — reset, not silently ignored or left broken
+    assert.strictEqual(diskA.is_manual_offset, false, 'A->B boundary is entirely inside the action-cut range — must be reset, not left as true')
+    assert.strictEqual(diskA.lcut_offset, 0.4, 'the numeric offset value itself is left in place — only is_manual_offset flips, matching the FT-4 revert convention')
+    console.log('PASS: a manual boundary offset entirely within the action-cut range is reset (is_manual_offset -> false), not silently ignored or left in a broken state')
+
+    // B->C boundary: B is in range, C is not — edge of the range — must NOT reset
+    assert.strictEqual(diskB.is_manual_offset, true, 'B->C boundary has C outside the range — must remain untouched')
+    console.log('PASS: a manual boundary offset at the EDGE of the range (partner scene outside it) is left untouched')
+
+    // 2. Revert restores the exact pre-action-cut values for every scene in the range.
+    // This mirrors exactly how the client's "Revert to generated" button works: PATCH
+    // /:sceneId with the Fine-Tune snapshot's original duration_seconds/transition_out/pacing.
+    const originalA = { duration_seconds: 5, transition_out: 'dissolve', pacing: 'standard' }
+    const originalB = { duration_seconds: 5, transition_out: 'dissolve', pacing: 'standard' }
+
+    for (const [sceneId, original] of [['A', originalA], ['B', originalB]]) {
+      res  = await fetch(`${base}/${sceneId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId: TEST_PROJECT, ...original }),
+      })
+      body = await res.json()
+      assert.strictEqual(res.status, 200, `revert of scene ${sceneId} expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+      assert.strictEqual(body.scene.duration_seconds, original.duration_seconds)
+      assert.strictEqual(body.scene.transition_out, original.transition_out)
+      assert.strictEqual(body.scene.pacing, 'standard')
+    }
+    console.log('PASS: revert (via PATCH /:sceneId) restores duration_seconds, transition_out, and pacing to their pre-action-cut values for every scene in the range')
+
+    onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    const revertedA = onDisk.find(s => s.scene_id === 'A')
+    const revertedB = onDisk.find(s => s.scene_id === 'B')
+    assert.strictEqual(revertedA.pacing, 'standard')
+    assert.strictEqual(revertedA.duration_seconds, 5)
+    assert.strictEqual(revertedA.transition_out, 'dissolve')
+    assert.strictEqual(revertedB.pacing, 'standard')
+    assert.strictEqual(revertedB.duration_seconds, 5)
+    assert.strictEqual(revertedB.transition_out, 'dissolve')
+    console.log('PASS: reverted values are persisted to scenes.json for every scene in the range')
+
+    // 3. Invalid pacing value rejected by the generic per-scene validator too
+    res  = await fetch(`${base}/A`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: TEST_PROJECT, pacing: 'not-a-real-value' }),
+    })
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/pacing must be one of/.test(body.error))
+    console.log('PASS: an invalid pacing value is rejected by the generic per-scene validator (400)')
+
+    console.log('\nAll pacing-boundary-interaction and revert checks passed.')
+  } finally {
+    server.close()
+    cleanup()
+  }
+}
+
 run()
   .then(runWrappedShapeTest)
   .then(runReorderTests)
   .then(runBoundaryTests)
   .then(runReorderAdjacencyTests)
+  .then(runPacingTests)
+  .then(runPacingBoundaryAndRevertTests)
   .catch(err => {
     console.error('TEST FAILURE:', err)
     cleanup()

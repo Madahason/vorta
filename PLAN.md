@@ -3905,3 +3905,52 @@ Also verified manually:
 - [x] No action cut, match cut, split-screen, cutaway, or montage flag added
 - [x] Client build clean — zero errors
 - [x] PLAN.md updated with FT-4 completion entry
+
+---
+
+### Phase FT-5 — Fine-Tune stage: action cut pacing preset ✅ COMPLETE
+
+**What was built:**
+- One new optional scene field: `pacing` (`'standard' | 'action' | 'montage'`, default `'standard'`) — this phase only ever sets `'action'`.
+- `client/src/pages/wizard/FineTuneStep.jsx`:
+  - A "Select Scenes" toggle in the step header enters multi-select mode, showing a checkbox next to each card. Plain click selects exactly one scene (and sets it as the range anchor); shift-click extends a contiguous range from that anchor to the clicked scene — classic file-explorer range select, which inherently guarantees contiguity with no gap-filling or rejection logic needed.
+  - Whenever the selection is non-empty, a toolbar appears with the scene count, an "Apply Action Cut" button, and an up-front warning listing how many boundaries *inside* the range have a manual FT-4 J/L-cut offset that will be reset (computed client-side by walking the same array-adjacency check the server uses).
+  - Each `FineTuneCard` gets a "Pacing" row (shown only when pacing isn't `'standard'`) with an "⚡ Action Cut" badge and a "Revert to generated" button that restores `pacing`/`transition_out`/`duration_seconds` together from the FT-1 snapshot mechanism (extended this phase to also capture `pacing` at first-visit time) through the existing `PATCH /:sceneId` endpoint — no new revert machinery needed.
+- `server/routes/scenes.js` — `PATCH /api/scenes/pacing`. Body: `{ projectId, scene_ids: [...], pacing: 'action' }` (only `'action'` is accepted this phase — `'standard'`/`'montage'` are rejected with a clear message; reverting to standard goes through `PATCH /:sceneId` instead, restoring each scene's own snapshot). For every scene in `scene_ids`: sets `pacing: 'action'`, `transition_out: 'cut'`, and a clamped `duration_seconds` (see below). Rejects (doesn't silently skip) if any `scene_id` is unknown. **Registered before `PATCH /:sceneId`** — otherwise Express would match `/pacing` as a `:sceneId` value and this route would never be reached (same param-collision class as `library.js`'s `/upload` vs `/:clip_id`, and FT-4's `/pacing` vs `/:sceneId/boundary`).
+- `PATCH /:sceneId` (FT-1's endpoint) gained one additive optional field, `pacing`, used only by the revert path described above — this does not change duration_seconds/transition_out/audio_mix_override validation at all; the full FT-1/FT-2/FT-4 test suite was re-run after this change and every existing assertion still passes unmodified.
+- `server/services/frameMath.js`:
+  - `clampDurationForActionCut(currentDurationSeconds, audioDuration)` — computes a tighter target (`audio_duration + 0.3s`, vs. the standard 0.8s buffer) and clamps the current duration down toward it, but the result is then floored at `minDurationSeconds(audioDuration)` (FT-1's existing, untouched hard floor) — which always wins mathematically since 0.3s < 0.8s. The practical effect: any scene with a duration more generous than the FT-1 floor shrinks down to exactly that floor; the 0.3s number is a real step in the computation, it's just subsumed by the floor whenever the scene already had a legal duration, which is precisely what the task's explicit "never below the same hard floor from FT-1, regardless of action-cut clamping" requirement demands.
+  - `resetActionCutBoundaryOffsets(scenesInOrder, affectedSceneIds)` — hard cuts don't bleed audio, so any manual FT-4 boundary offset where **both** the outgoing scene and its actual next-in-array neighbor are in the affected set gets `is_manual_offset` reset to `false` (with a `console.warn`, mirroring FT-4's own reset-and-warn convention) rather than silently ignored or left pointing at a transition that no longer makes sense. Boundaries at the *edge* of the range (only one side selected) are left untouched, since only the scene actually being hard-cut had anything change.
+
+**Guardrail interaction handled explicitly:** action cut does not touch `audio_cut`/`audio_overlap_seconds` (the pre-existing Claude-set automatic bleed fields) at all — only the FT-4 *manual override flag* (`is_manual_offset`) is reset, and only for boundaries fully inside the selected range. FT-1/FT-2/FT-3/FT-4 logic itself is otherwise untouched (confirmed via diff) — no match cut, split-screen, cutaway, or montage flag was added.
+
+**Testing — commands run and results:**
+```
+$ node server/services/frameMath.test.js
+```
+46/46 assertions passed (34 from FT-1/FT-2/FT-4 unchanged, plus 12 new): `ACTION_CUT_BUFFER_SECONDS`/`PACING_VALUES` correct; `clampDurationForActionCut` proves the FT-1 hard floor wins over the tighter 0.3s target on a generous-duration scene (5s duration, 1.0s audio → floor 1.8s, not the 1.3s target), leaves an already-at-floor duration unchanged, treats missing `audio_duration` as 0 for the floor calculation, stays floor-dominated even on an atypical low starting duration, and never exceeds `MAX_SCENE_SECONDS`; `resetActionCutBoundaryOffsets` resets a manual offset when both sides of its boundary are in the range, but explicitly leaves a boundary untouched when only one side is in the range (edge of the range) — and is a no-op when nothing is manually set.
+
+```
+$ node server/routes/scenes.test.js
+```
+57/57 assertions passed (41 from FT-1/FT-2/FT-4 unchanged, plus 16 new — 7 pacing-endpoint + 5 boundary-interaction/revert + others): a valid 3-scene range updates `transition_out`, `duration_seconds`, and `pacing` correctly for every scene in it (with the exact expected clamped durations — 1.8s/2.8s/2.3s for three scenes with different `audio_duration`s), while a 4th scene outside the range is completely untouched on disk; the end-to-end persisted duration is verified `>= audio_duration + 0.8s`; `pacing` values other than `'action'` are rejected; empty/missing `scene_ids`, an unknown `scene_id` in the array, unknown `projectId`, and missing `projectId` are all handled. For the boundary interaction: a manual offset entirely inside the action-cut range is reset (`is_manual_offset → false`, numeric offset values left in place) — not silently ignored or left broken — while a manual offset at the edge of the range (its partner scene outside the selection) is left untouched. For revert: `PATCH /:sceneId` restores `duration_seconds`, `transition_out`, and `pacing` to their exact pre-action-cut values for every scene that was in the range, verified both in the response and by re-reading `scenes.json` from disk.
+
+Also verified manually:
+- `node -e "require(...)"` on `scenes.js` — loads without error
+- `npx eslint src/pages/wizard/FineTuneStep.jsx` — clean
+- `npx vite build` — clean production build
+- Re-ran the full FT-1/FT-2/FT-3/FT-4 test suites (`frameMath.test.js`, `scenes.test.js`, `imageSwap.test.js`, `images.test.js`, `higgsfieldRegenerate.test.js`) after all FT-5 changes — all still pass, confirming the additive `pacing` field on `PATCH /:sceneId` didn't disturb anything
+- Against the live dev server (nodemon auto-restarted on the route file change): `curl -X PATCH /api/scenes/pacing` with an empty body correctly returned `400 {"error":"projectId required"}` — confirming it actually matched the new `/pacing` route and not `/:sceneId` with `sceneId="pacing"`
+
+**Production-readiness checklist:**
+- [x] Multi-select (checkbox + shift-click contiguous range) added to the Fine-Tune scene grid
+- [x] "Apply Action Cut" button appears when a range is selected
+- [x] `pacing` field added, defaulting to `'standard'`; this phase only sets `'action'`
+- [x] Applying action cut sets `pacing: 'action'`, `transition_out: 'cut'`, and clamps `duration_seconds` toward the tighter 0.3s buffer, never below the FT-1 hard floor (audio_duration + 0.8s) — verified end-to-end
+- [x] `PATCH /api/scenes/pacing` implemented, registered before `/:sceneId` to avoid the Express param collision
+- [x] A manual FT-4 boundary offset fully inside the range is reset (not silently overridden or left broken); one at the edge of the range is left alone
+- [x] "Revert to generated" restores `pacing`/`transition_out`/`duration_seconds` together from the Fine-Tune snapshot, per scene, for every scene that was in the affected range
+- [x] FT-1/FT-2/FT-3/FT-4 logic untouched beyond the one additive `pacing` field on `PATCH /:sceneId`
+- [x] No match cut, split-screen, cutaway, or montage flag added
+- [x] Client build clean — zero errors
+- [x] PLAN.md updated with FT-5 completion entry

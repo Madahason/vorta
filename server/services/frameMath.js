@@ -21,6 +21,7 @@ const MAX_SCENE_SECONDS        = 8.0
 const NARRATION_BUFFER_SECONDS = 0.8
 
 const VALID_TRANSITIONS = ['dissolve', 'dip_black', 'dip_white', 'cut']
+const PACING_VALUES     = ['standard', 'action', 'montage']
 
 function minDurationSeconds(audioDuration) {
   const buffer = Number(audioDuration) > 0 ? Number(audioDuration) : 0
@@ -89,6 +90,13 @@ function validateSceneUpdate(existingScene, updates) {
         }
       }
     }
+  }
+
+  // FT-5: only used by the "revert to generated" path (which restores pacing alongside
+  // transition_out/duration_seconds through this same endpoint) — the bulk apply operation
+  // itself goes through PATCH /api/scenes/pacing, not here.
+  if (updates.pacing !== undefined && !PACING_VALUES.includes(updates.pacing)) {
+    errors.push(`pacing must be one of ${PACING_VALUES.join(', ')}`)
   }
 
   return errors
@@ -228,6 +236,45 @@ function resetBrokenBoundaryAdjacency(scenesInNewOrder) {
   })
 }
 
+// ── FT-5: action cut pacing preset ──────────────────────────────────────────
+// Action cut tightens duration toward a smaller buffer (0.3s) than the standard 0.8s
+// narration-sync buffer, but must never go below FT-1's existing hard floor
+// (minDurationSeconds — audio_duration + 0.8s). Since 0.3s < 0.8s, the floor mathematically
+// always wins whenever the scene already had a legal (FT-1-validated) duration — the
+// practical effect is "shrink down to the tightest legal duration," which is exactly the
+// tighter pacing this preset is for. The 0.3s number is real in the computation; it's just
+// subsumed by the floor in the common case, per the task's explicit requirement that the
+// hard floor must never be violated "regardless of action-cut clamping."
+
+const ACTION_CUT_BUFFER_SECONDS = 0.3
+
+function clampDurationForActionCut(currentDurationSeconds, audioDuration) {
+  const tightTarget = (Number(audioDuration) > 0 ? Number(audioDuration) : 0) + ACTION_CUT_BUFFER_SECONDS
+  const floor       = minDurationSeconds(audioDuration) // FT-1's hard floor — always wins if higher
+  const clamped     = Math.min(Number(currentDurationSeconds) || 0, tightTarget)
+  return Math.min(Math.max(clamped, floor), MAX_SCENE_SECONDS)
+}
+
+// Hard cuts don't bleed audio — any manual FT-4 boundary offset entirely WITHIN the
+// action-cut range (both the outgoing scene and its actual next-in-array neighbor are in
+// the affected set) is reset rather than silently left in place or silently ignored.
+// Boundaries at the EDGE of the range (one side outside it) are left untouched — only the
+// scene actually being cut hard had its offset reset. Returns a new array.
+function resetActionCutBoundaryOffsets(scenesInOrder, affectedSceneIds) {
+  const idSet = new Set(affectedSceneIds.map(String))
+  return scenesInOrder.map((scene, index) => {
+    if (!scene.is_manual_offset) return scene
+    if (!idSet.has(String(scene.scene_id))) return scene
+    const next = scenesInOrder[index + 1]
+    if (!next || !idSet.has(String(next.scene_id))) return scene
+    console.warn(
+      `[scenes] scene ${scene.scene_id}: action cut applied a hard 'cut' transition within its ` +
+      `range — resetting is_manual_offset to false (hard cuts don't bleed audio)`
+    )
+    return { ...scene, is_manual_offset: false }
+  })
+}
+
 module.exports = {
   FPS,
   TRANSITION_FRAMES,
@@ -239,7 +286,9 @@ module.exports = {
   MAX_SCENE_SECONDS,
   NARRATION_BUFFER_SECONDS,
   BOUNDARY_SAFETY_MARGIN_SECONDS,
+  ACTION_CUT_BUFFER_SECONDS,
   VALID_TRANSITIONS,
+  PACING_VALUES,
   minDurationSeconds,
   canUseDipTransition,
   isValidTransition,
@@ -251,4 +300,6 @@ module.exports = {
   validateBoundaryUpdate,
   resolveManualOverlapSeconds,
   resetBrokenBoundaryAdjacency,
+  clampDurationForActionCut,
+  resetActionCutBoundaryOffsets,
 }

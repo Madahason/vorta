@@ -2,15 +2,69 @@ const express = require('express')
 const router  = express.Router()
 const {
   validateSceneUpdate, validateBoundaryUpdate, resetBrokenBoundaryAdjacency,
+  clampDurationForActionCut, resetActionCutBoundaryOffsets,
 } = require('../services/frameMath')
 const { readScenesFile, writeScenesFile } = require('../services/scenesFile')
 
+// PATCH /api/scenes/pacing
+// Body: { projectId, scene_ids: [...], pacing: 'action' }
+// FT-5 bulk action-cut apply. Must be registered BEFORE PATCH /:sceneId — otherwise Express
+// would match "pacing" as a :sceneId value and this route would never be reached (same
+// param-collision issue noted in library.js for its /upload vs /:clip_id routes).
+// This phase only implements the 'action' preset (montage/standard-via-this-endpoint are
+// out of scope — "standard" revert goes through PATCH /:sceneId instead, restoring each
+// scene's own Fine-Tune snapshot values).
+router.patch('/pacing', (req, res) => {
+  const { projectId, scene_ids, pacing } = req.body || {}
+
+  if (!projectId) return res.status(400).json({ error: 'projectId required' })
+  if (!Array.isArray(scene_ids) || scene_ids.length === 0) {
+    return res.status(400).json({ error: 'scene_ids must be a non-empty array' })
+  }
+  if (pacing !== 'action') {
+    return res.status(400).json({ error: "pacing must be 'action' — this phase only implements the action-cut preset" })
+  }
+
+  const file = readScenesFile(projectId)
+  if (!file) return res.status(404).json({ error: `No scenes.json found for project ${projectId}` })
+
+  const idSet      = new Set(scene_ids.map(String))
+  const currentIds = new Set(file.scenes.map(s => String(s.scene_id)))
+  const unknown    = [...idSet].filter(id => !currentIds.has(id))
+  if (unknown.length) {
+    return res.status(400).json({ error: `Unknown scene_id(s): ${unknown.join(', ')}` })
+  }
+
+  let updatedScenes = file.scenes.map(scene => {
+    if (!idSet.has(String(scene.scene_id))) return scene
+    return {
+      ...scene,
+      pacing:           'action',
+      transition_out:   'cut',
+      duration_seconds: clampDurationForActionCut(scene.duration_seconds, scene.audio_duration),
+    }
+  })
+
+  // Hard cuts don't bleed audio — reset any manual FT-4 boundary offset entirely within
+  // this range rather than silently leaving it in place or silently discarding the request.
+  updatedScenes = resetActionCutBoundaryOffsets(updatedScenes, [...idSet])
+
+  file.scenes = updatedScenes
+  writeScenesFile(file)
+
+  const affected = file.scenes.filter(s => idSet.has(String(s.scene_id)))
+  res.json({ scenes: affected })
+})
+
 // PATCH /api/scenes/:sceneId
-// Body: { projectId, duration_seconds?, transition_out?, audio_mix_override? }
+// Body: { projectId, duration_seconds?, transition_out?, audio_mix_override?, pacing? }
 // audio_mix_override: null clears any existing override (used by "Revert to generated").
+// pacing here is only ever used by the FT-5 "revert action cut" path, which restores
+// pacing/transition_out/duration_seconds together from the Fine-Tune snapshot in one call —
+// the bulk apply operation itself is PATCH /pacing above, not this endpoint.
 router.patch('/:sceneId', (req, res) => {
   const { sceneId } = req.params
-  const { projectId, duration_seconds, transition_out, audio_mix_override } = req.body || {}
+  const { projectId, duration_seconds, transition_out, audio_mix_override, pacing } = req.body || {}
 
   if (!projectId) return res.status(400).json({ error: 'projectId required' })
 
@@ -18,9 +72,10 @@ router.patch('/:sceneId', (req, res) => {
   if (duration_seconds   !== undefined) updates.duration_seconds   = duration_seconds
   if (transition_out     !== undefined) updates.transition_out     = transition_out
   if (audio_mix_override !== undefined) updates.audio_mix_override = audio_mix_override
+  if (pacing              !== undefined) updates.pacing             = pacing
 
   if (Object.keys(updates).length === 0) {
-    return res.status(400).json({ error: 'No updatable fields provided (duration_seconds, transition_out, audio_mix_override)' })
+    return res.status(400).json({ error: 'No updatable fields provided (duration_seconds, transition_out, audio_mix_override, pacing)' })
   }
 
   const file = readScenesFile(projectId)
@@ -37,6 +92,7 @@ router.patch('/:sceneId', (req, res) => {
   const updatedScene = { ...existingScene }
   if (updates.duration_seconds !== undefined) updatedScene.duration_seconds = updates.duration_seconds
   if (updates.transition_out   !== undefined) updatedScene.transition_out   = updates.transition_out
+  if (updates.pacing            !== undefined) updatedScene.pacing           = updates.pacing
 
   if (updates.audio_mix_override !== undefined) {
     if (updates.audio_mix_override === null) {

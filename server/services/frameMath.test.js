@@ -4,10 +4,11 @@ const assert = require('assert')
 const {
   FPS, DIP_FADE, DIP_MID, MIN_SCENE_FRAMES, TRANSITION_FRAMES, CUT_FRAMES,
   MAX_SCENE_SECONDS, NARRATION_BUFFER_SECONDS, BOUNDARY_SAFETY_MARGIN_SECONDS,
+  ACTION_CUT_BUFFER_SECONDS, PACING_VALUES,
   minDurationSeconds, canUseDipTransition, isValidTransition, validateSceneUpdate,
   getTransition, sceneDur, calculateDocumentaryDuration,
   maxBoundaryOffsetSeconds, validateBoundaryUpdate, resolveManualOverlapSeconds,
-  resetBrokenBoundaryAdjacency,
+  resetBrokenBoundaryAdjacency, clampDurationForActionCut, resetActionCutBoundaryOffsets,
 } = require('./frameMath')
 
 // Constants must match remotion/src/compositions/Documentary.jsx exactly:
@@ -250,5 +251,58 @@ const scenesWithNoManualOffsets = [{ scene_id: 'A' }, { scene_id: 'B' }]
 const unchanged = resetBrokenBoundaryAdjacency(scenesWithNoManualOffsets)
 assert.deepStrictEqual(unchanged, scenesWithNoManualOffsets, 'scenes with no manual offset are untouched')
 console.log('PASS: resetBrokenBoundaryAdjacency is a no-op when nothing is manually overridden')
+
+// ── FT-5: action cut pacing preset ───────────────────────────────────────────
+assert.strictEqual(ACTION_CUT_BUFFER_SECONDS, 0.3)
+assert.deepStrictEqual(PACING_VALUES, ['standard', 'action', 'montage'])
+console.log('PASS: FT-5 constants defined')
+
+// clampDurationForActionCut — the hard floor from FT-1 (audio_duration + 0.8s) must always
+// win over the tighter 0.3s action-cut target, per the task's explicit requirement.
+// Scene with a generous duration (5s) and short narration (1s): floor = 1.8s, target = 1.3s.
+// Floor must win — result must be 1.8s, never 1.3s.
+let result = clampDurationForActionCut(5, 1.0)
+assert.strictEqual(result, 1.8, `expected the FT-1 hard floor (1.8s) to win over the tighter 0.3s target, got ${result}`)
+console.log('PASS: clampDurationForActionCut never goes below the FT-1 hard floor, even though it computes a tighter 0.3s target internally')
+
+// Scene whose duration was already exactly at the floor — must stay there, not shrink further
+result = clampDurationForActionCut(1.8, 1.0)
+assert.strictEqual(result, 1.8)
+console.log('PASS: clampDurationForActionCut leaves a duration already at the floor unchanged')
+
+// Scene with no narration yet (audio_duration missing) — floor is still 0.8s (buffer alone)
+result = clampDurationForActionCut(5, undefined)
+assert.strictEqual(result, 0.8)
+console.log('PASS: clampDurationForActionCut treats a missing audio_duration as 0 for the floor calculation (0.8s buffer alone)')
+
+// Never increases duration, even if current is somehow already below the target
+result = clampDurationForActionCut(1.0, 5.0) // current (1.0) is below floor(5.8) - shouldn't happen per FT-1 invariants, but must not blow up or increase past a sane bound
+assert.strictEqual(result, 5.8, 'floor still wins even on an already-invalid low current duration')
+console.log('PASS: clampDurationForActionCut is dominated by the floor even on an atypical low current duration')
+
+// Never exceeds MAX_SCENE_SECONDS (defensive — action cut always shrinks, but still)
+result = clampDurationForActionCut(8, 100)
+assert.strictEqual(result, MAX_SCENE_SECONDS)
+console.log('PASS: clampDurationForActionCut never exceeds MAX_SCENE_SECONDS')
+
+// resetActionCutBoundaryOffsets
+const rangeIntact = [
+  { scene_id: 'A', is_manual_offset: true, boundary_partner_scene_id: 'B' },
+  { scene_id: 'B' },
+  { scene_id: 'C' },
+]
+// A->B boundary is fully inside the affected range [A, B] — must reset
+let afterActionCut = resetActionCutBoundaryOffsets(rangeIntact, ['A', 'B'])
+assert.strictEqual(afterActionCut[0].is_manual_offset, false, 'A->B boundary is entirely within the action-cut range — must reset')
+console.log('PASS: resetActionCutBoundaryOffsets resets a manual offset when both sides of its boundary are in the range')
+
+// A->B boundary has A in range but B (the partner) NOT in range — edge of the range, left alone
+afterActionCut = resetActionCutBoundaryOffsets(rangeIntact, ['A'])
+assert.strictEqual(afterActionCut[0].is_manual_offset, true, 'only A is in range — B (its boundary partner) is not — must NOT reset (edge of range, not fully inside it)')
+console.log('PASS: resetActionCutBoundaryOffsets leaves a boundary untouched when only one side is in the range (edge of the range)')
+
+const rangeNoManual = [{ scene_id: 'A' }, { scene_id: 'B' }]
+assert.deepStrictEqual(resetActionCutBoundaryOffsets(rangeNoManual, ['A', 'B']), rangeNoManual, 'no-op when nothing is manually overridden')
+console.log('PASS: resetActionCutBoundaryOffsets is a no-op when nothing is manually overridden')
 
 console.log('\nAll frameMath.test.js checks passed.')

@@ -67,6 +67,7 @@ export function FineTuneStep({
           duration_seconds:   s.duration_seconds,
           transition_out:     s.transition_out || 'dissolve',
           audio_mix_override: s.audio_mix_override || null,
+          pacing:             s.pacing || 'standard',
         }
         changed = true
       }
@@ -130,6 +131,70 @@ export function FineTuneStep({
     applyOrder(restored)
   }
 
+  // ── FT-5: action cut pacing preset — multi-select + bulk apply ─────────────
+  const [selectMode,   setSelectMode]   = useState(false)
+  const [selectedIds,  setSelectedIds]  = useState(() => new Set())
+  const [anchorIndex,  setAnchorIndex]  = useState(null)
+  const [pacingSaving, setPacingSaving] = useState(false)
+  const [pacingError,  setPacingError]  = useState(null)
+
+  const toggleSelectMode = () => {
+    setSelectMode(v => !v)
+    setSelectedIds(new Set())
+    setAnchorIndex(null)
+    setPacingError(null)
+  }
+
+  // Plain click selects just that scene; shift-click extends a contiguous range from the
+  // last plain-clicked anchor — classic file-explorer range select, which inherently
+  // guarantees contiguity without needing to validate or auto-fill gaps.
+  const handleSelectClick = (shiftKey, index, sceneId) => {
+    if (shiftKey && anchorIndex !== null) {
+      const lo = Math.min(anchorIndex, index)
+      const hi = Math.max(anchorIndex, index)
+      setSelectedIds(new Set(scenes.slice(lo, hi + 1).map(s => s.scene_id)))
+      return
+    }
+    setSelectedIds(prev => {
+      if (prev.size === 1 && prev.has(sceneId)) {
+        setAnchorIndex(null)
+        return new Set()
+      }
+      return new Set([sceneId])
+    })
+    setAnchorIndex(index)
+  }
+
+  // Boundaries entirely inside the current selection that have a manual FT-4 offset —
+  // shown as an up-front warning before the user commits, since applying action cut will
+  // reset them (hard cuts don't bleed audio).
+  const inRangeManualBoundaries = scenes.filter((s, idx) => {
+    if (!selectedIds.has(s.scene_id) || !s.is_manual_offset) return false
+    const next = scenes[idx + 1]
+    return next && selectedIds.has(next.scene_id)
+  })
+
+  const applyActionCut = async () => {
+    setPacingSaving(true); setPacingError(null)
+    try {
+      const res = await fetch(`${SERVER_URL}/api/scenes/pacing`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId, scene_ids: [...selectedIds], pacing: 'action' }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Action cut failed')
+      const byId = new Map(data.scenes.map(s => [s.scene_id, s]))
+      onScenesChange(scenes.map(s => byId.has(s.scene_id) ? { ...s, ...byId.get(s.scene_id) } : s))
+      setSelectedIds(new Set())
+      setAnchorIndex(null)
+    } catch (err) {
+      setPacingError(err.message)
+    } finally {
+      setPacingSaving(false)
+    }
+  }
+
   return (
     <div style={{ padding: '24px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
@@ -140,6 +205,14 @@ export function FineTuneStep({
           </p>
         </div>
         <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
+          {scenes.length > 1 && (
+            <button
+              onClick={toggleSelectMode}
+              className={selectMode ? 'vorta-btn vorta-btn-primary' : 'vorta-btn vorta-btn-ghost'}
+            >
+              {selectMode ? 'Done Selecting' : 'Select Scenes'}
+            </button>
+          )}
           <button onClick={() => wizard.goBack()} className="vorta-btn vorta-btn-ghost">← Back</button>
           <button
             onClick={() => { wizard.markComplete('finetune'); wizard.goNext() }}
@@ -174,6 +247,37 @@ export function FineTuneStep({
         </div>
       )}
 
+      {selectMode && selectedIds.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+          marginBottom: 16, padding: '10px 14px',
+          background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 8,
+        }}>
+          <div>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)' }}>
+              {selectedIds.size} scene{selectedIds.size !== 1 ? 's' : ''} selected
+            </div>
+            {inRangeManualBoundaries.length > 0 && (
+              <div style={{ fontSize: 10, color: 'rgba(251,191,36,0.8)', marginTop: 2 }}>
+                {inRangeManualBoundaries.length} manual J/L-cut boundary offset{inRangeManualBoundaries.length !== 1 ? 's' : ''} in this range will be reset — hard cuts don't bleed audio.
+              </div>
+            )}
+            {pacingError && (
+              <div style={{ fontSize: 10, color: 'rgba(248,113,113,0.85)', marginTop: 2 }}>{pacingError}</div>
+            )}
+          </div>
+          <button
+            onClick={applyActionCut}
+            disabled={pacingSaving}
+            className="vorta-btn vorta-btn-primary"
+            style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}
+          >
+            {pacingSaving && <Loader2 size={12} className="animate-spin" />}
+            Apply Action Cut
+          </button>
+        </div>
+      )}
+
       {scenes.length === 0 ? (
         <div style={{ textAlign: 'center', padding: 60, color: 'rgba(255,255,255,0.25)' }}>
           No scenes yet — go back and analyze a script first.
@@ -183,7 +287,22 @@ export function FineTuneStep({
           {scenes.map((scene, i) => {
             const nextScene = scenes[i + 1] || null
             return (
-              <div key={scene.scene_id}>
+              <div key={scene.scene_id} style={{ display: 'flex', alignItems: 'stretch', gap: 8 }}>
+                {selectMode && (
+                  <label
+                    className="shrink-0 flex items-start pt-4 pl-1 cursor-pointer select-none"
+                    title="Click to select · Shift-click to select a range"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(scene.scene_id)}
+                      onChange={() => {}}
+                      onClick={e => { e.preventDefault(); handleSelectClick(e.shiftKey, i, scene.scene_id) }}
+                      style={{ width: 15, height: 15, accentColor: '#3b82f6' }}
+                    />
+                  </label>
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
                 <FineTuneCard
                   isDragging={dragIndex === i}
                   isDragOver={overIndex === i && dragIndex !== null && dragIndex !== i}
@@ -218,6 +337,7 @@ export function FineTuneStep({
                     }}
                   />
                 )}
+                </div>
               </div>
             )
           })}
@@ -320,6 +440,17 @@ function FineTuneCard({
         const updated = await patchScene({ audio_mix_override: snapshot.audio_mix_override || null })
         setMix({ ...DEFAULT_MIX, ...(updated.audio_mix_override || {}) })
         onSceneUpdate(updated)
+      } else if (field === 'pacing') {
+        // FT-5: action cut changes pacing/transition_out/duration_seconds together, so
+        // reverting it restores all three from the snapshot in one call.
+        const updated = await patchScene({
+          pacing:           snapshot.pacing || 'standard',
+          transition_out:   snapshot.transition_out,
+          duration_seconds: snapshot.duration_seconds,
+        })
+        setTransition(updated.transition_out || 'dissolve')
+        setDuration(updated.duration_seconds ?? min)
+        onSceneUpdate(updated)
       }
     } catch (err) {
       setSaveError(err.message)
@@ -372,6 +503,8 @@ function FineTuneCard({
   const durationChanged   = snapshot && duration !== snapshot.duration_seconds
   const transitionChanged = snapshot && transition !== (snapshot.transition_out || 'dissolve')
   const mixChanged         = snapshot && JSON.stringify(mix) !== JSON.stringify({ ...DEFAULT_MIX, ...(snapshot.audio_mix_override || {}) })
+  const pacing        = scene.pacing || 'standard'
+  const pacingChanged  = snapshot && pacing !== (snapshot.pacing || 'standard')
 
   return (
     <div
@@ -480,6 +613,22 @@ function FineTuneCard({
                 )}
               </div>
             </div>
+
+            {/* Pacing — set via bulk Action Cut (Select Scenes), reverted per-scene here */}
+            {pacing !== 'standard' && (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <FieldLabel>Pacing</FieldLabel>
+                  <div className="flex items-center gap-2">
+                    {savingField === 'pacing' && <Loader2 size={11} className="animate-spin text-blue-400" />}
+                    {pacingChanged && <RevertButton onClick={() => revertField('pacing')} />}
+                  </div>
+                </div>
+                <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-300">
+                  ⚡ Action Cut
+                </span>
+              </div>
+            )}
 
             {/* Duration trim */}
             <div>
