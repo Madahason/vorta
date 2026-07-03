@@ -22,6 +22,11 @@ const NARRATION_BUFFER_SECONDS = 0.8
 
 const VALID_TRANSITIONS = ['dissolve', 'dip_black', 'dip_white', 'cut', 'match']
 const PACING_VALUES     = ['standard', 'action', 'montage']
+const LAYOUT_VALUES     = ['single', 'split_horizontal', 'split_vertical']
+
+function isValidLayout(layout) {
+  return LAYOUT_VALUES.includes(layout)
+}
 
 function minDurationSeconds(audioDuration) {
   const buffer = Number(audioDuration) > 0 ? Number(audioDuration) : 0
@@ -292,9 +297,11 @@ module.exports = {
   ACTION_CUT_BUFFER_SECONDS,
   VALID_TRANSITIONS,
   PACING_VALUES,
+  LAYOUT_VALUES,
   minDurationSeconds,
   canUseDipTransition,
   isValidTransition,
+  isValidLayout,
   validateSceneUpdate,
   getTransition,
   sceneDur,

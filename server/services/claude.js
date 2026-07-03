@@ -468,6 +468,9 @@ function postProcessScenes(scenes, defaults = {}) {
       audio_overlap_seconds:  Number(scene.audio_overlap_seconds) || 0,
       globe_markers:          scene.globe_markers          || [],
       match_cut_candidate:    false, // FT-6: set true per-boundary by detectMatchCutCandidates below
+      layout:                    scene.layout || 'single', // FT-7: split-screen layout
+      secondary_image_path:      null,                     // FT-7: set via PATCH .../layout or regenerate-secondary
+      secondary_source_scene_id: null,                      // FT-7: set only when reuse mode is chosen
       higgsfield_prompt: finalPrompt,
       real_footage_flag: scene.shot_type === 'real_footage',
       clip_search_tags:  scene.clip_search_tags || [],

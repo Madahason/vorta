@@ -26,6 +26,12 @@ const TRANSITIONS = [
   { value: 'match',     label: 'Match Cut' },
 ]
 
+const LAYOUTS = [
+  { value: 'single',           label: 'Single' },
+  { value: 'split_horizontal', label: 'Split Horizontal' },
+  { value: 'split_vertical',   label: 'Split Vertical' },
+]
+
 const DEFAULT_MIX = { narration: 1.0, music: 0.12, ambient: 0.06 }
 const SNAPSHOT_KEY = 'vorta_finetune_snapshot'
 
@@ -327,6 +333,17 @@ export function FineTuneStep({
                   }
                   clip={selectedClips[scene.scene_id] || null}
                   projectId={projectId}
+                  otherScenesWithImages={
+                    // FT-7: candidates for "Reuse existing scene image" — every OTHER image
+                    // scene that actually has a resolvable thumbnail right now.
+                    scenes
+                      .filter(s => s.scene_id !== scene.scene_id && s.shot_type === 'image')
+                      .map(s => ({
+                        scene_id: s.scene_id,
+                        thumbnail: s.image_path || sceneStatuses[s.scene_id]?.image_path || imagePaths[s.scene_id],
+                      }))
+                      .filter(s => s.thumbnail)
+                  }
                   onSceneUpdate={(updated) => {
                     onScenesChange(scenes.map(s => s.scene_id === scene.scene_id ? { ...s, ...updated } : s))
                   }}
@@ -354,6 +371,7 @@ export function FineTuneStep({
 function FineTuneCard({
   index, scene, snapshot, thumbnail, clip, projectId, onSceneUpdate,
   isDragging, isDragOver, onDragHandleStart, onDragHandleEnd, onCardDragOver, onCardDrop,
+  otherScenesWithImages,
 }) {
   const min = minDurationFor(scene)
   const max = MAX_SCENE_SECONDS
@@ -366,6 +384,15 @@ function FineTuneCard({
   const [imageAction,  setImageAction]  = useState(null) // 'uploading' | 'regenerating' | null
   const [imageError,   setImageError]   = useState(null)
   const fileInputRef = useRef(null)
+
+  // FT-7: split-screen layout
+  const [layout, setLayout] = useState(scene.layout || 'single')
+  const [layoutSaving, setLayoutSaving] = useState(false)
+  const [layoutError,  setLayoutError]  = useState(null)
+  const [showSourcePicker, setShowSourcePicker] = useState(false)
+  const [secondaryMode, setSecondaryMode] = useState('reuse') // 'reuse' | 'regenerate'
+  const [regeneratePrompt, setRegeneratePrompt] = useState('')
+  const [regeneratingSecondary, setRegeneratingSecondary] = useState(false)
 
   const durationError = duration < min
     ? `Must be at least ${min}s to preserve the narration-sync buffer (audio ${(scene.audio_duration || 0).toFixed(1)}s + 0.8s)`
@@ -504,9 +531,76 @@ function FineTuneCard({
     }
   }
 
+  // FT-7: split-screen layout. "Generated" is always layout: 'single' with no secondary
+  // fields — Claude's analysis never sets these, only Fine-Tune user actions do — so revert
+  // needs no snapshot entry, it's just "set layout back to single" (which the endpoint itself
+  // already treats as "clear the secondary fields too").
+  async function patchLayout(body) {
+    const res  = await fetch(`${SERVER_URL}/api/scenes/${scene.scene_id}/layout`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ projectId, ...body }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Layout update failed')
+    return data.scene
+  }
+
+  const commitLayout = async (nextLayout) => {
+    setLayout(nextLayout)
+    setLayoutSaving(true); setLayoutError(null)
+    try {
+      const updated = await patchLayout({ layout: nextLayout })
+      onSceneUpdate(updated)
+      if (nextLayout !== 'single' && !updated.secondary_image_path) setShowSourcePicker(true)
+      if (nextLayout === 'single') setShowSourcePicker(false)
+    } catch (err) {
+      setLayoutError(err.message)
+    } finally {
+      setLayoutSaving(false)
+    }
+  }
+
+  const revertLayout = () => commitLayout('single')
+
+  const reuseSecondary = async (sourceSceneId) => {
+    setLayoutSaving(true); setLayoutError(null)
+    try {
+      const updated = await patchLayout({ layout, source_scene_id: sourceSceneId })
+      onSceneUpdate(updated)
+      setShowSourcePicker(false)
+    } catch (err) {
+      setLayoutError(err.message)
+    } finally {
+      setLayoutSaving(false)
+    }
+  }
+
+  const regenerateSecondary = async () => {
+    if (!regeneratePrompt.trim()) return
+    setRegeneratingSecondary(true); setLayoutError(null)
+    try {
+      const res  = await fetch(`${SERVER_URL}/api/higgsfield/regenerate-secondary/${scene.scene_id}`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId, prompt: regeneratePrompt.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Regeneration failed')
+      onSceneUpdate({ secondary_image_path: data.secondary_image_path, secondary_source_scene_id: null })
+      setShowSourcePicker(false)
+      setRegeneratePrompt('')
+    } catch (err) {
+      setLayoutError(err.message)
+    } finally {
+      setRegeneratingSecondary(false)
+    }
+  }
+
   const durationChanged   = snapshot && duration !== snapshot.duration_seconds
   const transitionChanged = snapshot && transition !== (snapshot.transition_out || 'dissolve')
   const mixChanged         = snapshot && JSON.stringify(mix) !== JSON.stringify({ ...DEFAULT_MIX, ...(snapshot.audio_mix_override || {}) })
+  const layoutChanged      = layout !== 'single'
   const pacing        = scene.pacing || 'standard'
   const pacingChanged  = snapshot && pacing !== (snapshot.pacing || 'standard')
 
@@ -718,6 +812,106 @@ function FineTuneCard({
                 Narration volume applies at render. Music/ambient tracks aren't wired into the pipeline yet — values are saved for a future phase.
               </div>
             </div>
+
+            {/* Layout — FT-7 split-screen */}
+            {scene.shot_type === 'image' && (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <FieldLabel>Layout</FieldLabel>
+                  <div className="flex items-center gap-2">
+                    {layoutSaving && <Loader2 size={11} className="animate-spin text-blue-400" />}
+                    {layoutChanged && <RevertButton onClick={revertLayout} />}
+                  </div>
+                </div>
+                <select
+                  value={layout}
+                  onChange={e => commitLayout(e.target.value)}
+                  className="text-[11px] px-2 py-1.5 rounded-md border border-white/[0.12] bg-white/[0.05] text-white/70 focus:outline-none"
+                >
+                  {LAYOUTS.map(l => (
+                    <option key={l.value} value={l.value} className="bg-[#1a1a1a] text-white">{l.label}</option>
+                  ))}
+                </select>
+
+                {layout !== 'single' && (
+                  <div className="mt-2 space-y-2">
+                    {scene.secondary_image_path && !showSourcePicker ? (
+                      <div className="flex items-center gap-2">
+                        <div className="w-16 rounded overflow-hidden border border-white/[0.1]" style={{ aspectRatio: '16/9' }}>
+                          <img src={scene.secondary_image_path} alt="Secondary panel" className="w-full h-full object-cover" loading="lazy" />
+                        </div>
+                        <span className="text-[10px] text-white/25">
+                          {scene.secondary_source_scene_id ? `Reused from scene ${scene.secondary_source_scene_id}` : 'Generated'}
+                        </span>
+                        <button
+                          onClick={() => setShowSourcePicker(true)}
+                          className="text-[10px] text-blue-400/60 hover:text-blue-300 transition-colors"
+                        >
+                          Change
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-white/[0.08] bg-white/[0.02] p-2.5 space-y-2">
+                        <div className="flex gap-1.5">
+                          <button
+                            onClick={() => setSecondaryMode('reuse')}
+                            className={`flex-1 text-[10px] px-2 py-1 rounded border transition-colors ${secondaryMode === 'reuse' ? 'bg-blue-500/15 border-blue-500/30 text-blue-300' : 'bg-white/[0.03] border-white/[0.08] text-white/40'}`}
+                          >
+                            Reuse existing scene image
+                          </button>
+                          <button
+                            onClick={() => setSecondaryMode('regenerate')}
+                            className={`flex-1 text-[10px] px-2 py-1 rounded border transition-colors ${secondaryMode === 'regenerate' ? 'bg-blue-500/15 border-blue-500/30 text-blue-300' : 'bg-white/[0.03] border-white/[0.08] text-white/40'}`}
+                          >
+                            Regenerate new
+                          </button>
+                        </div>
+
+                        {secondaryMode === 'reuse' ? (
+                          otherScenesWithImages?.length > 0 ? (
+                            <div className="grid grid-cols-4 gap-1.5 max-h-32 overflow-y-auto">
+                              {otherScenesWithImages.map(s => (
+                                <button
+                                  key={s.scene_id}
+                                  onClick={() => reuseSecondary(s.scene_id)}
+                                  disabled={layoutSaving}
+                                  className="rounded overflow-hidden border border-white/[0.1] hover:border-blue-500/40 disabled:opacity-40 transition-colors"
+                                  style={{ aspectRatio: '16/9' }}
+                                  title={`Reuse scene ${s.scene_id}`}
+                                >
+                                  <img src={s.thumbnail} alt={`Scene ${s.scene_id}`} className="w-full h-full object-cover" loading="lazy" />
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-[10px] text-white/20 italic">No other scenes with images yet to reuse.</p>
+                          )
+                        ) : (
+                          <div className="flex gap-1.5">
+                            <input
+                              type="text"
+                              value={regeneratePrompt}
+                              onChange={e => setRegeneratePrompt(e.target.value)}
+                              placeholder="Describe the second panel's image…"
+                              className="flex-1 bg-white/[0.05] border border-white/[0.12] rounded px-2 py-1 text-[10px] text-white/80"
+                            />
+                            <button
+                              onClick={regenerateSecondary}
+                              disabled={regeneratingSecondary || !regeneratePrompt.trim()}
+                              className="flex items-center gap-1 text-[10px] px-2 py-1 bg-white/[0.05] hover:bg-white/[0.09] disabled:opacity-40 border border-white/[0.1] rounded text-white/60 transition-colors"
+                            >
+                              {regeneratingSecondary ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+                              Generate
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {layoutError && <div className="text-[10px] text-red-400/80 mt-1">{layoutError}</div>}
+              </div>
+            )}
 
             {saveError && (
               <div className="text-[11px] text-red-400/80 bg-red-500/[0.06] border border-red-500/20 rounded px-2 py-1.5">

@@ -4019,3 +4019,71 @@ Also verified manually:
 - [x] No split-screen, cutaway, or montage flag added
 - [x] Client build clean — zero errors
 - [x] PLAN.md updated with FT-6 completion entry
+
+---
+
+### Phase FT-7 — Fine-Tune stage: split-screen layout ✅ COMPLETE
+
+**Documentary.jsx's `TransitionSeries.Sequence` structure and `SceneRenderer` reviewed before making changes:** each scene gets exactly one `<TransitionSeries.Sequence durationInFrames={...}>` wrapping an `<AbsoluteFill><ErrorBoundaryScene><SceneRenderer/></ErrorBoundaryScene></AbsoluteFill>`. `SceneRenderer` is a pure visual dispatch by `shot_type` — it has no awareness of timing at all (duration/transitions are computed entirely upstream by `sceneDur`/`getTransition`, which only ever read `duration_seconds`/`transition_out`). This is exactly why split-screen could be implemented as a *visual dispatch change inside `SceneRenderer`'s existing `image` branch* — swapping which component renders inside the *same* Sequence — without touching the Sequence structure, the flatMap loop, or any timing math at all.
+
+**What was built:**
+- Three new optional scene fields: `layout` (`'single' | 'split_horizontal' | 'split_vertical'`, default `'single'`), `secondary_image_path` (string, default `null`), `secondary_source_scene_id` (string, default `null` — records which scene's image was reused, for reference; `null` whenever the secondary panel came from Regenerate instead). All three defaulted in `claude.js`'s `postProcessScenes`, matching the FT-6 `match_cut_candidate` precedent — Claude's analysis never sets these, only Fine-Tune user actions do.
+- `remotion/src/components/SplitScreenScene.jsx` (NEW) — the dual-panel renderer. Two flex panels (row for `split_horizontal`, column for `split_vertical`) each showing one `<img>` with `object-fit: cover`, a thin divider line between them, and the same "always-on" cinematic effects `ImageScene.jsx` applies (`ColorGrade`, `Vignette`, `FilmGrain`, `SceneFade`, `LetterboxBars`) so a split-screen scene doesn't look visually disconnected from the rest of the documentary. Deliberately skips the conditional/mood-specific effects (camera shake, dust, halation, light leak) to keep this new component minimal.
+- `Documentary.jsx`'s `SceneRenderer` — the `image` branch now checks `layout`: renders `<SplitScreenScene>` only when `layout` is a split value **and** `secondary_image_path` is actually set; falls back to the existing, untouched `<ImageScene>` in every other case — including a split layout with no secondary image yet, and (per the guardrail) a layout reverted back to `'single'` even if a stale `secondary_image_path` value is still sitting on the scene object. **This is one scene, one `TransitionSeries.Sequence`, one duration, one narration track — nothing about the Sequence structure, the flatMap loop, `sceneDur`, or `getTransition` was touched.**
+- `server/services/imageSwap.js` — `backupOriginalIfNeeded()` gained one additive optional parameter, `backupSuffix = 'original'`, defaulting to FT-3's exact existing filename/behavior for every existing caller (re-verified: FT-3's full test suite still passes unmodified). FT-7 passes `'secondary_original'` so the secondary panel's backup never collides with the primary panel's own `scene_{id}_original.jpg`.
+- `server/routes/scenes.js` — `PATCH /api/scenes/:sceneId/layout`. Body: `{ projectId, layout, source_scene_id? }`.
+  - **Reuse mode** (`source_scene_id` provided): validates the source scene exists, has an `image_path`, and that file actually exists on disk — then `fs.copyFileSync()`s it to a new file scoped to *this* scene (`{sceneId}_secondary{ext}`, or the existing secondary filename on a repeat reuse) — a genuine, independent copy, never a live reference, exactly as required. Backs up this scene's own prior secondary image first via the `'secondary_original'` suffix.
+  - **`layout: 'single'`** always clears `secondary_image_path`/`secondary_source_scene_id` back to `null` — this single rule *is* the entire "Revert to generated" mechanism for this phase (task point 7): no snapshot needed, since `'single'`/`null`/`null` is always the one and only "generated" state for these fields.
+- `server/routes/higgsfieldRegenerate.js` — `POST /api/higgsfield/regenerate-secondary/:sceneId`. Body: `{ projectId, prompt }`. Same pipeline as FT-3's primary-panel `/regenerate` (`enhancePrompt → generateImage → downloadImage`, reused not duplicated) and the same backup-then-overwrite safety — but the prompt is a **fresh, user-supplied** one for the second panel (wrapped in a minimal scene-like object so it still gets the style-lock/enhancement treatment), not the scene's own stored `higgsfield_prompt`. Only ever touches `secondary_image_path` on the one target scene; clears `secondary_source_scene_id` since the result is no longer derived from any other scene's image.
+- `client/src/pages/wizard/FineTuneStep.jsx` — a "Layout" selector added to each image scene's `FineTuneCard` (Single / Split Horizontal / Split Vertical). Selecting a split layout with no secondary image yet opens a picker with two modes: **Reuse existing scene image** (a thumbnail grid built from every other image scene in the project — `otherScenesWithImages`, computed in `FineTuneStep` from the same `scene.image_path` / `sceneStatuses` / `imagePaths` priority chain the rest of Fine-Tune already uses) and **Regenerate new** (a free-text prompt field + Generate button). "Revert to generated" sets `layout: 'single'` directly — no snapshot lookup needed, per the server design above.
+
+**Ken Burns limitation — explicitly noted per the guardrail's escape hatch:** `ImageScene.jsx`'s Ken Burns motion is **disabled for split-screen scenes in this phase**. `SplitScreenScene.jsx` renders both panels fully static. This was a deliberate scope decision, not an oversight: correctly reusing `ImageScene`'s exact Ken Burns calibration for *two independent, simultaneously-animating* panels inside a new component — each needing its own motion-type/intensity and correct scene-relative frame timing — was assessed as materially riskier to get right on the first pass than the task's own guardrail anticipated ("if this proves complex, it's acceptable to disable Ken Burns motion specifically for split-layout scenes... rather than risk breaking the single-panel Ken Burns behavior"). Taking that explicitly-offered escape hatch was the safer choice: `ImageScene.jsx` itself was not touched at all, so single-panel Ken Burns behavior carries zero risk from this phase. Adding per-panel Ken Burns to split-screen scenes is a reasonable target for a future phase.
+
+**Testing — commands run and results:**
+```
+$ node server/services/frameMath.test.js
+```
+55/55 assertions passed (51 from FT-1–FT-6 unchanged, plus 4 new): `LAYOUT_VALUES` defined; `calculateDocumentaryDuration` is **byte-for-byte identical** on the same two-scene set before and after adding `layout: 'split_horizontal'`/`split_vertical` plus `secondary_image_path`/`secondary_source_scene_id` to the first scene — proving split-screen has zero effect on the frame-overlap math, not just "probably no effect"; `getTransition` returns a deeply-equal descriptor regardless of layout.
+
+```
+$ node server/routes/scenes.test.js
+```
+76/76 assertions passed (63 from FT-1–FT-6 unchanged, plus 13 new): reuse mode sets `layout`/`secondary_image_path`/`secondary_source_scene_id` correctly and the secondary file is confirmed to be a **real, independent copy on disk** — proven by changing the source scene's own image file *after* the reuse and confirming the already-copied secondary panel bytes are unaffected; a second reuse backs up the first secondary image before overwriting (distinct `scene_A_secondary_original.jpg`, never colliding with the primary panel's own backup); reverting to `layout: 'single'` clears both secondary fields to `null` and persists that to `scenes.json`; invalid layout values, missing layout, unknown/missing source scenes, and source images missing from disk are all rejected with the correct status codes.
+
+```
+$ node server/routes/higgsfieldRegenerate.test.js
+```
+25/25 assertions passed (13 from FT-3 unchanged, plus 12 new): `regenerate-secondary` only ever affects the target scene's `secondary_image_path` — the primary panel image and its own backup file are confirmed completely untouched; the pipeline receives the **user-supplied prompt**, not the scene's stored `higgsfield_prompt`; the prior secondary image is backed up (with the distinct `'secondary_original'` suffix) before a second regenerate overwrites it; `secondary_source_scene_id` is cleared to `null` on a successful regenerate (no longer derived from another scene); a thrown generation error returns a clean `500` with nothing persisted.
+
+**Remotion render test (required — dual-panel rendering can't be fully verified by unit tests alone):**
+Built a disposable 4-scene test project (`projects/__ft7_render_test__`, deleted after the test) using real generated images already on disk, covering exactly the scenarios the guardrails call out: scene 001 `layout: 'single'` (unaffected baseline); scene 002 `layout: 'split_horizontal'` with two independent real images; scene 003 `layout: 'split_vertical'` with two independent real images; scene 004 `layout: 'single'` **with a stale `secondary_image_path` still set** (simulating a revert where the field wasn't cleared) — specifically to exercise the "must fall back cleanly, no broken/blank scene" guardrail via an actual render, not just code inspection.
+```
+$ npx remotion render src/index.jsx Documentary ../projects/__ft7_render_test__/output.mp4 --props=../projects/__ft7_render_test__/render_props.json --overwrite --concurrency=1 --timeout=120000 --gl=swangle
+```
+First attempt (no narration anywhere in the composition): all 335/335 frames rendered successfully — proving `SplitScreenScene`'s dual-panel rendering and `SceneRenderer`'s single-panel fallback both work with zero crashes across every frame — but the final mux step failed with `Error opening output file ...merged.wav: No such file or directory` inside `@remotion/renderer`'s `create-silent-audio.js`, a pre-existing Windows temp-directory quirk in Remotion's own silent-audio synthesis for a composition with *zero* audio tracks anywhere — unrelated to split-screen and not something this phase's code touches. Second attempt, with a real narration `.mp3` added to scene 001 specifically to avoid that zero-audio edge case:
+```
+Encoded 335/335
++ ../projects/__ft7_render_test__/output.mp4 9.4 MB
+```
+Exit code 0. `ffprobe` confirmed the output as a valid, complete video file (`duration=11.221333`, `size=9379811`). Test project deleted afterward.
+
+Also verified manually:
+- `node -e "require(...)"` on `scenes.js` and `higgsfieldRegenerate.js` — load without error
+- `npx eslint src/pages/wizard/FineTuneStep.jsx` — clean
+- `npx vite build` — clean production build
+- Re-ran the full FT-1–FT-6 test suites (`frameMath.test.js`, `scenes.test.js`, `claude.test.js`, `imageSwap.test.js`, `images.test.js`, `higgsfieldRegenerate.test.js`) after all FT-7 changes — all still pass
+
+**Production-readiness checklist:**
+- [x] `layout`, `secondary_image_path`, `secondary_source_scene_id` added to the scene schema, all optional/defaulted
+- [x] Layout selector (Single / Split Horizontal / Split Vertical) added per image scene card
+- [x] Secondary panel source picker: Reuse existing scene image (grid of other scenes' thumbnails) and Regenerate new (prompt field)
+- [x] Reuse mode copies the file — proven independent of the source via a post-copy source-file mutation test, not just asserted
+- [x] `PATCH /api/scenes/:sceneId/layout` and `POST /api/higgsfield/regenerate-secondary/:sceneId` implemented, registered, tested
+- [x] `Documentary.jsx`/`SceneRenderer` renders both panels inside the scene's existing `TransitionSeries.Sequence` — no second Sequence, no duration entry, verified via a real Remotion render
+- [x] `calculateDocumentaryDuration` and the frame-overlap math confirmed byte-for-byte unchanged by split-screen, both by unit test and by construction (SceneRenderer is purely a visual dispatch, timing math never reads `layout`)
+- [x] Reverting to `layout: 'single'` falls back cleanly to single-panel rendering even with a stale `secondary_image_path` present — verified via a real render, not just code inspection
+- [x] Ken Burns motion disabled for split-layout scenes this phase — explicitly noted above as a deliberate, guardrail-sanctioned scope decision, not an oversight
+- [x] FT-1–FT-6 logic untouched beyond the one additive `backupSuffix` parameter on `imageSwap.js` (re-verified FT-3's suite passes unmodified)
+- [x] No cutaway or montage flag added
+- [x] Client build clean — zero errors
+- [x] PLAN.md updated with FT-7 completion entry

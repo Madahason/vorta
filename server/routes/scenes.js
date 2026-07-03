@@ -1,10 +1,13 @@
 const express = require('express')
 const router  = express.Router()
+const path    = require('path')
+const fs      = require('fs')
 const {
   validateSceneUpdate, validateBoundaryUpdate, resetBrokenBoundaryAdjacency,
-  clampDurationForActionCut, resetActionCutBoundaryOffsets,
+  clampDurationForActionCut, resetActionCutBoundaryOffsets, isValidLayout, LAYOUT_VALUES,
 } = require('../services/frameMath')
-const { readScenesFile, writeScenesFile } = require('../services/scenesFile')
+const { PROJECTS_DIR, readScenesFile, writeScenesFile } = require('../services/scenesFile')
+const { backupOriginalIfNeeded } = require('../services/imageSwap')
 
 // PATCH /api/scenes/pacing
 // Body: { projectId, scene_ids: [...], pacing: 'action' }
@@ -154,6 +157,77 @@ router.patch('/:sceneId/boundary', (req, res) => {
     if (updates.lcut_offset !== undefined) updatedScene.lcut_offset = updates.lcut_offset
     updatedScene.is_manual_offset = updates.is_manual_offset !== undefined ? updates.is_manual_offset : true
     updatedScene.boundary_partner_scene_id = nextScene.scene_id
+  }
+
+  file.scenes[idx] = updatedScene
+  writeScenesFile(file)
+
+  res.json({ scene: updatedScene })
+})
+
+// PATCH /api/scenes/:sceneId/layout
+// Body: { projectId, layout, source_scene_id? }
+// FT-7 split-screen. Sets layout ('single' | 'split_horizontal' | 'split_vertical').
+// When layout is a split value and source_scene_id is provided, copies that scene's
+// current image_path file to a new file scoped to THIS scene (never a live reference — later
+// changes to the source scene's own image never retroactively affect this secondary panel)
+// and sets secondary_image_path/secondary_source_scene_id accordingly. Backs up this scene's
+// own existing secondary image first (FT-3's backup-then-overwrite pattern, reused with a
+// distinct 'secondary_original' suffix so it never collides with the primary panel's backup).
+// Setting layout: 'single' also clears secondary_image_path/secondary_source_scene_id back to
+// null — this is also exactly what "Revert to generated" calls, so no separate revert
+// endpoint is needed.
+router.patch('/:sceneId/layout', (req, res) => {
+  const { sceneId } = req.params
+  const { projectId, layout, source_scene_id } = req.body || {}
+
+  if (!projectId) return res.status(400).json({ error: 'projectId required' })
+  if (layout === undefined) return res.status(400).json({ error: 'layout required' })
+  if (!isValidLayout(layout)) {
+    return res.status(400).json({ error: `layout must be one of ${LAYOUT_VALUES.join(', ')}` })
+  }
+
+  const file = readScenesFile(projectId)
+  if (!file) return res.status(404).json({ error: `No scenes.json found for project ${projectId}` })
+
+  const idx = file.scenes.findIndex(s => String(s.scene_id) === String(sceneId))
+  if (idx === -1) return res.status(404).json({ error: `Scene ${sceneId} not found in project ${projectId}` })
+
+  const scene = file.scenes[idx]
+  const updatedScene = { ...scene, layout }
+
+  if (layout === 'single') {
+    // Revert (or any explicit switch back to single) — no secondary panel, clear both fields.
+    updatedScene.secondary_image_path = null
+    updatedScene.secondary_source_scene_id = null
+  } else if (source_scene_id !== undefined) {
+    const sourceScene = file.scenes.find(s => String(s.scene_id) === String(source_scene_id))
+    if (!sourceScene) {
+      return res.status(404).json({ error: `Source scene ${source_scene_id} not found in project ${projectId}` })
+    }
+    if (!sourceScene.image_path) {
+      return res.status(400).json({ error: `Source scene ${source_scene_id} has no image_path to reuse` })
+    }
+
+    const assetsDir = path.join(PROJECTS_DIR, projectId, 'assets')
+    const sourceAbsPath = path.join(assetsDir, path.basename(sourceScene.image_path))
+    if (!fs.existsSync(sourceAbsPath)) {
+      return res.status(400).json({ error: `Source scene ${source_scene_id}'s image file is missing from disk` })
+    }
+
+    // Back up this scene's own existing secondary image before it gets overwritten.
+    backupOriginalIfNeeded(assetsDir, sceneId, scene.secondary_image_path, 'secondary_original')
+
+    const ext = path.extname(sourceAbsPath) || '.png'
+    const destFilename = scene.secondary_image_path ? path.basename(scene.secondary_image_path) : `${sceneId}_secondary${ext}`
+    const destAbsPath = path.join(assetsDir, destFilename)
+
+    // A genuine copy — not a live reference. Later changes to the source scene's own
+    // image_path never retroactively affect this scene's secondary panel.
+    fs.copyFileSync(sourceAbsPath, destAbsPath)
+
+    updatedScene.secondary_image_path = `/projects/${projectId}/assets/${destFilename}`
+    updatedScene.secondary_source_scene_id = String(source_scene_id)
   }
 
   file.scenes[idx] = updatedScene

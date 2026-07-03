@@ -4,7 +4,7 @@ const assert = require('assert')
 const {
   FPS, DIP_FADE, DIP_MID, MIN_SCENE_FRAMES, TRANSITION_FRAMES, CUT_FRAMES,
   MAX_SCENE_SECONDS, NARRATION_BUFFER_SECONDS, BOUNDARY_SAFETY_MARGIN_SECONDS,
-  ACTION_CUT_BUFFER_SECONDS, PACING_VALUES, VALID_TRANSITIONS,
+  ACTION_CUT_BUFFER_SECONDS, PACING_VALUES, VALID_TRANSITIONS, LAYOUT_VALUES,
   minDurationSeconds, canUseDipTransition, isValidTransition, validateSceneUpdate,
   getTransition, sceneDur, calculateDocumentaryDuration,
   maxBoundaryOffsetSeconds, validateBoundaryUpdate, resolveManualOverlapSeconds,
@@ -333,5 +333,30 @@ console.log('PASS: calculateDocumentaryDuration treats a match-cut boundary iden
 errs = validateSceneUpdate({ duration_seconds: 5 }, { transition_out: 'match' })
 assert.strictEqual(errs.length, 0, 'match must be accepted as a valid transition_out value')
 console.log('PASS: validateSceneUpdate accepts transition_out: "match"')
+
+// ── FT-7: split-screen must not affect duration/frame-overlap math at all ────
+// layout/secondary_image_path/secondary_source_scene_id are never read by sceneDur,
+// getTransition, computeSceneStartFrames, or calculateDocumentaryDuration — this proves it
+// end to end rather than just by inspection, exactly as the task requires.
+assert.deepStrictEqual(LAYOUT_VALUES, ['single', 'split_horizontal', 'split_vertical'])
+console.log('PASS: LAYOUT_VALUES defined')
+
+const sceneSingle = { scene_id: 'A', duration_seconds: 5, transition_out: 'dissolve', layout: 'single' }
+const sceneSplitH  = {
+  scene_id: 'A', duration_seconds: 5, transition_out: 'dissolve',
+  layout: 'split_horizontal', secondary_image_path: '/projects/x/assets/A_secondary.png', secondary_source_scene_id: 'B',
+}
+const sceneSplitV = { ...sceneSplitH, layout: 'split_vertical' }
+const sceneTail   = { scene_id: 'Z', duration_seconds: 5, transition_out: 'cut' }
+
+const durationSingle    = calculateDocumentaryDuration([sceneSingle, sceneTail], 30)
+const durationSplitH    = calculateDocumentaryDuration([sceneSplitH, sceneTail], 30)
+const durationSplitV    = calculateDocumentaryDuration([sceneSplitV, sceneTail], 30)
+assert.strictEqual(durationSplitH, durationSingle, 'applying a split_horizontal layout must not change calculateDocumentaryDuration at all')
+assert.strictEqual(durationSplitV, durationSingle, 'applying a split_vertical layout must not change calculateDocumentaryDuration at all')
+console.log('PASS: calculateDocumentaryDuration is byte-for-byte identical before/after applying either split layout')
+
+assert.deepStrictEqual(getTransition(sceneSplitH, 150), getTransition(sceneSingle, 150), 'the transition descriptor itself must be identical regardless of layout')
+console.log('PASS: getTransition ignores layout/secondary_image_path entirely — same descriptor either way')
 
 console.log('\nAll frameMath.test.js checks passed.')

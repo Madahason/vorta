@@ -3,6 +3,7 @@ import { AbsoluteFill, Audio, Sequence, interpolate, useVideoConfig } from 'remo
 import { TransitionSeries, springTiming, linearTiming }                      from '@remotion/transitions'
 import { fade }                                                              from '@remotion/transitions/fade'
 import ImageScene             from '../components/ImageScene'
+import SplitScreenScene       from '../components/SplitScreenScene'
 import FootageScene           from '../components/FootageScene'
 import PlaceholderScene       from '../components/PlaceholderScene'
 import { MotionGraphicScene } from '../components/MotionGraphicScene'
@@ -133,6 +134,14 @@ function SceneRenderer({ scene, imagePath, selectedClip, globalSettings }) {
   if (scene.shot_type === 'image') {
     const s = imagePath ? { ...scene, image_path: imagePath } : scene
     if (!s.image_path) return <PlaceholderScene scene={scene} />
+    // FT-7: split-screen — one scene, one Sequence, one duration; just two visual panels
+    // instead of one. Falls back cleanly to single-panel ImageScene (no broken/blank scene)
+    // whenever layout is "single" OR secondary_image_path hasn't been set yet — e.g. right
+    // after switching to a split layout but before picking a source, or after reverting.
+    const isSplit = s.layout === 'split_horizontal' || s.layout === 'split_vertical'
+    if (isSplit && s.secondary_image_path) {
+      return <SplitScreenScene scene={s} />
+    }
     return <ImageScene scene={s} />
   }
   if (scene.shot_type === 'motion_graphic') {

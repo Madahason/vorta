@@ -759,6 +759,134 @@ async function runMatchCutTests() {
   }
 }
 
+// FT-7: PATCH /api/scenes/:sceneId/layout — split-screen layout, reuse mode, and revert.
+async function runLayoutTests() {
+  cleanup()
+  const assetsDir = path.join(testDir, 'assets')
+  fs.mkdirSync(assetsDir, { recursive: true })
+
+  const scenes = [
+    { scene_id: 'A', script_excerpt: 'A', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', image_path: `/projects/${TEST_PROJECT}/assets/A.png` },
+    { scene_id: 'B', script_excerpt: 'B', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', image_path: `/projects/${TEST_PROJECT}/assets/B.png` },
+    { scene_id: 'C', script_excerpt: 'C — no image yet', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve' },
+    { scene_id: 'D', script_excerpt: 'D — motion graphic', shot_type: 'motion_graphic', duration_seconds: 5, transition_out: 'dissolve' },
+  ]
+  fs.writeFileSync(scenesPath, JSON.stringify(scenes, null, 2))
+  fs.writeFileSync(path.join(assetsDir, 'A.png'), 'SCENE_A_BYTES')
+  fs.writeFileSync(path.join(assetsDir, 'B.png'), 'SCENE_B_ORIGINAL_BYTES')
+
+  const app = express()
+  app.use(express.json())
+  app.use('/api/scenes', require('./scenes'))
+  const server = app.listen(0)
+  const port   = server.address().port
+  const base   = `http://localhost:${port}/api/scenes`
+
+  const patchLayout = (sceneId, body) => fetch(`${base}/${sceneId}/layout`, {
+    method:  'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ projectId: TEST_PROJECT, ...body }),
+  })
+
+  try {
+    // 1. Reuse mode — confirm the file is COPIED, not referenced, and secondary_source_scene_id set
+    let res  = await patchLayout('A', { layout: 'split_horizontal', source_scene_id: 'B' })
+    let body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    assert.strictEqual(body.scene.layout, 'split_horizontal')
+    assert.strictEqual(body.scene.secondary_source_scene_id, 'B')
+    assert.strictEqual(body.scene.secondary_image_path, `/projects/${TEST_PROJECT}/assets/A_secondary.png`)
+    console.log('PASS: reuse mode sets layout, secondary_image_path, and secondary_source_scene_id correctly')
+
+    const secondaryAbsPath = path.join(assetsDir, 'A_secondary.png')
+    assert.ok(fs.existsSync(secondaryAbsPath), 'a new, distinct file must exist for the secondary panel')
+    assert.strictEqual(fs.readFileSync(secondaryAbsPath, 'utf8'), 'SCENE_B_ORIGINAL_BYTES', 'the copy must contain scene B\'s current bytes')
+    console.log('PASS: the secondary panel file is a real copy on disk')
+
+    // Prove it's a COPY, not a live reference: changing B's own image afterward must NOT
+    // retroactively change A's secondary panel.
+    fs.writeFileSync(path.join(assetsDir, 'B.png'), 'SCENE_B_CHANGED_LATER')
+    assert.strictEqual(fs.readFileSync(secondaryAbsPath, 'utf8'), 'SCENE_B_ORIGINAL_BYTES', 'A\'s secondary panel must be unaffected by a later change to B\'s own image')
+    console.log('PASS: the secondary panel is a copy — later changes to the source scene\'s own image do not retroactively affect it')
+
+    let onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.strictEqual(onDisk[0].secondary_image_path, `/projects/${TEST_PROJECT}/assets/A_secondary.png`)
+    assert.strictEqual(onDisk[0].secondary_source_scene_id, 'B')
+    console.log('PASS: layout/secondary fields persist to scenes.json')
+
+    // 2. Regenerate-style second reuse must overwrite the SAME secondary file, backing up the
+    // previous secondary image first (mirrors FT-3's backup-then-overwrite pattern).
+    fs.writeFileSync(path.join(assetsDir, 'C.png'), 'SCENE_C_BYTES') // C never had image_path in scenes.json — write file anyway for a manual scenario below
+    res  = await patchLayout('A', { layout: 'split_horizontal', source_scene_id: 'B' }) // re-reuse B a 2nd time
+    body = await res.json()
+    assert.strictEqual(res.status, 200)
+    assert.strictEqual(fs.readFileSync(secondaryAbsPath, 'utf8'), 'SCENE_B_CHANGED_LATER', 'the live secondary file reflects the latest reuse copy')
+    const secondaryBackupPath = path.join(assetsDir, 'scene_A_secondary_original.jpg')
+    assert.ok(fs.existsSync(secondaryBackupPath), 'the FIRST secondary image must be backed up before the second reuse overwrote it')
+    assert.strictEqual(fs.readFileSync(secondaryBackupPath, 'utf8'), 'SCENE_B_ORIGINAL_BYTES', 'the backup preserves the first secondary image, not the second')
+    console.log('PASS: a second reuse backs up the prior secondary image before overwriting (does not collide with the primary panel\'s own backup)')
+
+    // 3. Revert — layout: "single" clears both secondary fields back to null
+    res  = await patchLayout('A', { layout: 'single' })
+    body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    assert.strictEqual(body.scene.layout, 'single')
+    assert.strictEqual(body.scene.secondary_image_path, null)
+    assert.strictEqual(body.scene.secondary_source_scene_id, null)
+    console.log('PASS: reverting to layout "single" clears secondary_image_path and secondary_source_scene_id back to null')
+
+    onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.strictEqual(onDisk[0].layout, 'single')
+    assert.strictEqual(onDisk[0].secondary_image_path, null)
+    console.log('PASS: the reverted state persists to scenes.json')
+
+    // 4. Error cases
+    res  = await patchLayout('A', { layout: 'not_a_real_layout' })
+    assert.strictEqual(res.status, 400)
+    console.log('PASS: invalid layout value rejected (400)')
+
+    res = await patchLayout('A', {}) // layout required
+    assert.strictEqual(res.status, 400)
+    console.log('PASS: missing layout rejected (400)')
+
+    res  = await patchLayout('A', { layout: 'split_vertical', source_scene_id: 'ZZZ' })
+    body = await res.json()
+    assert.strictEqual(res.status, 404)
+    assert(/Source scene ZZZ not found/.test(body.error))
+    console.log('PASS: unknown source_scene_id rejected (404)')
+
+    res  = await patchLayout('A', { layout: 'split_vertical', source_scene_id: 'C' }) // C has no image_path
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/has no image_path/.test(body.error))
+    console.log('PASS: source scene with no image_path rejected (400)')
+
+    // Give D an image_path that points at a file that doesn't actually exist on disk
+    let raw = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    raw.find(s => s.scene_id === 'D').image_path = `/projects/${TEST_PROJECT}/assets/missing.png`
+    fs.writeFileSync(scenesPath, JSON.stringify(raw, null, 2))
+    res  = await patchLayout('A', { layout: 'split_vertical', source_scene_id: 'D' })
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/missing from disk/.test(body.error))
+    console.log('PASS: source scene whose image file is missing from disk is rejected (400)')
+
+    res = await patchLayout('999', { layout: 'single' })
+    assert.strictEqual(res.status, 404)
+    res = await fetch(`${base}/A/layout`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ layout: 'single' }),
+    })
+    assert.strictEqual(res.status, 400)
+    console.log('PASS: unknown scene_id (404) and missing projectId (400) handled')
+
+    console.log('\nAll layout checks passed.')
+  } finally {
+    server.close()
+    cleanup()
+  }
+}
+
 run()
   .then(runWrappedShapeTest)
   .then(runReorderTests)
@@ -767,6 +895,7 @@ run()
   .then(runPacingTests)
   .then(runPacingBoundaryAndRevertTests)
   .then(runMatchCutTests)
+  .then(runLayoutTests)
   .catch(err => {
     console.error('TEST FAILURE:', err)
     cleanup()

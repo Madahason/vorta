@@ -154,8 +154,129 @@ async function run() {
   }
 }
 
-run().catch(err => {
-  console.error('TEST FAILURE:', err)
+// FT-7: POST /api/higgsfield/regenerate-secondary/:sceneId — split-screen secondary panel.
+async function runSecondaryRegenerateTests() {
   cleanup()
-  process.exit(1)
-})
+  fs.mkdirSync(assetsDir, { recursive: true })
+  const scenes = [
+    { scene_id: '001', script_excerpt: 'a documentary scene', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', higgsfield_prompt: 'traders on the floor', image_path: `/projects/${TEST_PROJECT}/assets/001.png`, secondary_image_path: `/projects/${TEST_PROJECT}/assets/001_secondary.png`, secondary_source_scene_id: '002' },
+    { scene_id: '002', script_excerpt: 'reuse source scene', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', higgsfield_prompt: 'a second scene', image_path: `/projects/${TEST_PROJECT}/assets/002.png` },
+    { scene_id: '003', script_excerpt: 'a motion graphic scene', shot_type: 'motion_graphic', duration_seconds: 5, transition_out: 'dissolve' },
+  ]
+  fs.writeFileSync(scenesPath, JSON.stringify(scenes, null, 2))
+  fs.writeFileSync(path.join(assetsDir, '001.png'), 'PRIMARY_ORIGINAL_BYTES')
+  fs.writeFileSync(path.join(assetsDir, '001_secondary.png'), 'SECONDARY_FROM_REUSE_BYTES') // as if reuse mode set this
+
+  const app = express()
+  app.use(express.json())
+  app.use('/api/higgsfield', require('./higgsfieldRegenerate'))
+  const server = app.listen(0)
+  const port   = server.address().port
+  const base   = `http://localhost:${port}/api/higgsfield`
+
+  const regenerateSecondary = (sceneId, body) => fetch(`${base}/regenerate-secondary/${sceneId}`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  })
+
+  const originalGenerateImage = higgsfieldService.generateImage
+  const originalEnhancePrompt = promptEnhancer.enhancePrompt
+  const originalDownloadImage = imageDownloadSvc.downloadImage
+
+  try {
+    // ── Validation paths ──
+    let res  = await regenerateSecondary('001', { prompt: 'a lighthouse at dusk' }) // projectId omitted on purpose
+    let body = await res.json()
+    assert.strictEqual(res.status, 400)
+    console.log('PASS: missing projectId returns 400')
+
+    res = await regenerateSecondary('001', { projectId: TEST_PROJECT })
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/prompt required/.test(body.error))
+    console.log('PASS: missing prompt returns 400')
+
+    res = await regenerateSecondary('999', { projectId: TEST_PROJECT, prompt: 'x' })
+    assert.strictEqual(res.status, 404)
+    console.log('PASS: unknown scene_id returns 404')
+
+    res = await regenerateSecondary('003', { projectId: TEST_PROJECT, prompt: 'x' })
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/split-screen only applies to image scenes/.test(body.error))
+    console.log('PASS: non-image scene rejected (400)')
+
+    // ── Happy path ──
+    let promptSeenBy = { enhance: null, generate: null }
+    promptEnhancer.enhancePrompt = async (scene) => {
+      promptSeenBy.enhance = scene.higgsfield_prompt
+      return `${scene.higgsfield_prompt}, enhanced`
+    }
+    higgsfieldService.generateImage = async (prompt) => {
+      promptSeenBy.generate = prompt
+      return 'https://fake.higgsfield.test/secondary-image.png'
+    }
+    imageDownloadSvc.downloadImage = async (url, dest) => {
+      fs.writeFileSync(dest, `DOWNLOADED_FROM:${url}`)
+    }
+
+    res  = await regenerateSecondary('001', { projectId: TEST_PROJECT, prompt: 'a lighthouse at dusk' })
+    body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    assert.strictEqual(body.secondary_image_path, `/projects/${TEST_PROJECT}/assets/001_secondary.png`, 'same location as before — filename preserved')
+    console.log('PASS: happy-path regenerate-secondary returns 200 with the (same-location) secondary_image_path')
+
+    assert.strictEqual(promptSeenBy.enhance, 'a lighthouse at dusk', 'enhancePrompt must receive the fresh user-supplied prompt, not the scene\'s own higgsfield_prompt')
+    assert.strictEqual(promptSeenBy.generate, 'a lighthouse at dusk, enhanced')
+    console.log('PASS: pipeline reused in order with the USER-SUPPLIED prompt, not the scene\'s own stored prompt')
+
+    assert.strictEqual(fs.readFileSync(path.join(assetsDir, '001_secondary.png'), 'utf8'), 'DOWNLOADED_FROM:https://fake.higgsfield.test/secondary-image.png')
+    console.log('PASS: downloadImage wrote the generated content to the secondary panel\'s location')
+
+    // Primary panel completely unaffected
+    assert.strictEqual(fs.readFileSync(path.join(assetsDir, '001.png'), 'utf8'), 'PRIMARY_ORIGINAL_BYTES', 'the primary panel image must be completely untouched')
+    console.log('PASS: only the secondary panel is affected — the primary panel image is untouched')
+
+    const secondaryBackupPath = path.join(assetsDir, 'scene_001_secondary_original.jpg')
+    assert.ok(fs.existsSync(secondaryBackupPath), 'the prior secondary image must be backed up before regeneration overwrote it')
+    assert.strictEqual(fs.readFileSync(secondaryBackupPath, 'utf8'), 'SECONDARY_FROM_REUSE_BYTES')
+    const primaryBackupPath = path.join(assetsDir, 'scene_001_original.jpg')
+    assert.ok(!fs.existsSync(primaryBackupPath), 'the primary panel\'s own backup file must not be created by a secondary-panel regenerate')
+    console.log('PASS: the secondary panel backup uses a distinct filename and never collides with (or creates) the primary panel\'s backup')
+
+    let onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.strictEqual(onDisk[0].secondary_image_path, `/projects/${TEST_PROJECT}/assets/001_secondary.png`)
+    assert.strictEqual(onDisk[0].secondary_source_scene_id, null, 'a regenerated secondary panel is no longer derived from any other scene\'s image')
+    assert.strictEqual(onDisk[0].image_path, `/projects/${TEST_PROJECT}/assets/001.png`, 'primary image_path untouched')
+    console.log('PASS: scenes.json persists the new secondary_image_path, clears secondary_source_scene_id, and leaves everything else untouched')
+
+    // Scene 002 (the original reuse source) is completely unaffected by any of the above
+    assert.strictEqual(onDisk[1].image_path, `/projects/${TEST_PROJECT}/assets/002.png`)
+    console.log('PASS: scene 002 (the prior reuse source) is untouched')
+
+    // ── Failure inside generateImage propagates as a clean 500, nothing persisted ──
+    higgsfieldService.generateImage = async () => { throw new Error('Higgsfield CLI exploded') }
+    res  = await regenerateSecondary('001', { projectId: TEST_PROJECT, prompt: 'x' })
+    body = await res.json()
+    assert.strictEqual(res.status, 500)
+    assert(/Higgsfield CLI exploded/.test(body.error))
+    console.log('PASS: a generation failure returns a clean 500 with the underlying error message')
+
+    console.log('\nAll regenerate-secondary checks passed.')
+  } finally {
+    higgsfieldService.generateImage = originalGenerateImage
+    promptEnhancer.enhancePrompt    = originalEnhancePrompt
+    imageDownloadSvc.downloadImage  = originalDownloadImage
+    server.close()
+    cleanup()
+  }
+}
+
+run()
+  .then(runSecondaryRegenerateTests)
+  .catch(err => {
+    console.error('TEST FAILURE:', err)
+    cleanup()
+    process.exit(1)
+  })
