@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const { deriveChapters } = require('./frameMath'); // FT-9: chapter numbers from dip_black chapter breaks
 
 const STYLE_LOCK = 'dark cinematic 4K shallow depth of field slow dolly movement documentary aesthetic muted tones';
 
@@ -432,7 +433,7 @@ function narratedDuration(scriptExcerpt) {
 
 function postProcessScenes(scenes, defaults = {}) {
   const style = defaults.style || {};
-  return validateAndGroundPrompts(scenes).map((scene, i) => {
+  const processed = validateAndGroundPrompts(scenes).map((scene, i) => {
     const subjectPrompt = (scene.higgsfield_prompt || '').trim();
 
     let finalPrompt = '';
@@ -477,6 +478,13 @@ function postProcessScenes(scenes, defaults = {}) {
       clip_search_tags:  scene.clip_search_tags || [],
     };
   });
+
+  // FT-9: chapter numbers, derived once at analysis time from dip_black chapter breaks
+  // (the transition guidance above defines dip_black as "chapter break, major time jump").
+  // Persisted here so later Fine-Tune edits to transition_out can't renumber chapters.
+  // Runs after the map because it needs the final scene_ids and defaulted transition_out.
+  const chapterMap = deriveChapters(processed);
+  return processed.map(s => ({ ...s, chapter: chapterMap[s.scene_id] }));
 }
 
 // ─── Primary analysis attempt ────────────────────────────────────────────────

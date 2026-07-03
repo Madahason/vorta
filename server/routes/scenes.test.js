@@ -1019,6 +1019,199 @@ async function runCutawayTests() {
   }
 }
 
+// FT-9: chapter-scoped montage apply (PATCH /chapter-pacing), the skip guardrail for
+// scenes with an intentional non-standard pacing, the manual-override-preserving music
+// bump, chapter backfill stability, and the snapshot revert.
+async function runChapterPacingTests() {
+  cleanup()
+  fs.mkdirSync(testDir, { recursive: true })
+  // No persisted chapter fields — exercises derive-and-backfill. dip_black after B ends
+  // chapter 1, dip_black after D ends chapter 2:  ch1 = [A, B], ch2 = [C, D], ch3 = [E].
+  const scenes = [
+    { scene_id: 'A', script_excerpt: 'A', shot_type: 'image', duration_seconds: 5,   transition_out: 'dissolve',  audio_duration: 1.0 },
+    { scene_id: 'B', script_excerpt: 'B', shot_type: 'image', duration_seconds: 5.5, transition_out: 'dip_black', audio_duration: 2.0 },
+    // C carries an intentional FT-5 per-scene action cut — the skip guardrail target.
+    { scene_id: 'C', script_excerpt: 'C', shot_type: 'image', duration_seconds: 2.3, transition_out: 'cut',       audio_duration: 1.5, pacing: 'action' },
+    // D carries a manual FT-1 mix override — the montage bump must NOT touch it.
+    { scene_id: 'D', script_excerpt: 'D', shot_type: 'image', duration_seconds: 5,   transition_out: 'dip_black', audio_duration: 3.0, audio_mix_override: { narration: 0.9, music: 0.5, ambient: 0.0 } },
+    { scene_id: 'E', script_excerpt: 'E', shot_type: 'image', duration_seconds: 4,   transition_out: 'dissolve',  audio_duration: 1.5 },
+  ]
+  fs.writeFileSync(scenesPath, JSON.stringify(scenes, null, 2))
+
+  const app = express()
+  app.use(express.json())
+  app.use('/api/scenes', require('./scenes'))
+  const server = app.listen(0)
+  const port   = server.address().port
+  const base   = `http://localhost:${port}/api/scenes`
+
+  const applyChapter = (chapter, extra = {}) => fetch(`${base}/chapter-pacing`, {
+    method:  'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ projectId: TEST_PROJECT, chapter, pacing: 'montage', ...extra }),
+  })
+
+  try {
+    // 1. Apply montage to chapter 1 ([A, B], neither has a pacing preset) — every scene in
+    // the chapter gets pacing/transition/clamped duration/music-forward mix; the chapter
+    // derivation is backfilled onto ALL scenes.
+    let res  = await applyChapter(1)
+    let body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    assert.strictEqual(body.scenes.length, 2)
+    assert.deepStrictEqual(body.skipped, [])
+
+    let byId = Object.fromEntries(body.scenes.map(s => [s.scene_id, s]))
+    for (const id of ['A', 'B']) {
+      assert.strictEqual(byId[id].pacing, 'montage', `scene ${id} pacing must be "montage"`)
+      assert.strictEqual(byId[id].transition_out, 'cut', `scene ${id} transition_out must be "cut"`)
+    }
+    // Same clamp as FT-5: A audio 1.0 -> floor 1.8s; B audio 2.0 -> floor 2.8s
+    assert.strictEqual(byId.A.duration_seconds, 1.8)
+    assert.strictEqual(byId.B.duration_seconds, 2.8)
+    console.log('PASS: montage applies pacing/transition_out/clamped duration to every scene in the chapter')
+
+    // Duration floor: same FT-1 hard floor as FT-5's test, verified via persisted values
+    assert.ok(byId.A.duration_seconds >= 1.0 + 0.8)
+    assert.ok(byId.B.duration_seconds >= 2.0 + 0.8)
+    console.log('PASS: duration floor (audio_duration + 0.8s) respected under montage clamping, end-to-end')
+
+    // Music-forward mix bump on scenes with no manual override
+    assert.deepStrictEqual(byId.A.audio_mix_override, { narration: 1.0, music: 0.22, ambient: 0.06 })
+    assert.deepStrictEqual(byId.B.audio_mix_override, { narration: 1.0, music: 0.22, ambient: 0.06 })
+    console.log('PASS: music bumped 0.12 -> 0.22 (narration/ambient at defaults) on scenes with no manual mix override')
+
+    let onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    // Backfill: every scene now carries its derived chapter number
+    assert.deepStrictEqual(onDisk.map(s => s.chapter), [1, 1, 2, 2, 3], 'derived chapters must be backfilled onto every scene on the first chapter-scoped call')
+    console.log('PASS: chapter numbers are derived from dip_black boundaries and backfilled onto all scenes')
+
+    // Scenes outside the chapter are untouched
+    const diskC = onDisk.find(s => s.scene_id === 'C')
+    const diskE = onDisk.find(s => s.scene_id === 'E')
+    assert.strictEqual(diskC.pacing, 'action')
+    assert.strictEqual(diskC.duration_seconds, 2.3)
+    assert.strictEqual(diskE.pacing, undefined)
+    assert.strictEqual(diskE.transition_out, 'dissolve')
+    console.log('PASS: scenes outside the chapter are completely untouched')
+
+    // 2. Chapter 2 ([C action, D manual-mix]) — C is skipped and reported; D is applied but
+    // its manual mix override is preserved untouched.
+    res  = await applyChapter(2)
+    body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    assert.strictEqual(body.scenes.length, 1)
+    assert.strictEqual(body.scenes[0].scene_id, 'D')
+    assert.deepStrictEqual(body.skipped, [{ scene_id: 'C', pacing: 'action' }])
+    console.log('PASS: a scene with an intentional per-scene action cut is skipped, and the response reports exactly which scene and why')
+
+    onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    const diskC2 = onDisk.find(s => s.scene_id === 'C')
+    assert.strictEqual(diskC2.pacing, 'action', 'skipped scene C must keep its action pacing on disk')
+    assert.strictEqual(diskC2.duration_seconds, 2.3, 'skipped scene C duration untouched')
+    assert.strictEqual(diskC2.transition_out, 'cut', 'skipped scene C transition untouched')
+    assert.strictEqual(diskC2.audio_mix_override, undefined, 'skipped scene C must not get a mix override')
+    console.log('PASS: the skipped scene is untouched on disk')
+
+    const diskD2 = onDisk.find(s => s.scene_id === 'D')
+    assert.strictEqual(diskD2.pacing, 'montage')
+    assert.deepStrictEqual(diskD2.audio_mix_override, { narration: 0.9, music: 0.5, ambient: 0.0 },
+      'a manual FT-1 mix override must be preserved exactly — montage never touches it')
+    console.log('PASS: an existing manual mix override is preserved untouched while montage still applies to the scene')
+
+    // 3. Chapter stability: montage set transition_out: "cut" on B and D — the dip_black
+    // boundaries that DEFINED chapters 1/2 are gone from the transitions. The persisted,
+    // backfilled chapter numbers must keep the grouping stable: chapter 3 is still just [E].
+    res  = await applyChapter(3)
+    body = await res.json()
+    assert.strictEqual(res.status, 200)
+    assert.strictEqual(body.scenes.length, 1)
+    assert.strictEqual(body.scenes[0].scene_id, 'E')
+    console.log('PASS: chapter grouping stays stable after montage erased the dip_black boundaries (persisted chapters win over re-derivation)')
+
+    // 4. Explicit override: re-apply chapter 2 with override_non_standard — C (action) is
+    // now included and converted to montage.
+    res  = await applyChapter(2, { override_non_standard: true })
+    body = await res.json()
+    assert.strictEqual(res.status, 200)
+    byId = Object.fromEntries(body.scenes.map(s => [s.scene_id, s]))
+    assert.deepStrictEqual(body.skipped, [])
+    assert.strictEqual(byId.C.pacing, 'montage', 'with explicit override, the action-cut scene is included')
+    assert.strictEqual(byId.C.transition_out, 'cut')
+    assert.deepStrictEqual(byId.C.audio_mix_override, { narration: 1.0, music: 0.22, ambient: 0.06 })
+    console.log('PASS: override_non_standard: true (the explicit user confirmation) includes previously-skipped scenes')
+
+    // 5. Revert — exactly how the client's chapter "Revert montage" works: PATCH /:sceneId
+    // per montage scene with the Fine-Tune snapshot values, including the mix (null clears
+    // the montage-set override entirely).
+    const snapshotValues = {
+      A: { duration_seconds: 5,   transition_out: 'dissolve',  pacing: 'standard', audio_mix_override: null },
+      B: { duration_seconds: 5.5, transition_out: 'dip_black', pacing: 'standard', audio_mix_override: null },
+    }
+    for (const [sceneId, original] of Object.entries(snapshotValues)) {
+      res  = await fetch(`${base}/${sceneId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId: TEST_PROJECT, ...original }),
+      })
+      body = await res.json()
+      assert.strictEqual(res.status, 200, `revert of scene ${sceneId} expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+      assert.strictEqual(body.scene.pacing, 'standard')
+      assert.strictEqual(body.scene.duration_seconds, original.duration_seconds)
+      assert.strictEqual(body.scene.transition_out, original.transition_out)
+      assert.strictEqual(body.scene.audio_mix_override, undefined, 'audio_mix_override: null must clear the montage-set mix entirely')
+    }
+    console.log('PASS: revert restores pacing/transition_out/duration_seconds and clears the montage mix for every scene in the chapter')
+
+    onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    for (const [sceneId, original] of Object.entries(snapshotValues)) {
+      const disk = onDisk.find(s => s.scene_id === sceneId)
+      assert.strictEqual(disk.pacing, 'standard')
+      assert.strictEqual(disk.duration_seconds, original.duration_seconds)
+      assert.strictEqual(disk.transition_out, original.transition_out)
+      assert.strictEqual(disk.audio_mix_override, undefined)
+    }
+    console.log('PASS: the reverted state persists to scenes.json for every scene in the chapter')
+
+    // 6. Error cases
+    res = await applyChapter(99)
+    assert.strictEqual(res.status, 404)
+    console.log('PASS: unknown chapter returns 404')
+
+    res = await applyChapter('two')
+    assert.strictEqual(res.status, 400)
+    res = await applyChapter(0)
+    assert.strictEqual(res.status, 400)
+    console.log('PASS: non-integer / non-positive chapter rejected (400)')
+
+    res = await fetch(`${base}/chapter-pacing`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: TEST_PROJECT, chapter: 1, pacing: 'action' }),
+    })
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/pacing must be 'montage'/.test(body.error))
+    console.log("PASS: pacing values other than 'montage' are rejected on this endpoint (400)")
+
+    res = await fetch(`${base}/chapter-pacing`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: '__no_such_project__', chapter: 1, pacing: 'montage' }),
+    })
+    assert.strictEqual(res.status, 404)
+    res = await fetch(`${base}/chapter-pacing`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chapter: 1, pacing: 'montage' }),
+    })
+    assert.strictEqual(res.status, 400)
+    console.log('PASS: unknown projectId (404) and missing projectId (400) handled')
+
+    console.log('\nAll chapter-pacing (montage) checks passed.')
+  } finally {
+    server.close()
+    cleanup()
+  }
+}
+
 run()
   .then(runWrappedShapeTest)
   .then(runReorderTests)
@@ -1029,6 +1222,7 @@ run()
   .then(runMatchCutTests)
   .then(runLayoutTests)
   .then(runCutawayTests)
+  .then(runChapterPacingTests)
   .catch(err => {
     console.error('TEST FAILURE:', err)
     cleanup()

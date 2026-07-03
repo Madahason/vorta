@@ -4154,3 +4154,90 @@ Also verified manually:
 - [x] PLAN.md updated with FT-8 completion entry
 
 **Resumed session (2026-07-03):** the original FT-8 session was interrupted after all code and this PLAN entry were written but *before anything was committed* — the entire FT-8 diff was sitting uncommitted in the working tree. This session diagnosed the actual state (all pieces present: endpoints, validation, `SceneRenderer` swap, Fine-Tune UI), then independently re-verified everything rather than trusting the entry above: re-ran all three test suites (frameMath 73/73, scenes 90/90, higgsfieldRegenerate 39/39 — FT-1–FT-7 legacy checks all included and passing), re-ran ESLint on FineTuneStep.jsx (clean) and the production client build (clean), and rebuilt the disposable render test from scratch (`projects/__ft8_render_test__`, deleted after): 2 scenes (6.4s with narration + cutaway at `insert_at: 2, duration: 1.5`; 3s plain), rendered 270/270 frames, exit 0. Verified beyond the original entry's checks: extracted frames at 1.5s / 2.5s / 4.5s visually confirm main image → cutaway image → main image, and `volumedetect` on the 2.0–3.5s window (mean −28.0 dB, max −12.1 dB) and the 3.6–5.5s tail (mean −32.2 dB) confirms narration plays through the cutaway uninterrupted. Output duration exactly 9.000s = 270 frames = `calculateDocumentaryDuration`'s value, so a cutaway provably doesn't shift composition timing in a real render. Committed as `feature: FT-8 Fine-Tune stage — cutaway insert`. Unrelated working-tree changes found alongside FT-8 (ScriptInput target-duration UI, render.js motion_component syntax guard, remotion.config/defaults tweaks, runtime data files) were deliberately left out of the FT-8 commit.
+
+---
+
+### Phase FT-9 — Fine-Tune stage: montage pacing flag ✅ COMPLETE (final Fine-Tune phase)
+
+**FT-5's range-apply mechanism reviewed before making changes** (per the task): `PATCH /api/scenes/pacing` takes an explicit `scene_ids` array from the client's multi-select, sets `pacing`/`transition_out`/clamped `duration_seconds` per scene, resets manual FT-4 boundary offsets fully inside the range via `resetActionCutBoundaryOffsets`, and reverts per scene through `PATCH /:sceneId` restoring Fine-Tune snapshot values. FT-9 is exactly that mechanism at chapter scope: the "range" is *every scene in the chapter*, selection is one click on the chapter header instead of manual multi-select, and the same clamp/reset/revert machinery is reused rather than re-implemented.
+
+**Deviation from the task's premise, documented up front:** the task said to use "the existing `scene.chapter` field" — **no such field existed anywhere**: not in `postProcessScenes`' schema, not in any Claude analysis prompt/output, not in any project's `scenes.json` (verified by grep across the codebase and by inspecting live project data). FT-9 therefore *establishes* the chapter notion, from the one place the codebase already defines a chapter boundary: `claude.js`'s transition guidance, where `dip_black` = "chapter break, major time jump." A chapter is a run of consecutive scenes; each `dip_black` `transition_out` ends one (a `dip_black` on the final scene ends the video, not a chapter — no phantom empty chapter). Three-part design:
+- `frameMath.deriveChapters(scenes)` — the bootstrap derivation from `dip_black` boundaries.
+- `postProcessScenes` (claude.js) now assigns `chapter` at analysis time, so every new project carries persisted chapter numbers from birth (same additive-field precedent as FT-6/7/8).
+- `frameMath.resolveChapterMap(scenes)` — persisted `scene.chapter` wins once **every** scene has one; otherwise derive (all-or-nothing, so partial/older data can't mix the two sources). The chapter-pacing route **backfills** the derived numbers onto all scenes on its first run against an older project. Persistence is not optional-nice-to-have: applying montage sets `transition_out: 'cut'` on every scene in the chapter — including a `dip_black` scene that *ended* it — which would otherwise merge that chapter into the next and renumber everything on re-derivation. A dedicated test proves the grouping stays stable after montage erases the boundary transitions.
+
+**What was built:**
+- `server/services/frameMath.js` — `MONTAGE_MUSIC_LEVEL = 0.22`, `DEFAULT_AUDIO_MIX` (mirrors the client's `DEFAULT_MIX` — narration 1.0 / music 0.12 / ambient 0.06), `deriveChapters`, `resolveChapterMap`, and `montageAudioMixOverride(existingOverride)` — returns the music-forward mix (`music: 0.22`, narration/ambient at defaults) **only when no manual override exists**; an existing `audio_mix_override` is returned exactly as stored, untouched. The duration clamp is FT-5's own `clampDurationForActionCut`, reused unchanged — same tighter target, same FT-1 hard floor (`audio_duration + 0.8s`) that always wins, per the task's "same floor logic as FT-5."
+- `server/routes/scenes.js` — `PATCH /api/scenes/chapter-pacing`. Body: `{ projectId, chapter, pacing: 'montage', override_non_standard? }`. Registered **before** `PATCH /:sceneId` (same Express param-collision class as FT-5's `/pacing`). Only `'montage'` is accepted, mirroring `/pacing` only accepting `'action'`; revert goes through `PATCH /:sceneId` snapshot-restore. For every applied scene in the chapter: `pacing: 'montage'`, `transition_out: 'cut'`, clamped `duration_seconds`, and the manual-override-respecting mix default. Manual FT-4 boundary offsets fully inside the applied set are reset via the same `resetActionCutBoundaryOffsets` (hard cuts don't bleed audio — same reasoning as FT-5, reused not duplicated).
+- **Skip guardrail:** any chapter scene whose `pacing` is already non-standard (an intentional per-scene FT-5 action cut, or a previous montage) is skipped by default and reported in the response's `skipped` array as `{ scene_id, pacing }`. Only `override_non_standard: true` — sent exclusively by the UI's explicit "Override & include all" confirmation — includes them.
+- `server/services/claude.js` — `postProcessScenes` assigns `chapter` via `deriveChapters` after the per-scene map (it needs the final scene_ids and defaulted `transition_out` values). One require + three lines; nothing else in the analysis flow touched.
+- `client/src/pages/wizard/FineTuneStep.jsx`:
+  - `chapterNumbersFor(scenes)` — client mirror of `resolveChapterMap` (persisted-wins-else-derive), kept in sync by comment cross-references, used to group the scene list.
+  - `ChapterMontageHeader` — a header row before the first scene of each chapter run: "CHAPTER N · x scenes", a montage-count badge when any scene in the chapter is montage, and "Apply Montage to Chapter N". Clicking apply when some scenes have a non-standard pacing shows a warning panel **listing exactly which scenes would be skipped and why** (`003 (action)`, …) with three explicit choices: "Apply & skip them" (default-safe), "Override & include all" (sends `override_non_standard: true`), and Cancel. After a response, any server-reported skips are surfaced inline. "Revert montage to generated" restores `pacing`/`transition_out`/`duration_seconds`/`audio_mix_override` from the Fine-Tune snapshot for every montage scene in the chapter, through the existing `PATCH /:sceneId` (FT-5's revert precedent — `audio_mix_override: null` clears a montage-set mix entirely when the snapshot had none).
+  - `FineTuneCard`'s pacing row now shows a "🎞 Montage" badge for `pacing: 'montage'` (alongside FT-5's "⚡ Action Cut"), and its per-scene pacing revert additionally restores the snapshot mix **only for montage scenes** — the FT-5 action-cut revert path is byte-for-byte unchanged for action scenes.
+
+**Testing — commands run and results:**
+```
+$ node server/services/frameMath.test.js
+```
+82/82 assertions passed (73 from FT-1–FT-8 unchanged, plus 9 new): FT-9 constants defined and `DEFAULT_AUDIO_MIX` asserted to mirror the client's `DEFAULT_MIX`; `deriveChapters` splits after each `dip_black`, puts everything in chapter 1 when there is none, and ignores a `dip_black` on the final scene (no phantom chapter); `resolveChapterMap` uses persisted chapters when every scene has one (including the exact case where a derivation would disagree because montage erased a boundary) and falls back to derivation all-or-nothing when any scene lacks one; `montageAudioMixOverride` bumps music 0.12 → 0.22 with narration/ambient at defaults for `null`/`undefined`, and returns an existing manual override as the *same object*, untouched; the duration floor under montage clamping is proven via the same `clampDurationForActionCut` FT-5 already floors at `audio_duration + 0.8s`.
+
+```
+$ node server/routes/scenes.test.js
+```
+106/106 assertions passed (90 from FT-1–FT-8 unchanged, plus 16 new, on a 5-scene fixture with two `dip_black` chapter breaks → chapters [A,B] / [C,D] / [E], where C carries a pre-existing per-scene action cut and D carries a manual FT-1 mix override): montage applies `pacing`/`transition_out: 'cut'`/clamped durations (exact expected values 1.8s/2.8s) to every scene in chapter 1; the FT-1 floor holds end-to-end on persisted values; scenes with no manual mix get exactly `{ narration: 1.0, music: 0.22, ambient: 0.06 }`; derived chapters `[1,1,2,2,3]` are backfilled onto **all** scenes on the first call; scenes outside the chapter are byte-for-byte untouched; applying to chapter 2 **skips C and reports `[{ scene_id: 'C', pacing: 'action' }]`** while C is confirmed fully untouched on disk; D is applied but its manual mix `{ narration: 0.9, music: 0.5, ambient: 0.0 }` is preserved exactly; chapter grouping stays stable on a subsequent call **after montage turned the chapter-defining `dip_black`s into `cut`s** (persisted chapters win); `override_non_standard: true` includes the previously-skipped action scene; revert via `PATCH /:sceneId` restores `pacing`/`transition_out`/`duration_seconds` and clears the montage mix (`audio_mix_override: null` → field removed) for every scene in the chapter, verified in responses and on disk; unknown chapter → 404, non-integer/zero chapter → 400, `pacing` ≠ `'montage'` → 400, unknown/missing projectId → 404/400.
+
+```
+$ node server/routes/higgsfieldRegenerate.test.js
+```
+39/39 assertions passed — unchanged from FT-8, re-run as a regression check.
+
+Also verified manually:
+- `node -e "require('./server/routes/scenes.js'); require('./server/services/claude.js')"` — both load without error (claude.js gained a frameMath require)
+- Against the **live dev server** (nodemon picked up the change): `curl -X PATCH /api/scenes/chapter-pacing` with `{ projectId, pacing: 'zzz' }` returned the route's own distinctive `400 "pacing must be 'montage'…"` — proving the request matched the new `/chapter-pacing` route and not `/:sceneId` with `sceneId="chapter-pacing"` (the same registration-order check FT-5 ran)
+- `npx eslint src/pages/wizard/FineTuneStep.jsx` — clean
+- `npx vite build` — clean production build
+- Full FT-1–FT-8 suites re-run after all FT-9 changes — all still pass unmodified
+
+**Known limitations (FT-9-specific):**
+- The montage music bump inherits FT-1's documented limitation: `audio_mix_override.music` is fully wired as *data* (set, validated, persisted, reverted) but **no music track exists anywhere in the render pipeline yet** for it to control — the bump becomes audible only once a future phase adds real music mixing. The FineTuneStep mix UI already states this.
+- After an FT-2 reorder that interleaves chapters, persisted chapter numbers travel with their scenes, so a chapter's scenes may no longer be contiguous in display order — the header then appears once per contiguous run. Montage-by-chapter still applies to exactly the right scene set (membership is by chapter value, not position).
+- The FT-5/FT-6 card-dropdown cosmetic lag applies to montage's bulk `transition_out` change identically (underlying data correct, card-local dropdown state may lag until remount) — same class, not newly introduced.
+
+**Production-readiness checklist:**
+- [x] Reuses FT-5's `pacing` field; this phase sets `'montage'` (the value was already in `PACING_VALUES` since FT-5)
+- [x] Chapter-level "Apply Montage to Chapter N" control at each chapter's header in the scene grid
+- [x] Montage sets `pacing: 'montage'`, `transition_out: 'cut'`, FT-5-floor-clamped `duration_seconds`, and a music-forward mix default that never touches an existing manual override
+- [x] `PATCH /api/scenes/chapter-pacing` implemented, registered before `/:sceneId`, persists to the project's scenes.json
+- [x] Scenes with an existing non-standard pacing are skipped and reported; explicit user confirmation (`override_non_standard`) required to include them, with the warning listing exactly which scenes
+- [x] "Revert to generated" restores `pacing`/`transition_out`/`duration_seconds`/`audio_mix_override` from the Fine-Tune snapshot for every montage scene in the chapter
+- [x] `calculateDocumentaryDuration`'s core math untouched — montage only feeds different values through existing `duration_seconds`/`transition_out` fields, same as FT-5
+- [x] FT-1–FT-8 logic untouched (the two additive card changes — montage badge, montage-only mix restore — leave every action-cut path byte-for-byte identical)
+- [x] No scope beyond the described phase
+- [x] Client build clean — zero errors
+- [x] PLAN.md updated with FT-9 completion entry + the roadmap summary below
+
+---
+
+## Fine-Tune Stage — Complete
+
+All nine phases of the Fine-Tune roadmap are implemented, tested, and committed to `main`:
+
+| Phase | Feature | Status |
+|-------|---------|--------|
+| FT-1 | Duration trim, transition override, audio mix override | ✅ `cdee1f5` |
+| FT-2 | Scene reorder (drag & drop, adjacency-aware duration math) | ✅ `c570b8c` |
+| FT-3 | Image swap (upload) and Higgsfield regenerate | ✅ `39f48db` |
+| FT-4 | Manual J-cut/L-cut boundary offset | ✅ `82efc10` |
+| FT-5 | Action cut pacing preset (multi-select range apply) | ✅ `0f86bfd` |
+| FT-6 | Match cut suggestion (analysis-time detection, one-click accept) | ✅ `901667a` |
+| FT-7 | Split-screen layout (reuse / regenerate secondary panel) | ✅ `90353cb` |
+| FT-8 | Cutaway insert (temporary mid-scene image swap) | ✅ `bee2cc5` |
+| FT-9 | Montage pacing flag (chapter-scoped apply) | ✅ this commit |
+
+**Known limitations carried across the phases (all documented in their entries above):**
+- **FT-1 (affects FT-9):** `audio_mix_override.music`/`.ambient` are wired end-to-end as data only — there is no music or ambient track in the render pipeline yet for them to control. Narration volume is live; music/ambient (including FT-9's montage bump to 0.22) become audible only when a future phase adds real music/ambient mixing.
+- **FT-5/FT-6 (cosmetic):** `FineTuneCard`'s dropdowns hold displayed values in card-local state — an externally-driven change (bulk action cut, match-cut accept, chapter montage) updates the data correctly but the dropdown visual may lag until the card remounts (e.g. leaving and re-entering the step).
+- **FT-7:** Ken Burns motion is disabled on split-screen scenes — both panels render static (the guardrail's explicitly-offered escape hatch; single-panel Ken Burns untouched). Per-panel Ken Burns is a reasonable future phase.
+- **FT-9:** `scene.chapter` did not exist before this phase — chapters are derived from `dip_black` chapter breaks and persisted (analysis-time for new projects, backfilled on first chapter operation for old ones). After an FT-2 reorder interleaves chapters, a chapter's scenes may be non-contiguous in display order (header repeats per run; the apply still targets the correct set).
+- **General:** match-cut detection (FT-6) requires a Claude API call at analysis time and degrades gracefully to "no suggestions" on failure; FT-3/FT-7/FT-8 regeneration requires the Higgsfield CLI to be configured.

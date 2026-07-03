@@ -5,7 +5,7 @@ const fs      = require('fs')
 const {
   validateSceneUpdate, validateBoundaryUpdate, resetBrokenBoundaryAdjacency,
   clampDurationForActionCut, resetActionCutBoundaryOffsets, isValidLayout, LAYOUT_VALUES,
-  validateCutawayUpdate,
+  validateCutawayUpdate, resolveChapterMap, montageAudioMixOverride,
 } = require('../services/frameMath')
 const { PROJECTS_DIR, readScenesFile, writeScenesFile } = require('../services/scenesFile')
 const { backupOriginalIfNeeded } = require('../services/imageSwap')
@@ -58,6 +58,86 @@ router.patch('/pacing', (req, res) => {
 
   const affected = file.scenes.filter(s => idSet.has(String(s.scene_id)))
   res.json({ scenes: affected })
+})
+
+// PATCH /api/scenes/chapter-pacing
+// Body: { projectId, chapter, pacing: 'montage', override_non_standard?: boolean }
+// FT-9 chapter-scoped montage apply — FT-5's range-apply mechanism at chapter scope instead
+// of manual selection. Must be registered BEFORE PATCH /:sceneId (same param-collision issue
+// as /pacing above). Only 'montage' is accepted here, mirroring /pacing only accepting
+// 'action': reverting to standard goes through PATCH /:sceneId, restoring each scene's own
+// Fine-Tune snapshot values (including audio_mix_override).
+//
+// Chapter membership: persisted scene.chapter when every scene has one; otherwise derived
+// from dip_black chapter breaks and BACKFILLED onto all scenes in this same write, so that
+// montage's own transition_out: 'cut' (which may erase the dip_black that ended this
+// chapter) can never renumber chapters on a later call. See frameMath.resolveChapterMap.
+//
+// Skip guardrail: a scene whose pacing is already non-standard (an FT-5 per-scene action
+// cut, or a previous montage) is an intentional user choice — it is SKIPPED and reported in
+// the response's `skipped` array, unless the client sends override_non_standard: true after
+// the user explicitly confirms.
+router.patch('/chapter-pacing', (req, res) => {
+  const { projectId, chapter, pacing, override_non_standard } = req.body || {}
+
+  if (!projectId) return res.status(400).json({ error: 'projectId required' })
+  if (pacing !== 'montage') {
+    return res.status(400).json({ error: "pacing must be 'montage' — this endpoint only implements the chapter-scoped montage preset (action cut uses PATCH /pacing, revert uses PATCH /:sceneId)" })
+  }
+  if (!Number.isInteger(chapter) || chapter < 1) {
+    return res.status(400).json({ error: 'chapter must be a positive integer' })
+  }
+
+  const file = readScenesFile(projectId)
+  if (!file) return res.status(404).json({ error: `No scenes.json found for project ${projectId}` })
+
+  const { map: chapterMap, derived } = resolveChapterMap(file.scenes)
+  if (derived) {
+    // First chapter-scoped operation on a project without persisted chapters — backfill.
+    file.scenes = file.scenes.map(s => ({ ...s, chapter: chapterMap[String(s.scene_id)] }))
+  }
+
+  const chapterScenes = file.scenes.filter(s => chapterMap[String(s.scene_id)] === chapter)
+  if (chapterScenes.length === 0) {
+    return res.status(404).json({ error: `Chapter ${chapter} not found in project ${projectId}` })
+  }
+
+  const skipped    = []
+  const appliedIds = []
+  chapterScenes.forEach(s => {
+    const scenePacing = s.pacing || 'standard'
+    if (scenePacing !== 'standard' && !override_non_standard) {
+      skipped.push({ scene_id: String(s.scene_id), pacing: scenePacing })
+    } else {
+      appliedIds.push(String(s.scene_id))
+    }
+  })
+
+  const appliedSet = new Set(appliedIds)
+  let updatedScenes = file.scenes.map(scene => {
+    if (!appliedSet.has(String(scene.scene_id))) return scene
+    return {
+      ...scene,
+      pacing:           'montage',
+      transition_out:   'cut',
+      // Same clamp as FT-5's action cut — tightens toward the smaller buffer but never
+      // below FT-1's hard floor (audio_duration + 0.8s), which always wins mathematically.
+      duration_seconds: clampDurationForActionCut(scene.duration_seconds, scene.audio_duration),
+      // Music-forward mix ONLY when the user never set a manual override; an existing
+      // override comes back from montageAudioMixOverride exactly as stored.
+      audio_mix_override: montageAudioMixOverride(scene.audio_mix_override),
+    }
+  })
+
+  // Montage applies hard cuts, exactly like action cut — reset any manual FT-4 boundary
+  // offset entirely within the applied set rather than leaving it pointing at a cut.
+  updatedScenes = resetActionCutBoundaryOffsets(updatedScenes, appliedIds)
+
+  file.scenes = updatedScenes
+  writeScenesFile(file)
+
+  const affected = file.scenes.filter(s => appliedSet.has(String(s.scene_id)))
+  res.json({ scenes: affected, skipped, chapter })
 })
 
 // PATCH /api/scenes/:sceneId

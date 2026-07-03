@@ -329,6 +329,58 @@ function resetActionCutBoundaryOffsets(scenesInOrder, affectedSceneIds) {
   })
 }
 
+// ── FT-9: montage pacing flag (chapter-scoped) ───────────────────────────────
+// No chapter data exists anywhere upstream — Claude's analysis never assigned one before
+// FT-9 — so the chapter boundary definition comes from the one place the codebase already
+// defines it: claude.js's transition guidance, where dip_black means "chapter break, major
+// time jump." A chapter is a run of consecutive scenes; each dip_black transition ends one.
+// deriveChapters is only the BOOTSTRAP: postProcessScenes persists the derived numbers at
+// analysis time for new projects, and the chapter-pacing route backfills them the first
+// time it runs on an older project. Persistence matters because applying montage sets
+// transition_out: 'cut' on every scene in the chapter — including a dip_black scene that
+// ENDED it — which would otherwise merge that chapter into the next one and renumber
+// everything on re-derivation.
+
+const MONTAGE_MUSIC_LEVEL = 0.22
+// Mirrors DEFAULT_MIX in client/src/pages/wizard/FineTuneStep.jsx — keep the two in sync.
+const DEFAULT_AUDIO_MIX = { narration: 1.0, music: 0.12, ambient: 0.06 }
+
+function deriveChapters(scenes) {
+  const map = {}
+  let chapter = 1
+  scenes.forEach((scene, i) => {
+    map[String(scene.scene_id)] = chapter
+    // A dip_black on the LAST scene ends the video, not a chapter — no phantom next chapter.
+    if (scene.transition_out === 'dip_black' && i < scenes.length - 1) chapter += 1
+  })
+  return map
+}
+
+// Persisted scene.chapter wins once every scene has one; otherwise fall back to deriving
+// from dip_black boundaries. All-or-nothing on purpose: a mixed state (some persisted, some
+// not) can only mean partial/older data, and mixing the two sources could double-assign a
+// chapter number to two disjoint scene runs.
+function resolveChapterMap(scenes) {
+  const allPersisted = scenes.length > 0 && scenes.every(
+    s => Number.isInteger(s.chapter) && s.chapter >= 1
+  )
+  if (allPersisted) {
+    const map = {}
+    scenes.forEach(s => { map[String(s.scene_id)] = s.chapter })
+    return { map, derived: false }
+  }
+  return { map: deriveChapters(scenes), derived: true }
+}
+
+// Montage defaults the mix toward music-forward (music 0.12 → 0.22, narration/ambient at
+// their existing defaults) — but ONLY when the user has never set a manual override on this
+// scene. An existing audio_mix_override is the user's own FT-1 choice and is returned
+// untouched, exactly as stored.
+function montageAudioMixOverride(existingOverride) {
+  if (existingOverride != null) return existingOverride
+  return { ...DEFAULT_AUDIO_MIX, music: MONTAGE_MUSIC_LEVEL }
+}
+
 module.exports = {
   FPS,
   TRANSITION_FRAMES,
@@ -360,4 +412,9 @@ module.exports = {
   clampDurationForActionCut,
   resetActionCutBoundaryOffsets,
   validateCutawayUpdate,
+  MONTAGE_MUSIC_LEVEL,
+  DEFAULT_AUDIO_MIX,
+  deriveChapters,
+  resolveChapterMap,
+  montageAudioMixOverride,
 }

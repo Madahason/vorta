@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react'
+import { Fragment, useState, useMemo, useRef } from 'react'
 import { RotateCcw, Loader2, GripVertical, Upload, RefreshCw } from 'lucide-react'
 import { calculateDocumentaryDuration } from '@remotion-compositions/compositions/Documentary'
 
@@ -52,6 +52,25 @@ function maxBoundaryOffset(outgoingScene, nextScene) {
   return Math.max(0, parseFloat(bound.toFixed(2)))
 }
 
+// FT-9: chapter numbers per scene index. Mirrors deriveChapters/resolveChapterMap in
+// server/services/frameMath.js — keep the two in sync. Persisted scene.chapter wins once
+// every scene has one (set at analysis time, or backfilled by the chapter-pacing route's
+// first run); otherwise derive from dip_black boundaries (claude.js's own definition of a
+// chapter break). Persistence matters because montage sets transition_out: 'cut', which can
+// erase the dip_black that ended a chapter and would otherwise renumber on re-derivation.
+function chapterNumbersFor(scenes) {
+  const allPersisted = scenes.length > 0 && scenes.every(
+    s => Number.isInteger(s.chapter) && s.chapter >= 1
+  )
+  if (allPersisted) return scenes.map(s => s.chapter)
+  let chapter = 1
+  return scenes.map((s, i) => {
+    const current = chapter
+    if (s.transition_out === 'dip_black' && i < scenes.length - 1) chapter += 1
+    return current
+  })
+}
+
 function readSnapshot() {
   try { return JSON.parse(localStorage.getItem(SNAPSHOT_KEY)) || {} } catch { return {} }
 }
@@ -97,6 +116,9 @@ export function FineTuneStep({
 
   const totalFrames  = useMemo(() => calculateDocumentaryDuration(scenes, 30), [scenes])
   const totalSeconds = totalFrames / 30
+
+  // FT-9: chapter number for each scene index, for the chapter headers + montage control.
+  const chapterNumbers = useMemo(() => chapterNumbersFor(scenes), [scenes])
 
   const currentOrder = scenes.map(s => s.scene_id)
   const orderChanged = snapshot.__order && JSON.stringify(currentOrder) !== JSON.stringify(snapshot.__order)
@@ -296,8 +318,23 @@ export function FineTuneStep({
         <div className="space-y-3">
           {scenes.map((scene, i) => {
             const nextScene = scenes[i + 1] || null
+            // FT-9: a chapter header (with the montage control) precedes the first scene of
+            // each chapter run.
+            const chapterNum     = chapterNumbers[i]
+            const isChapterStart = i === 0 || chapterNumbers[i - 1] !== chapterNum
             return (
-              <div key={scene.scene_id} style={{ display: 'flex', alignItems: 'stretch', gap: 8 }}>
+              <Fragment key={scene.scene_id}>
+              {isChapterStart && (
+                <ChapterMontageHeader
+                  chapter={chapterNum}
+                  chapterScenes={scenes.filter((_, idx) => chapterNumbers[idx] === chapterNum)}
+                  projectId={projectId}
+                  snapshot={snapshot}
+                  scenes={scenes}
+                  onScenesChange={onScenesChange}
+                />
+              )}
+              <div style={{ display: 'flex', alignItems: 'stretch', gap: 8 }}>
                 {selectMode && (
                   <label
                     className="shrink-0 flex items-start pt-4 pl-1 cursor-pointer select-none"
@@ -360,8 +397,159 @@ export function FineTuneStep({
                 )}
                 </div>
               </div>
+              </Fragment>
             )
           })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── FT-9: chapter header with the montage pacing control ──────────────────────
+// FT-5's range-apply mechanism at chapter scope: instead of a manually selected contiguous
+// range, the range is "every scene in this chapter" and the apply goes through PATCH
+// /api/scenes/chapter-pacing. Scenes whose pacing is already non-standard (an intentional
+// per-scene FT-5 action cut, or a previous montage) are skipped by default — a warning
+// lists them before anything is committed, and only an explicit "Override & include" click
+// sends override_non_standard: true. Revert restores pacing/transition_out/duration_seconds/
+// audio_mix_override from the Fine-Tune snapshot for every montage scene in the chapter,
+// through the existing PATCH /:sceneId endpoint (FT-5's revert precedent).
+function ChapterMontageHeader({ chapter, chapterScenes, projectId, snapshot, scenes, onScenesChange }) {
+  const [confirming, setConfirming] = useState(false)
+  const [saving,     setSaving]     = useState(false)
+  const [error,      setError]      = useState(null)
+  const [skipNotice, setSkipNotice] = useState(null)
+
+  const nonStandard   = chapterScenes.filter(s => (s.pacing || 'standard') !== 'standard')
+  const montageScenes = chapterScenes.filter(s => s.pacing === 'montage')
+
+  const mergeScenes = (updatedList) => {
+    const byId = new Map(updatedList.map(s => [s.scene_id, s]))
+    onScenesChange(scenes.map(s => byId.has(s.scene_id) ? { ...s, ...byId.get(s.scene_id) } : s))
+  }
+
+  const applyMontage = async (overrideNonStandard) => {
+    setSaving(true); setError(null); setSkipNotice(null)
+    try {
+      const res = await fetch(`${SERVER_URL}/api/scenes/chapter-pacing`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId, chapter, pacing: 'montage', override_non_standard: overrideNonStandard }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Montage apply failed')
+      mergeScenes(data.scenes)
+      if (data.skipped?.length) {
+        setSkipNotice(`Skipped (already have a pacing preset): ${data.skipped.map(s => `${s.scene_id} (${s.pacing})`).join(', ')}`)
+      }
+      setConfirming(false)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleApplyClick = () => {
+    setSkipNotice(null)
+    if (nonStandard.length > 0) {
+      setConfirming(true)
+      return
+    }
+    applyMontage(false)
+  }
+
+  const revertMontage = async () => {
+    setSaving(true); setError(null); setSkipNotice(null)
+    try {
+      const updates = new Map()
+      for (const s of montageScenes) {
+        const snap = snapshot[s.scene_id]
+        if (!snap) continue
+        const res = await fetch(`${SERVER_URL}/api/scenes/${s.scene_id}`, {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            projectId,
+            pacing:             snap.pacing || 'standard',
+            transition_out:     snap.transition_out,
+            duration_seconds:   snap.duration_seconds,
+            // Montage may have set a music-forward mix (only when no manual override
+            // existed) — restore the snapshot's mix, or clear the field via null.
+            audio_mix_override: snap.audio_mix_override || null,
+          }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || `Revert failed for scene ${s.scene_id}`)
+        updates.set(s.scene_id, data.scene)
+      }
+      onScenesChange(scenes.map(s => updates.has(s.scene_id) ? { ...s, ...updates.get(s.scene_id) } : s))
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+        padding: '8px 14px',
+        background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8,
+      }}>
+        <div style={{ minWidth: 0 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', color: 'rgba(255,255,255,0.55)' }}>
+            CHAPTER {chapter}
+          </span>
+          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', marginLeft: 8 }}>
+            {chapterScenes.length} scene{chapterScenes.length !== 1 ? 's' : ''}
+          </span>
+          {montageScenes.length > 0 && (
+            <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/25 text-purple-300" style={{ marginLeft: 8 }}>
+              🎞 Montage · {montageScenes.length}/{chapterScenes.length}
+            </span>
+          )}
+          {skipNotice && (
+            <div style={{ fontSize: 10, color: 'rgba(251,191,36,0.8)', marginTop: 2 }}>{skipNotice}</div>
+          )}
+          {error && (
+            <div style={{ fontSize: 10, color: 'rgba(248,113,113,0.85)', marginTop: 2 }}>{error}</div>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          {saving && <Loader2 size={12} className="animate-spin text-blue-400" />}
+          {montageScenes.length > 0 && (
+            <RevertButton onClick={revertMontage} label="Revert montage to generated" />
+          )}
+          <button onClick={handleApplyClick} disabled={saving} className="vorta-btn vorta-btn-ghost" style={{ fontSize: 12 }}>
+            Apply Montage to Chapter {chapter}
+          </button>
+        </div>
+      </div>
+
+      {confirming && (
+        <div style={{
+          marginTop: 6, padding: '10px 14px',
+          background: 'rgba(251,191,36,0.05)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 8,
+        }}>
+          <div style={{ fontSize: 11, color: 'rgba(251,191,36,0.85)' }}>
+            {nonStandard.length} scene{nonStandard.length !== 1 ? 's' : ''} in this chapter already{' '}
+            {nonStandard.length !== 1 ? 'have' : 'has'} a pacing preset and will be skipped:{' '}
+            {nonStandard.map(s => `${s.scene_id} (${s.pacing})`).join(', ')}
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button onClick={() => applyMontage(false)} disabled={saving} className="vorta-btn vorta-btn-primary" style={{ fontSize: 12 }}>
+              Apply &amp; skip them
+            </button>
+            <button onClick={() => applyMontage(true)} disabled={saving} className="vorta-btn vorta-btn-ghost" style={{ fontSize: 12 }}>
+              Override &amp; include all {chapterScenes.length}
+            </button>
+            <button onClick={() => setConfirming(false)} disabled={saving} className="vorta-btn vorta-btn-ghost" style={{ fontSize: 12 }}>
+              Cancel
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -484,13 +672,18 @@ function FineTuneCard({
       } else if (field === 'pacing') {
         // FT-5: action cut changes pacing/transition_out/duration_seconds together, so
         // reverting it restores all three from the snapshot in one call.
+        // FT-9: montage additionally set a music-forward audio_mix_override (only when the
+        // user had no manual override) — restore the snapshot's mix too for montage scenes.
+        const isMontage = scene.pacing === 'montage'
         const updated = await patchScene({
           pacing:           snapshot.pacing || 'standard',
           transition_out:   snapshot.transition_out,
           duration_seconds: snapshot.duration_seconds,
+          ...(isMontage ? { audio_mix_override: snapshot.audio_mix_override || null } : {}),
         })
         setTransition(updated.transition_out || 'dissolve')
         setDuration(updated.duration_seconds ?? min)
+        if (isMontage) setMix({ ...DEFAULT_MIX, ...(updated.audio_mix_override || {}) })
         onSceneUpdate(updated)
       }
     } catch (err) {
@@ -804,9 +997,16 @@ function FineTuneCard({
                     {pacingChanged && <RevertButton onClick={() => revertField('pacing')} />}
                   </div>
                 </div>
-                <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-300">
-                  ⚡ Action Cut
-                </span>
+                {/* FT-9: montage shares this row — same field, different preset badge */}
+                {pacing === 'montage' ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-purple-500/10 border border-purple-500/25 text-purple-300">
+                    🎞 Montage
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-300">
+                    ⚡ Action Cut
+                  </span>
+                )}
               </div>
             )}
 

@@ -11,6 +11,7 @@ const {
   maxBoundaryOffsetSeconds, validateBoundaryUpdate, resolveManualOverlapSeconds,
   resetBrokenBoundaryAdjacency, clampDurationForActionCut, resetActionCutBoundaryOffsets,
   validateCutawayUpdate,
+  MONTAGE_MUSIC_LEVEL, DEFAULT_AUDIO_MIX, deriveChapters, resolveChapterMap, montageAudioMixOverride,
 } = require('./frameMath')
 
 // Constants must match remotion/src/compositions/Documentary.jsx exactly:
@@ -435,5 +436,76 @@ console.log('PASS: getTransition ignores the cutaway field entirely — same des
 
 assert.strictEqual(sceneDur(sceneWithCutaway, 30), sceneDur(sceneNoCutaway, 30), 'sceneDur (the scene\'s own frame count) must be identical regardless of cutaway')
 console.log('PASS: sceneDur ignores the cutaway field entirely')
+
+// ── FT-9: montage pacing flag (chapter-scoped) ───────────────────────────────
+assert.strictEqual(MONTAGE_MUSIC_LEVEL, 0.22)
+assert.deepStrictEqual(DEFAULT_AUDIO_MIX, { narration: 1.0, music: 0.12, ambient: 0.06 },
+  'DEFAULT_AUDIO_MIX must mirror DEFAULT_MIX in client/src/pages/wizard/FineTuneStep.jsx')
+console.log('PASS: FT-9 constants defined (MONTAGE_MUSIC_LEVEL, DEFAULT_AUDIO_MIX mirroring the client)')
+
+// deriveChapters — dip_black is the chapter break (claude.js's own transition definition)
+let chMap = deriveChapters([
+  { scene_id: '001', transition_out: 'dissolve' },
+  { scene_id: '002', transition_out: 'dip_black' }, // ends chapter 1
+  { scene_id: '003', transition_out: 'cut' },
+  { scene_id: '004', transition_out: 'dip_black' }, // ends chapter 2
+  { scene_id: '005', transition_out: 'dissolve' },
+])
+assert.deepStrictEqual(chMap, { '001': 1, '002': 1, '003': 2, '004': 2, '005': 3 })
+console.log('PASS: deriveChapters splits chapters after each dip_black boundary')
+
+chMap = deriveChapters([
+  { scene_id: '001', transition_out: 'dissolve' },
+  { scene_id: '002', transition_out: 'cut' },
+])
+assert.deepStrictEqual(chMap, { '001': 1, '002': 1 }, 'no dip_black -> everything is chapter 1')
+console.log('PASS: deriveChapters puts everything in chapter 1 when there is no dip_black')
+
+chMap = deriveChapters([
+  { scene_id: '001', transition_out: 'dissolve' },
+  { scene_id: '002', transition_out: 'dip_black' }, // LAST scene — ends the video, not a chapter
+])
+assert.deepStrictEqual(chMap, { '001': 1, '002': 1 }, 'a dip_black on the final scene must not open a phantom empty chapter')
+console.log('PASS: deriveChapters ignores a dip_black on the final scene (no phantom chapter)')
+
+// resolveChapterMap — persisted chapter wins once every scene has one, else derive
+let resolved = resolveChapterMap([
+  { scene_id: '001', transition_out: 'cut', chapter: 1 },
+  // Persisted chapters say this is still chapter 1 even though a derivation would split
+  // here — exactly the case where montage turned a chapter-ending dip_black into a cut.
+  { scene_id: '002', transition_out: 'dip_black', chapter: 2 },
+  { scene_id: '003', transition_out: 'cut', chapter: 2 },
+])
+assert.strictEqual(resolved.derived, false)
+assert.deepStrictEqual(resolved.map, { '001': 1, '002': 2, '003': 2 })
+console.log('PASS: resolveChapterMap uses persisted scene.chapter when every scene has one')
+
+resolved = resolveChapterMap([
+  { scene_id: '001', transition_out: 'dip_black', chapter: 1 },
+  { scene_id: '002', transition_out: 'cut' }, // no chapter — partial data, must fall back
+])
+assert.strictEqual(resolved.derived, true)
+assert.deepStrictEqual(resolved.map, { '001': 1, '002': 2 })
+console.log('PASS: resolveChapterMap falls back to derivation when any scene lacks a chapter (all-or-nothing)')
+
+// montageAudioMixOverride — music-forward bump ONLY when no manual override exists
+assert.deepStrictEqual(
+  montageAudioMixOverride(null),
+  { narration: 1.0, music: 0.22, ambient: 0.06 },
+  'no existing override -> music bumped 0.12 -> 0.22, narration/ambient at existing defaults'
+)
+assert.deepStrictEqual(montageAudioMixOverride(undefined), { narration: 1.0, music: 0.22, ambient: 0.06 })
+console.log('PASS: montageAudioMixOverride bumps music toward 0.22 when no manual override exists')
+
+const manualMix = { narration: 0.9, music: 0.5, ambient: 0.0 }
+assert.strictEqual(montageAudioMixOverride(manualMix), manualMix,
+  'an existing manual override must come back untouched — the exact same object, not a merged copy')
+console.log('PASS: montageAudioMixOverride returns an existing manual override exactly as stored, untouched')
+
+// Duration floor under montage clamping — montage reuses clampDurationForActionCut, so the
+// FT-1 hard floor (audio_duration + 0.8s) holds by the exact same math FT-5 already proved.
+assert.strictEqual(clampDurationForActionCut(5, 1.0), 1.8, 'montage clamp (same function as FT-5) must respect the audio_duration + 0.8s floor')
+assert.strictEqual(clampDurationForActionCut(1.8, 1.0), 1.8, 'a duration already at the floor is unchanged under montage clamping')
+console.log('PASS: duration floor respected under montage clamping — same clamp function and floor as FT-5')
 
 console.log('\nAll frameMath.test.js checks passed.')
