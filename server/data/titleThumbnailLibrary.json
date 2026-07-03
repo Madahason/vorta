@@ -42,6 +42,162 @@
     ],
     "selectedTitle": "WeWork's Fatal Decisions: A Financial Autopsy",
     "linkedVrIdeaId": null,
-    "status": "titled"
+    "status": "composed",
+    "styleMode": "scene_dramatization",
+    "thumbnailPrompt": "Cinematic scene dramatization, 16:9 aspect ratio. A dramatic wide-angle interior shot of a WeWork co-working space in visible decay and collapse — overturned mid-century modern chairs, cracked exposed-brick walls with peeling motivational murals reading fragments of hustle culture slogans, flickering Edison bulb pendant lights casting deep amber shadows across a dusty open floor. In the LEFT third of the frame, a lone figure in a rumpled dark blazer stands with their back to camera, head slightly bowed, staring down at a shattered glass conference table covered in scattered financial documents and red-ink balance sheets. The figure is dramatically lit from above-left by a single shaft of cold industrial light cutting through a grimy skylight, creating strong tonal separation between the illuminated subject and the murky collapsed office behind them. The RIGHT third of the frame is clean negative space — a softly blurred, smoke-hazy beige wall with minimal detail, reserved for text overlay. No critical elements in the bottom-right corner. High contrast chiaroscuro lighting: warm amber decay in the background, cool clinical spotlight on the figure. Shallow depth of field. Film grain texture. Cinematic color grade with desaturated greens and crushed blacks evoking institutional failure and hubris. Shot on anamorphic lens with slight lens flare from the overhead light source.",
+    "baseImages": [
+      "/library/thumbnails/tt_1781897884564/base_v1_3.jpg"
+    ],
+    "overlayState": {
+      "text": "How WeWork Failed",
+      "x": 0.5,
+      "y": 0.5,
+      "fontSize": 72,
+      "color": "#FFFF00",
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "fontFamily": "anton",
+      "fontWeight": 400,
+      "italic": false,
+      "uppercase": false,
+      "letterSpacing": 0,
+      "backgroundPill": false,
+      "backgroundPillColor": "#000000",
+      "backgroundPillOpacity": 0.5
+    },
+    "finalImagePath": "/library/thumbnails/tt_1781897884564/final_v1.jpg",
+    "versions": [
+      {
+        "versionId": "v_1781902519653",
+        "createdAt": "2026-06-19T20:55:19.653Z",
+        "type": "overlay",
+        "instruction": "chabge the text color to red",
+        "data": {
+          "overlayState": {
+            "text": "Your Text Here",
+            "x": 0.5,
+            "y": 0.5,
+            "fontSize": 72,
+            "color": "#FF0000",
+            "strokeColor": "#000000",
+            "strokeWidth": 2,
+            "fontFamily": "anton",
+            "fontWeight": 400,
+            "italic": false,
+            "uppercase": false,
+            "letterSpacing": 0,
+            "backgroundPill": false,
+            "backgroundPillColor": "#000000",
+            "backgroundPillOpacity": 0.5
+          },
+          "assistantReply": "Text color changed to red! I also initialized the overlay with default settings."
+        }
+      },
+      {
+        "versionId": "v_1781902549138",
+        "createdAt": "2026-06-19T20:55:49.138Z",
+        "type": "overlay",
+        "instruction": "undo the recent chnages",
+        "data": {
+          "assistantReply": "I don't have a history of recent changes to undo. Could you clarify what you'd like to change? For example, are you referring to the image/scene, the overlay text settings, or something else?",
+          "ambiguous": true
+        }
+      },
+      {
+        "versionId": "v_1781903031060",
+        "createdAt": "2026-06-19T21:03:51.060Z",
+        "type": "title",
+        "instruction": "test",
+        "data": {
+          "titles": [
+            {
+              "text": "WeWork's Fatal Decisions: A Financial Autopsy",
+              "strategy": "direct_claim"
+            },
+            {
+              "text": "How Adam Neumann Destroyed $47 Billion",
+              "strategy": "shock_framing"
+            },
+            {
+              "text": "The Decisions That Killed WeWork",
+              "strategy": "curiosity_gap"
+            },
+            {
+              "text": "WeWork Wasn't a Tech Company — And That's Why It Failed",
+              "strategy": "contrarian_claim"
+            },
+            {
+              "text": "7 Choices That Collapsed WeWork's Empire",
+              "strategy": "number_driven"
+            },
+            {
+              "text": "Why Smart Investors Missed WeWork's Red Flags",
+              "strategy": "curiosity_gap"
+            },
+            {
+              "text": "WeWork Fooled Wall Street. Here's How.",
+              "strategy": "shock_framing"
+            },
+            {
+              "text": "The Business Model That Was Broken From Day One",
+              "strategy": "contrarian_claim"
+            }
+          ],
+          "assistantReply": "Sure! I'm ready to help you refine your title candidates. Let me know what direction you'd like to take — for example, more curiosity-driven, punchier, more focused on Adam Neumann, or anything else you have in mind!"
+        }
+      },
+      {
+        "versionId": "v_1781904157052",
+        "createdAt": "2026-06-19T21:22:37.052Z",
+        "type": "overlay",
+        "instruction": "add a yellow title",
+        "data": {
+          "overlayState": {
+            "text": "Your Title Here",
+            "x": 0.5,
+            "y": 0.5,
+            "fontSize": 72,
+            "color": "#FFFF00",
+            "strokeColor": "#000000",
+            "strokeWidth": 2,
+            "fontFamily": "anton",
+            "fontWeight": 400,
+            "italic": false,
+            "uppercase": false,
+            "letterSpacing": 0,
+            "backgroundPill": false,
+            "backgroundPillColor": "#000000",
+            "backgroundPillOpacity": 0.5
+          },
+          "assistantReply": "Updated the text to a title and changed the color to yellow (#FFFF00)!"
+        }
+      },
+      {
+        "versionId": "v_1781904192567",
+        "createdAt": "2026-06-19T21:23:12.567Z",
+        "type": "overlay",
+        "instruction": "title should read \"How wework failed\"",
+        "data": {
+          "overlayState": {
+            "text": "How WeWork Failed",
+            "x": 0.5,
+            "y": 0.5,
+            "fontSize": 72,
+            "color": "#FFFF00",
+            "strokeColor": "#000000",
+            "strokeWidth": 2,
+            "fontFamily": "anton",
+            "fontWeight": 400,
+            "italic": false,
+            "uppercase": false,
+            "letterSpacing": 0,
+            "backgroundPill": false,
+            "backgroundPillColor": "#000000",
+            "backgroundPillOpacity": 0.5
+          },
+          "assistantReply": "Updated the title to \"How WeWork Failed\"."
+        }
+      }
+    ]
   }
 ]
