@@ -562,7 +562,10 @@ function FineTuneCard({
   otherScenesWithImages,
 }) {
   const min = minDurationFor(scene)
-  const max = MAX_SCENE_SECONDS
+  // Voiceover-cutoff fix: mirrors frameMath.maxDurationSeconds — the 8s style cap yields
+  // to the narration floor for long-narration scenes, otherwise a scene with audio > 7.2s
+  // has no legal duration at all (max 8 < floor audio + 0.8) and can't be edited/reverted.
+  const max = Math.max(MAX_SCENE_SECONDS, min)
 
   const [duration,    setDuration]    = useState(scene.duration_seconds ?? min)
   const [transition,  setTransition]  = useState(scene.transition_out || 'dissolve')

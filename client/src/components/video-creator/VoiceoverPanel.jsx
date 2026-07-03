@@ -443,7 +443,7 @@ export default function VoiceoverPanel({
           if (data.durationWarnings?.length > 0) {
             console.warn('[voiceover] duration warnings:', data.durationWarnings)
             data.durationWarnings.forEach(w => {
-              console.warn(`  scene ${w.scene_id}: narration ${w.audio_duration}s capped to ${w.capped_to}s — consider splitting this scene's script excerpt`)
+              console.warn(`  scene ${w.scene_id}: narration ${w.audio_duration}s → scene ${w.duration_seconds}s exceeds the ${w.exceeds_style_target}s style target (narration preserved) — consider splitting this scene's script excerpt`)
             })
           }
           return

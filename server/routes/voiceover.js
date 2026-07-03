@@ -5,6 +5,8 @@ const fs      = require('fs')
 const { ElevenLabsClient } = require('@elevenlabs/elevenlabs-js')
 const { getVoices, generateAudio, getAudioDuration } = require('../services/elevenlabs')
 const { insertPauseMarkers, expandNumbers }           = require('../services/voiceoverPreprocessor')
+const { narrationSafeSceneDuration, MAX_SCENE_SECONDS } = require('../services/frameMath')
+const { readScenesFile, writeScenesFile }             = require('../services/scenesFile')
 
 const PROJECTS_DIR = path.resolve(__dirname, '../../projects')
 
@@ -124,14 +126,13 @@ router.post('/generate', async (req, res) => {
         })
 
         const audioDuration = await getAudioDuration(outputPath)
-        // 0.4s = 12-frame crossfade delay (narration starts after crossfade completes)
-        // 0.8s = end buffer so the last word isn't clipped by the next transition
-        const CROSSFADE_SECONDS = 12 / 30
-        const END_BUFFER        = 0.8
+        // Shared formula (frameMath.narrationSafeSceneDuration): audio + 0.4s crossfade
+        // delay + 0.8s end buffer, capped at the 8s style target only when the cap still
+        // clears the narration floor — the narration itself is never truncated.
         const sceneDuration = audioDuration
-          ? parseFloat((audioDuration + CROSSFADE_SECONDS + END_BUFFER).toFixed(2))
+          ? narrationSafeSceneDuration(audioDuration)
           : (scene.duration_seconds || 5)
-        console.log(`[voiceover] scene ${scene.scene_id}: audio=${audioDuration}s scene=${sceneDuration}s (includes ${CROSSFADE_SECONDS.toFixed(2)}s crossfade buffer)`)
+        console.log(`[voiceover] scene ${scene.scene_id}: audio=${audioDuration}s scene=${sceneDuration}s (includes crossfade + end buffer)`)
         const audio_path = `/projects/${projectId}/audio/scene_${scene.scene_id}.mp3`
 
         const absolutePath = path.resolve(outputPath)
@@ -181,7 +182,6 @@ router.post('/repad', async (req, res) => {
 
   const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`)
 
-  const CROSSFADE_SECONDS = 12 / 30
   const START_MS  = 500
   const END_MS    = 800
   const END_SECS  = END_MS / 1000
@@ -214,9 +214,11 @@ router.post('/repad', async (req, res) => {
         `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${audioPath}"`
       )
       const newDuration = parseFloat(stdout.trim())
+      // VOICEOVER-CUTOFF FIX: repad used audio + 0.4 (crossfade only) — below even the FT-1
+      // narration floor (audio + 0.8). Same shared formula as sync-timings now.
       const newSceneDuration = isNaN(newDuration)
         ? scene.duration_seconds
-        : parseFloat((newDuration + CROSSFADE_SECONDS).toFixed(2))
+        : narrationSafeSceneDuration(newDuration)
 
       updatedScenes.push({ ...scene, audio_duration: newDuration, duration_seconds: newSceneDuration })
       send({ type: 'done', scene_id: scene.scene_id, duration: newDuration })
@@ -272,8 +274,15 @@ router.post('/preview', async (req, res) => {
 // POST /api/voiceover/sync-timings
 // Re-measures audio durations from disk and returns updated scene objects.
 // Called automatically after Generate All completes and by the Sync Timings button.
-const MAX_SCENE_SECONDS = 8.0
-
+//
+// VOICEOVER-CUTOFF FIX (root cause of "narration ends abruptly mid-sentence"): this
+// endpoint used to hard-cap duration_seconds at 8.0 even when the narration itself was
+// longer (up to 14.2s in real projects) — Documentary.jsx force-fades narration to zero at
+// the scene window's end, so every capped scene had its speech cut. The duration formula
+// now lives in frameMath.narrationSafeSceneDuration: audio + 0.4 + 0.8, capped at the 8s
+// style target ONLY when that still clears the narration floor (audio + 0.8s). Scenes that
+// exceed the style target are still reported via durationWarnings — the real remedy remains
+// splitting the script excerpt — but their narration is never structurally truncated.
 router.post('/sync-timings', async (req, res) => {
   const { scenes, projectId } = req.body
   if (!Array.isArray(scenes) || !projectId) {
@@ -287,14 +296,11 @@ router.post('/sync-timings', async (req, res) => {
     if (!fs.existsSync(audioPath)) return scene
     const duration = await getAudioDuration(audioPath)
     if (!duration) return scene
-    const CROSSFADE_SECONDS = 12 / 30
-    const END_BUFFER        = 0.8
-    let sceneDuration = parseFloat((duration + CROSSFADE_SECONDS + END_BUFFER).toFixed(2))
+    const sceneDuration = narrationSafeSceneDuration(duration)
 
     if (sceneDuration > MAX_SCENE_SECONDS) {
-      console.warn(`[voiceover] scene ${scene.scene_id} narration is ${duration.toFixed(1)}s → scene would be ${sceneDuration}s (exceeds ${MAX_SCENE_SECONDS}s cap). Script excerpt may need splitting.`)
-      durationWarnings.push({ scene_id: scene.scene_id, audio_duration: parseFloat(duration.toFixed(2)), capped_to: MAX_SCENE_SECONDS })
-      sceneDuration = MAX_SCENE_SECONDS
+      console.warn(`[voiceover] scene ${scene.scene_id} narration is ${duration.toFixed(1)}s → scene set to ${sceneDuration}s (exceeds the ${MAX_SCENE_SECONDS}s style target — narration is never truncated). Script excerpt may need splitting.`)
+      durationWarnings.push({ scene_id: scene.scene_id, audio_duration: parseFloat(duration.toFixed(2)), duration_seconds: sceneDuration, exceeds_style_target: MAX_SCENE_SECONDS })
     }
 
     return {
@@ -308,8 +314,37 @@ router.post('/sync-timings', async (req, res) => {
   const synced = updatedScenes.filter(s => s.audio_duration).length
   console.log(`[voiceover] sync-timings — synced ${synced} / ${scenes.length} scenes`)
   if (durationWarnings.length > 0) {
-    console.warn(`[voiceover] ${durationWarnings.length} scene(s) capped at ${MAX_SCENE_SECONDS}s — narration audio exceeds max scene duration`)
+    console.warn(`[voiceover] ${durationWarnings.length} scene(s) exceed the ${MAX_SCENE_SECONDS}s style target — narration preserved, consider splitting those excerpts`)
   }
+
+  // VOICEOVER-CUTOFF FIX part 2: persist audio metadata into the project's scenes.json.
+  // sync-timings previously returned updatedScenes to the client only — no project on disk
+  // had audio_path/audio_duration on ANY scene (verified 0/8 projects), so every
+  // server-side narration floor (FT-1 duration validation, FT-5 action-cut and FT-9
+  // montage clamps) ran with audio_duration = undefined and degenerated to a 0.8s floor —
+  // an action cut would shrink a fully-narrated scene to 0.8 seconds. The merge is
+  // best-effort: a project that hasn't generated visuals yet has no scenes.json (it's
+  // created by generate.js), and the client state is persisted there on that later write.
+  try {
+    const file = readScenesFile(projectId)
+    if (file) {
+      const byId = new Map(updatedScenes.filter(s => s.audio_duration).map(s => [String(s.scene_id), s]))
+      let merged = 0
+      file.scenes = file.scenes.map(s => {
+        const u = byId.get(String(s.scene_id))
+        if (!u) return s
+        merged++
+        return { ...s, audio_path: u.audio_path, audio_duration: u.audio_duration, duration_seconds: u.duration_seconds }
+      })
+      if (merged > 0) {
+        writeScenesFile(file)
+        console.log(`[voiceover] sync-timings — persisted audio metadata for ${merged} scene(s) to scenes.json`)
+      }
+    }
+  } catch (err) {
+    console.warn('[voiceover] sync-timings — could not persist audio metadata to scenes.json (non-fatal):', err.message)
+  }
+
   res.json({ success: true, updatedScenes, durationWarnings })
 })
 

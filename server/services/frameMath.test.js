@@ -6,7 +6,8 @@ const {
   MAX_SCENE_SECONDS, NARRATION_BUFFER_SECONDS, BOUNDARY_SAFETY_MARGIN_SECONDS,
   ACTION_CUT_BUFFER_SECONDS, PACING_VALUES, VALID_TRANSITIONS, LAYOUT_VALUES,
   CUTAWAY_EDGE_BUFFER_SECONDS,
-  minDurationSeconds, canUseDipTransition, isValidTransition, validateSceneUpdate,
+  minDurationSeconds, maxDurationSeconds, narrationSafeSceneDuration,
+  canUseDipTransition, isValidTransition, validateSceneUpdate,
   getTransition, sceneDur, calculateDocumentaryDuration,
   maxBoundaryOffsetSeconds, validateBoundaryUpdate, resolveManualOverlapSeconds,
   resetBrokenBoundaryAdjacency, clampDurationForActionCut, resetActionCutBoundaryOffsets,
@@ -283,10 +284,18 @@ result = clampDurationForActionCut(1.0, 5.0) // current (1.0) is below floor(5.8
 assert.strictEqual(result, 5.8, 'floor still wins even on an already-invalid low current duration')
 console.log('PASS: clampDurationForActionCut is dominated by the floor even on an atypical low current duration')
 
-// Never exceeds MAX_SCENE_SECONDS (defensive — action cut always shrinks, but still)
+// Voiceover-cutoff fix: the narration floor beats the 8s style cap. The old assertion here
+// (`clampDurationForActionCut(8, 100) === MAX_SCENE_SECONDS`) enshrined the truncation bug:
+// capping a 100s narration's scene at 8s cuts 92s of speech. Floor wins now.
 result = clampDurationForActionCut(8, 100)
-assert.strictEqual(result, MAX_SCENE_SECONDS)
-console.log('PASS: clampDurationForActionCut never exceeds MAX_SCENE_SECONDS')
+assert.strictEqual(result, 100.8, 'narration floor (audio + 0.8) must beat the 8s style cap — capping would truncate speech')
+console.log('PASS: clampDurationForActionCut lets the narration floor beat the 8s cap (voiceover-cutoff fix)')
+
+// The style cap still holds whenever the narration actually fits inside it
+result = clampDurationForActionCut(20, 5)
+assert.ok(result <= MAX_SCENE_SECONDS, 'short-narration scenes stay within the style cap')
+assert.ok(result <= maxDurationSeconds(5), 'result never exceeds the per-scene ceiling')
+console.log('PASS: clampDurationForActionCut never exceeds the per-scene ceiling (8s when narration fits)')
 
 // resetActionCutBoundaryOffsets
 const rangeIntact = [
@@ -507,5 +516,65 @@ console.log('PASS: montageAudioMixOverride returns an existing manual override e
 assert.strictEqual(clampDurationForActionCut(5, 1.0), 1.8, 'montage clamp (same function as FT-5) must respect the audio_duration + 0.8s floor')
 assert.strictEqual(clampDurationForActionCut(1.8, 1.0), 1.8, 'a duration already at the floor is unchanged under montage clamping')
 console.log('PASS: duration floor respected under montage clamping — same clamp function and floor as FT-5')
+
+// ── Voiceover cutoff fix: scene durations must always fit their narration ──────
+// Root cause record (see PLAN.md session entry): sync-timings hard-capped
+// duration_seconds at 8.0s while narrations ran up to 14.2s — Documentary force-fades
+// narration to zero at the scene window's end, cutting speech mid-sentence on 30/65
+// scenes of the newest real project. The fix: the narration floor beats the style cap
+// everywhere a duration is computed or validated.
+
+assert.strictEqual(maxDurationSeconds(3.5), 8, 'short narration → per-scene max is the 8s style cap, unchanged')
+assert.strictEqual(maxDurationSeconds(undefined), 8, 'no narration → 8s cap, unchanged')
+assert.strictEqual(maxDurationSeconds(7.2), 8, 'audio 7.2 → floor exactly 8 → cap unchanged')
+assert.strictEqual(maxDurationSeconds(10.03), 10.83, 'long narration → ceiling is the narration floor, not 8')
+console.log('PASS: maxDurationSeconds — 8s style cap yields to the narration floor only when narration is longer')
+
+assert.strictEqual(narrationSafeSceneDuration(5), 6.2, 'audio 5 → audio + 0.4 crossfade + 0.8 buffer')
+assert.strictEqual(narrationSafeSceneDuration(6.8), 8, 'audio 6.8 → ideal exactly 8, at the cap')
+assert.strictEqual(narrationSafeSceneDuration(7.0), 8, 'audio 7.0 → ideal 8.2 capped to 8 (floor 7.8 still fits)')
+assert.strictEqual(narrationSafeSceneDuration(7.5), 8.3, 'audio 7.5 → cap would violate the floor → floor + nothing extra')
+assert.strictEqual(narrationSafeSceneDuration(13.74), 14.54, 'audio 13.74 (real scene 010) → 14.54, never 8')
+console.log('PASS: narrationSafeSceneDuration — never below the narration floor, capped at 8 only when narration fits')
+
+// THE invariant (task's automated-test requirement): for every possible narration length,
+// the rendered narration window — sceneDur minus the worst-case incoming transition delay
+// (dissolve, 12 frames), exactly Documentary.jsx's math — must fit the full audio.
+{
+  const audios = [0.3, 8.202449, 10.030204, 13.740408, 14.21]
+  for (let a = 0.5; a <= 15; a += 0.07) audios.push(+a.toFixed(4))
+  let checked = 0
+  for (const audio of audios) {
+    const d = narrationSafeSceneDuration(audio)
+    const windowFrames = sceneDur({ duration_seconds: d }, 30) - TRANSITION_FRAMES
+    const audioFrames = Math.round(audio * 30)
+    assert.ok(windowFrames >= audioFrames,
+      `audio ${audio}s → duration ${d}s → window ${windowFrames}fr must fit audio ${audioFrames}fr`)
+    // And the produced duration must be legal under FT-1 validation (floor AND ceiling) —
+    // pre-fix, audio > 7.2s produced scenes that were impossible to edit or revert.
+    const errs = validateSceneUpdate({ audio_duration: audio, duration_seconds: d }, { duration_seconds: d })
+    assert.strictEqual(errs.length, 0, `synced duration for audio ${audio}s must validate cleanly, got: ${errs[0]}`)
+    checked++
+  }
+  console.log(`PASS: narration window >= audio_duration for every synced scene duration (${checked} audio lengths, incl. real capped scenes)`)
+}
+
+// Long-narration scenes survive an action cut / montage without re-truncation
+{
+  const d = narrationSafeSceneDuration(13.74) // 14.54
+  const clamped = clampDurationForActionCut(d, 13.74)
+  assert.strictEqual(clamped, 14.54, 'action cut on a long-narration scene keeps the narration floor, never re-caps to 8')
+  console.log('PASS: action cut / montage clamp preserves long narrations (no re-truncation to 8s)')
+}
+
+// validateSceneUpdate: long-narration scenes are now editable; normal scenes unchanged
+{
+  const longScene = { audio_duration: 10.03, duration_seconds: 10.83 }
+  assert.strictEqual(validateSceneUpdate(longScene, { duration_seconds: 10.83 }).length, 0, 'duration at the narration floor accepted even though > 8')
+  assert.ok(validateSceneUpdate(longScene, { duration_seconds: 11.5 }).length > 0, 'still rejects beyond the per-scene ceiling')
+  const normalScene = { audio_duration: 3.5, duration_seconds: 5 }
+  assert.ok(validateSceneUpdate(normalScene, { duration_seconds: 8.5 }).length > 0, 'normal scenes still rejected above 8s — style cap unchanged')
+  console.log('PASS: validateSceneUpdate — long-narration scenes editable up to their floor; 8s cap unchanged otherwise')
+}
 
 console.log('\nAll frameMath.test.js checks passed.')

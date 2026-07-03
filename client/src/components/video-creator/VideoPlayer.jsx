@@ -1,6 +1,21 @@
-import { useMemo } from 'react'
+import { useMemo, useRef, useEffect } from 'react'
 import { Player } from '@remotion/player'
 import { Documentary, calculateDocumentaryDuration } from '@remotion-compositions/compositions/Documentary'
+
+// Voiceover-repeat fix: everything that moves a scene's (and therefore every downstream
+// narration Sequence's) start frame. When any of these change while the Player is PLAYING —
+// a Fine-Tune duration trim, a reorder, a transition change, or VoiceoverPanel's automatic
+// whole-array sync-timings refresh after a generation run — every later narration
+// <Sequence from={...}> shifts under the fixed playhead, and Remotion seeks the
+// currently-playing narration by the aggregate delta: backward = the last seconds audibly
+// REPLAY, forward = a skip. The timeline position is meaningless across such an edit, so
+// the correct behavior is to pause and let the user resume.
+function timelineSignature(scenes) {
+  return (scenes || []).map(s =>
+    `${s.scene_id}:${s.duration_seconds}:${s.transition_out || 'dissolve'}:${s.audio_cut || 'hard'}:` +
+    `${s.audio_overlap_seconds ?? ''}:${s.is_manual_offset ? `${s.jcut_offset ?? ''}/${s.lcut_offset ?? ''}` : ''}`
+  ).join('|')
+}
 
 // Auto-build minimal audioSpecs from scene.audio_path when no specs have been
 // applied yet. This means narration plays immediately after voiceover generation
@@ -65,10 +80,26 @@ export function VideoPlayer({ scenes, imagePaths, selectedClips, globalSettings,
     [inputProps.scenes, fps]
   )
 
+  // Voiceover-repeat fix: pause if the timeline geometry changed while playing (see
+  // timelineSignature above). Initial mount never pauses — the ref starts in sync.
+  const playerRef = useRef(null)
+  const signature = useMemo(() => timelineSignature(inputProps.scenes), [inputProps.scenes])
+  const prevSignatureRef = useRef(signature)
+  useEffect(() => {
+    if (prevSignatureRef.current === signature) return
+    prevSignatureRef.current = signature
+    const player = playerRef.current
+    if (player && player.isPlaying?.()) {
+      player.pause()
+      console.log('[VideoPlayer] scene timing changed during playback — paused (narration Sequences shifted under the playhead; resuming from a stale position would replay or skip audio)')
+    }
+  }, [signature])
+
   if (!scenes?.length) return null
 
   return (
     <Player
+      ref={playerRef}
       component={Documentary}
       inputProps={inputProps}
       durationInFrames={totalFrames}

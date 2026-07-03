@@ -79,6 +79,27 @@ function minDurationSeconds(audioDuration) {
   return parseFloat((buffer + NARRATION_BUFFER_SECONDS).toFixed(2))
 }
 
+// Voiceover-cutoff fix: the 8s style cap must never make a scene shorter than its own
+// narration. A scene's true maximum is whichever is larger: the 8s fast-cut style cap, or
+// the narration floor (audio + 0.8s). For audio <= 7.2s this returns exactly 8 — identical
+// to the old flat cap; only long-narration scenes get a higher personal ceiling. Before
+// this, a scene with audio > 7.2s had NO legal duration at all (max 8 < floor audio+0.8),
+// and sync-timings' flat 8s cap force-fed Documentary scenes structurally shorter than
+// their narration — the confirmed root cause of narration cutting off mid-sentence.
+function maxDurationSeconds(audioDuration) {
+  return Math.max(MAX_SCENE_SECONDS, minDurationSeconds(audioDuration))
+}
+
+// The one formula for "how long should a scene be for this narration" — used by
+// voiceover.js's sync-timings AND repad (repad previously used audio + 0.4, below even the
+// FT-1 floor). Ideal = audio + crossfade (0.4s) + end buffer (0.8s); capped at the 8s style
+// target ONLY when the cap still clears the narration floor.
+function narrationSafeSceneDuration(audioDuration) {
+  const audio = Number(audioDuration) > 0 ? Number(audioDuration) : 0
+  const ideal = audio + TRANSITION_FRAMES / FPS + NARRATION_BUFFER_SECONDS
+  return parseFloat(Math.min(ideal, maxDurationSeconds(audioDuration)).toFixed(2))
+}
+
 // Mirrors Documentary.jsx's getTransition() downgrade check: a dip transition needs at
 // least DIP_FADE frames on each side (DIP_FADE * 2 total) or it silently falls back to
 // dissolve at render time. Fine-Tune blocks the change up front instead of allowing that
@@ -110,8 +131,10 @@ function validateSceneUpdate(existingScene, updates) {
           `duration_seconds must be >= ${min}s to preserve the narration-sync buffer ` +
           `(audio_duration ${Number(existingScene.audio_duration || 0).toFixed(2)}s + ${NARRATION_BUFFER_SECONDS}s)`
         )
-      } else if (updates.duration_seconds > MAX_SCENE_SECONDS) {
-        errors.push(`duration_seconds must be <= ${MAX_SCENE_SECONDS}s`)
+      } else if (updates.duration_seconds > maxDurationSeconds(existingScene.audio_duration)) {
+        // Per-scene ceiling: 8s for normal scenes, audio + 0.8s when the narration itself
+        // is longer — otherwise long-narration scenes would have no legal duration at all.
+        errors.push(`duration_seconds must be <= ${maxDurationSeconds(existingScene.audio_duration)}s`)
       }
     }
   }
@@ -306,7 +329,10 @@ function clampDurationForActionCut(currentDurationSeconds, audioDuration) {
   const tightTarget = (Number(audioDuration) > 0 ? Number(audioDuration) : 0) + ACTION_CUT_BUFFER_SECONDS
   const floor       = minDurationSeconds(audioDuration) // FT-1's hard floor — always wins if higher
   const clamped     = Math.min(Number(currentDurationSeconds) || 0, tightTarget)
-  return Math.min(Math.max(clamped, floor), MAX_SCENE_SECONDS)
+  // Voiceover-cutoff fix: the narration floor must beat the 8s style cap. The old order
+  // (Math.min(..., MAX_SCENE_SECONDS) applied last) let an action cut / montage re-truncate
+  // a scene whose narration is longer than 7.2s down to 8s — cutting speech mid-sentence.
+  return Math.min(Math.max(clamped, floor), maxDurationSeconds(audioDuration))
 }
 
 // Hard cuts don't bleed audio — any manual FT-4 boundary offset entirely WITHIN the
@@ -398,6 +424,8 @@ module.exports = {
   LAYOUT_VALUES,
   CUTAWAY_EDGE_BUFFER_SECONDS,
   minDurationSeconds,
+  maxDurationSeconds,
+  narrationSafeSceneDuration,
   canUseDipTransition,
   isValidTransition,
   isValidLayout,

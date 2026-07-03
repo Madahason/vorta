@@ -74,6 +74,25 @@ export function PreviewPlayer({
 
   const sceneStarts = useMemo(() => computeSceneStartFrames(uniqueScenes, fps), [uniqueScenes, fps])
 
+  // Voiceover-repeat fix — same guard as VideoPlayer.jsx: if scene timing changes while
+  // playing (an edit or a sync-timings refresh landing mid-playback), every downstream
+  // narration Sequence's `from` shifts under the playhead and Remotion seeks the playing
+  // narration by the delta (backward = audible replay of the last seconds). Pause instead.
+  const timingSignature = useMemo(() => uniqueScenes.map(s =>
+    `${s.scene_id}:${s.duration_seconds}:${s.transition_out || 'dissolve'}:${s.audio_cut || 'hard'}:` +
+    `${s.audio_overlap_seconds ?? ''}:${s.is_manual_offset ? `${s.jcut_offset ?? ''}/${s.lcut_offset ?? ''}` : ''}`
+  ).join('|'), [uniqueScenes])
+  const prevTimingRef = useRef(timingSignature)
+  useEffect(() => {
+    if (prevTimingRef.current === timingSignature) return
+    prevTimingRef.current = timingSignature
+    const player = playerRef.current
+    if (player && player.isPlaying?.()) {
+      player.pause()
+      console.log('[PreviewPlayer] scene timing changed during playback — paused (narration Sequences shifted under the playhead)')
+    }
+  }, [timingSignature])
+
   const currentSceneIndex = useMemo(() => {
     for (let i = sceneStarts.length - 1; i >= 0; i--) {
       if (currentFrame >= sceneStarts[i]) return i

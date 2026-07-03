@@ -2416,6 +2416,41 @@ function sceneDur(scene, fps) {
 
 ---
 
+## Session 27 — Fix: voiceover cutoff (8s cap truncating narration) + repeat guard on mid-playback timing changes
+**Commit:** `fix: voiceover cutoff — narration floor beats 8s style cap everywhere; pause player when timings change mid-playback`
+**Date:** 2026-07-03
+
+### Root cause 1 — narration cut off mid-sentence (voiceover cutoff)
+Session 24's hard 8-second cap in `POST /sync-timings` set `duration_seconds = 8.0` even when the narration audio itself was longer (up to 14.2s in the newest real project — 30 of 65 scenes affected). `Documentary.jsx` force-fades narration to zero at the scene window's end, so every capped scene had its speech cut mid-sentence. Compounding bugs:
+- `POST /repad` computed `duration_seconds = audio + 0.4` (crossfade only) — below even the FT-1 narration floor (`audio + 0.8`)
+- `validateSceneUpdate` rejected any duration > 8s, so a scene with audio > 7.2s had **no legal duration at all** (max 8 < floor audio + 0.8) — impossible to edit or revert in Fine-Tune
+- `clampDurationForActionCut` applied `Math.min(..., MAX_SCENE_SECONDS)` **last**, so an FT-5 action cut or FT-9 montage would re-truncate a long-narration scene back to 8s
+- sync-timings never persisted `audio_path`/`audio_duration` to the project's `scenes.json` (verified 0/8 projects on disk had them), so every server-side narration floor ran with `audio_duration = undefined` and degenerated to a 0.8s floor
+
+### Fix — the narration floor beats the 8s style cap, everywhere
+New shared formulas in `server/services/frameMath.js`:
+- `maxDurationSeconds(audio)` — per-scene ceiling: `max(8, minDurationSeconds(audio))`. Identical to the old flat 8s cap for audio ≤ 7.2s; only long-narration scenes get a higher personal ceiling
+- `narrationSafeSceneDuration(audio)` — THE duration formula: `audio + 0.4 crossfade + 0.8 end buffer`, capped at 8s only when the cap still clears the narration floor. Narration is never structurally truncated
+
+Applied in:
+- **`server/routes/voiceover.js`** — `/generate`, `/repad`, and `/sync-timings` all use `narrationSafeSceneDuration`; the local 8s cap constant removed (imported from frameMath). `durationWarnings` shape changed: `{ scene_id, audio_duration, duration_seconds, exceeds_style_target }` (was `capped_to` — scenes over 8s are now reported, not capped; the real remedy remains splitting the script excerpt). sync-timings now also **persists** `audio_path`/`audio_duration`/`duration_seconds` into the project's `scenes.json` (best-effort merge via `scenesFile.js`) so FT-1/FT-5/FT-9 server clamps see real narration lengths
+- **`server/services/frameMath.js`** — `validateSceneUpdate` ceiling and `clampDurationForActionCut` final clamp both use `maxDurationSeconds` instead of the flat 8s cap
+- **`client/src/pages/wizard/FineTuneStep.jsx`** — slider max mirrors `maxDurationSeconds` so long-narration scenes are editable
+- **`client/src/components/video-creator/VoiceoverPanel.jsx`** — warning log updated for the new `durationWarnings` shape
+
+### Root cause 2 — narration replay when timings change mid-playback (repeat guard)
+If scene timing changes while the Player is PLAYING (a Fine-Tune trim, reorder, transition change, or VoiceoverPanel's automatic whole-array sync-timings refresh after a generation run), every downstream narration `<Sequence from={...}>` shifts under the fixed playhead and Remotion seeks the currently-playing narration by the aggregate delta — backward = the last seconds audibly replay, forward = a skip.
+
+- **`VideoPlayer.jsx` / `PreviewPlayer.jsx`** — compute a timeline signature from every field that moves a scene's start frame (`scene_id`, `duration_seconds`, `transition_out`, `audio_cut`, `audio_overlap_seconds`, manual J/L offsets); on signature change during playback, pause the player. The timeline position is meaningless across such an edit — the correct behavior is pause and let the user resume. Initial mount never pauses
+
+### Tests (`server/services/frameMath.test.js` — all pass, all other suites unchanged and green)
+- `maxDurationSeconds` / `narrationSafeSceneDuration` unit coverage incl. the 7.2s boundary
+- **The invariant:** for 213 sampled narration lengths (0.3–15s incl. real capped scenes), the rendered narration window (`sceneDur` minus worst-case incoming transition delay — exactly Documentary.jsx's math) fits the full audio, AND the produced duration validates cleanly under FT-1
+- Action cut / montage clamp preserves long narrations (no re-truncation to 8s); short-narration scenes still respect the 8s style cap
+- The old assertion `clampDurationForActionCut(8, 100) === 8` (which enshrined the truncation bug) replaced with floor-wins behavior
+
+---
+
 ## Session 26 — Fix: voiceover repeat bug — Chrome autoplay AbortError retry loop
 **Commit:** `fix: voiceover repeat bug - root cause was browser autoplay AbortError retry loop, not React state`
 **Date:** 2026-06-21
