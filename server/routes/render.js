@@ -127,12 +127,27 @@ router.post('/', async (req, res) => {
   // Remotion CLI's headless Chrome resolves relative URLs (/projects/...) against
   // its own bundle server (port 3000), not the Express server (port 3001).
 
-  // Scenes: convert both image_path and audio_path to full HTTP URLs
-  const renderScenes = scenes.map(scene => ({
-    ...scene,
-    image_path: toHttpUrl(scene.image_path),
-    audio_path: toHttpUrl(scene.audio_path),
-  }));
+  // Scenes: convert both image_path and audio_path to full HTTP URLs.
+  // Also strip any motion_component that fails to parse — truncated generation
+  // output causes an eval SyntaxError that shows a broken overlay for the scene.
+  const renderScenes = scenes.map(scene => {
+    let motion_component = scene.motion_component || null;
+    if (motion_component) {
+      try {
+        // eslint-disable-next-line no-new-func
+        new Function(motion_component);
+      } catch {
+        console.warn(`[render] scene ${scene.scene_id}: motion_component failed syntax check — stripping (will use template fallback)`);
+        motion_component = null;
+      }
+    }
+    return {
+      ...scene,
+      motion_component,
+      image_path: toHttpUrl(scene.image_path),
+      audio_path: toHttpUrl(scene.audio_path),
+    };
+  });
 
   // imagePaths map for Documentary composition (keyed by scene_id)
   const imagePaths = {};
@@ -198,7 +213,10 @@ router.post('/', async (req, res) => {
     : undefined;
   const chromeFlag = chromeExecutable ? `--browser-executable ${q(chromeExecutable)}` : '';
 
-  const cmd = `npx remotion render src/index.jsx Documentary ${q(outputPath)} --props ${q(propsPath)} --overwrite --concurrency=${concurrency} ${chromeFlag}`.trimEnd();
+  // --timeout=120000 : large clip files (85 MB+) can exceed the 30 s default.
+  // --gl=swangle    : SwiftShader+ANGLE is Remotion's recommended headless GL on Windows;
+  //                   avoids GPU driver issues that can stall or crash the render.
+  const cmd = `npx remotion render src/index.jsx Documentary ${q(outputPath)} --props ${q(propsPath)} --overwrite --concurrency=${concurrency} --timeout=120000 --gl=swangle ${chromeFlag}`.trimEnd();
 
   console.log(`[render] Starting render for project ${projectId}`);
   console.log(`[render] ${cmd}`);

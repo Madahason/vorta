@@ -10,7 +10,7 @@
   "render": {
     "resolution": "1080p",
     "fps": 30,
-    "concurrency": 1
+    "concurrency": 2
   },
   "overlayTemplates": {
     "lower_third": "minimal_line",
