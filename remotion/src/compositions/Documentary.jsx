@@ -1,5 +1,5 @@
 import { useMemo }                                                            from 'react'
-import { AbsoluteFill, Audio, Sequence, interpolate, useVideoConfig } from 'remotion'
+import { AbsoluteFill, Audio, Sequence, interpolate, useVideoConfig, useCurrentFrame } from 'remotion'
 import { TransitionSeries, springTiming, linearTiming }                      from '@remotion/transitions'
 import { fade }                                                              from '@remotion/transitions/fade'
 import ImageScene             from '../components/ImageScene'
@@ -127,6 +127,15 @@ const isValidUrl = (src) => !!src && (src.startsWith('/') || src.startsWith('htt
 
 // ── SceneRenderer — per-scene visual dispatch ─────────────────────────────────
 function SceneRenderer({ scene, imagePath, selectedClip, globalSettings }) {
+  // FT-8: cutaway insert. Hooks must run unconditionally before any early return (Rules of
+  // Hooks) — cheap, and every child component this dispatches to already reads frame/fps
+  // itself anyway, so this adds no meaningful overhead. useCurrentFrame() here returns the
+  // frame LOCAL to this scene's own TransitionSeries.Sequence (Remotion scopes it to the
+  // nearest enclosing Sequence), which is exactly "seconds relative to the scene's own
+  // start" the task calls for — no separate frame-offset bookkeeping needed.
+  const frame = useCurrentFrame()
+  const { fps } = useVideoConfig()
+
   if (!scene) return <PlaceholderScene scene={{ scene_id: 'unknown' }} />
   if (scene.shot_type === '3d_graphic') {
     return <ThreeGlobe scene={scene} />
@@ -134,15 +143,39 @@ function SceneRenderer({ scene, imagePath, selectedClip, globalSettings }) {
   if (scene.shot_type === 'image') {
     const s = imagePath ? { ...scene, image_path: imagePath } : scene
     if (!s.image_path) return <PlaceholderScene scene={scene} />
+
+    // FT-8: temporarily swap in the cutaway's image for the [insert_at, insert_at+duration)
+    // window, then revert to the main image_path — purely a per-frame image_path swap. It
+    // never touches durationInFrames, the Sequence, or the narration <Audio> track (a
+    // completely separate element elsewhere in this file, with zero awareness of this) — the
+    // scene's duration and its narration play through exactly as if no cutaway existed.
+    const cutaway = scene.cutaway
+    let effectiveImagePath = s.image_path
+    if (cutaway?.image_path && cutaway.insert_at != null && cutaway.duration != null) {
+      const insertAtFrames = Math.round(cutaway.insert_at * fps)
+      const endFrames       = insertAtFrames + Math.round(cutaway.duration * fps)
+      if (frame >= insertAtFrames && frame < endFrames) {
+        effectiveImagePath = cutaway.image_path
+      }
+    }
+    const withCutaway = effectiveImagePath !== s.image_path ? { ...s, image_path: effectiveImagePath } : s
+
     // FT-7: split-screen — one scene, one Sequence, one duration; just two visual panels
     // instead of one. Falls back cleanly to single-panel ImageScene (no broken/blank scene)
     // whenever layout is "single" OR secondary_image_path hasn't been set yet — e.g. right
     // after switching to a split layout but before picking a source, or after reverting.
-    const isSplit = s.layout === 'split_horizontal' || s.layout === 'split_vertical'
-    if (isSplit && s.secondary_image_path) {
-      return <SplitScreenScene scene={s} />
+    //
+    // FT-7 + FT-8 interaction: a cutaway on a split-layout scene replaces only the PRIMARY
+    // panel (the image_path swap above) — the secondary panel keeps showing its own image
+    // throughout. This preserves the split layout's visual identity during the cutaway
+    // instead of collapsing it to a single full-frame image and back, which would be a much
+    // more jarring visual event for what's meant to be a brief insert. See PLAN.md FT-8 for
+    // the full reasoning.
+    const isSplit = withCutaway.layout === 'split_horizontal' || withCutaway.layout === 'split_vertical'
+    if (isSplit && withCutaway.secondary_image_path) {
+      return <SplitScreenScene scene={withCutaway} />
     }
-    return <ImageScene scene={s} />
+    return <ImageScene scene={withCutaway} />
   }
   if (scene.shot_type === 'motion_graphic') {
     if (!scene.motion_component) return <PlaceholderScene scene={scene} />

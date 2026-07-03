@@ -141,4 +141,70 @@ router.post('/regenerate-secondary/:sceneId', async (req, res) => {
   }
 })
 
+// POST /api/higgsfield/regenerate-cutaway/:sceneId
+// Body: { projectId, prompt }
+// FT-8 cutaway image generation. Same pipeline and reuse as /regenerate-secondary above — a
+// fresh, user-supplied prompt (not the scene's own higgsfield_prompt), same backup-then-
+// overwrite safety with a distinct 'cutaway_original' suffix so it never collides with the
+// primary panel's backup (FT-3) or the split-screen secondary panel's backup (FT-7). Only
+// ever touches cutaway.image_path on this one scene — insert_at/duration (if already set via
+// PATCH .../cutaway) are read from the existing cutaway object and preserved untouched.
+router.post('/regenerate-cutaway/:sceneId', async (req, res) => {
+  const { sceneId } = req.params
+  const { projectId, prompt } = req.body || {}
+
+  if (!projectId) return res.status(400).json({ error: 'projectId required' })
+  if (!prompt || !prompt.trim()) return res.status(400).json({ error: 'prompt required' })
+
+  const file = readScenesFile(projectId)
+  if (!file) return res.status(404).json({ error: `No scenes.json found for project ${projectId}` })
+
+  const idx = file.scenes.findIndex(s => String(s.scene_id) === String(sceneId))
+  if (idx === -1) return res.status(404).json({ error: `Scene ${sceneId} not found in project ${projectId}` })
+
+  const scene = file.scenes[idx]
+  if (scene.shot_type !== 'image') {
+    return res.status(400).json({ error: `Scene ${sceneId} is shot_type "${scene.shot_type}" — cutaway only applies to image scenes` })
+  }
+
+  const existingCutaway = scene.cutaway || { image_path: null, insert_at: null, duration: null }
+
+  const assetsDir = path.join(PROJECTS_DIR, projectId, 'assets')
+  fs.mkdirSync(assetsDir, { recursive: true })
+
+  try {
+    const promptScene = { scene_id: sceneId, higgsfield_prompt: prompt.trim(), subject_anchors: [], composition: scene.composition || 'medium' }
+    const promptToUse = await promptEnhancer.enhancePrompt(promptScene, false)
+    const outputUrl    = await higgsfieldService.generateImage(promptToUse)
+
+    backupOriginalIfNeeded(assetsDir, sceneId, existingCutaway.image_path, 'cutaway_original')
+
+    const ext        = path.extname(new URL(outputUrl).pathname) || '.png'
+    const filename    = existingCutaway.image_path ? path.basename(existingCutaway.image_path) : `${sceneId}_cutaway${ext}`
+    const destAbsPath = path.join(assetsDir, filename)
+
+    await imageDownloadSvc.downloadImage(outputUrl, destAbsPath)
+
+    const cutawayImagePath = `/projects/${projectId}/assets/${filename}`
+
+    // Re-read fresh right before the final write — same reasoning as /regenerate above.
+    const fresh = readScenesFile(projectId)
+    if (!fresh) return res.status(404).json({ error: `Project ${projectId} scenes.json disappeared during regeneration` })
+    const freshIdx = fresh.scenes.findIndex(s => String(s.scene_id) === String(sceneId))
+    if (freshIdx === -1) return res.status(404).json({ error: `Scene ${sceneId} no longer exists in project ${projectId}` })
+
+    const freshExistingCutaway = fresh.scenes[freshIdx].cutaway || { image_path: null, insert_at: null, duration: null }
+    fresh.scenes[freshIdx] = {
+      ...fresh.scenes[freshIdx],
+      cutaway: { ...freshExistingCutaway, image_path: cutawayImagePath },
+    }
+    writeScenesFile(fresh)
+
+    res.json({ cutaway: fresh.scenes[freshIdx].cutaway })
+  } catch (err) {
+    console.error(`[higgsfield-regenerate-cutaway] scene ${sceneId} failed:`, err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 module.exports = router

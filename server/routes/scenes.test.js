@@ -887,6 +887,138 @@ async function runLayoutTests() {
   }
 }
 
+// FT-8: PATCH/DELETE /api/scenes/:sceneId/cutaway — cutaway insert.
+async function runCutawayTests() {
+  cleanup()
+  const assetsDir = path.join(testDir, 'assets')
+  fs.mkdirSync(assetsDir, { recursive: true })
+
+  const scenes = [
+    { scene_id: 'A', script_excerpt: 'A', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', image_path: `/projects/${TEST_PROJECT}/assets/A.png` },
+    { scene_id: 'B', script_excerpt: 'B', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve', image_path: `/projects/${TEST_PROJECT}/assets/B.png` },
+    { scene_id: 'C', script_excerpt: 'C — motion graphic', shot_type: 'motion_graphic', duration_seconds: 5, transition_out: 'dissolve' },
+  ]
+  fs.writeFileSync(scenesPath, JSON.stringify(scenes, null, 2))
+  fs.writeFileSync(path.join(assetsDir, 'A.png'), 'SCENE_A_BYTES')
+  fs.writeFileSync(path.join(assetsDir, 'B.png'), 'SCENE_B_ORIGINAL_BYTES')
+
+  const app = express()
+  app.use(express.json())
+  app.use('/api/scenes', require('./scenes'))
+  const server = app.listen(0)
+  const port   = server.address().port
+  const base   = `http://localhost:${port}/api/scenes`
+
+  const patchCutaway = (sceneId, body) => fetch(`${base}/${sceneId}/cutaway`, {
+    method:  'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ projectId: TEST_PROJECT, ...body }),
+  })
+  const deleteCutaway = (sceneId) => fetch(`${base}/${sceneId}/cutaway`, {
+    method:  'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ projectId: TEST_PROJECT }),
+  })
+
+  try {
+    // 1. Valid range with reuse mode — confirm persisted correctly, file copied not referenced
+    let res  = await patchCutaway('A', { insert_at: 2, duration: 1, source_scene_id: 'B' })
+    let body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    assert.strictEqual(body.scene.cutaway.insert_at, 2)
+    assert.strictEqual(body.scene.cutaway.duration, 1)
+    assert.strictEqual(body.scene.cutaway.image_path, `/projects/${TEST_PROJECT}/assets/A_cutaway.png`)
+    console.log('PASS: valid cutaway range with reuse mode persists insert_at, duration, and image_path correctly')
+
+    const cutawayAbsPath = path.join(assetsDir, 'A_cutaway.png')
+    assert.ok(fs.existsSync(cutawayAbsPath))
+    assert.strictEqual(fs.readFileSync(cutawayAbsPath, 'utf8'), 'SCENE_B_ORIGINAL_BYTES')
+    fs.writeFileSync(path.join(assetsDir, 'B.png'), 'SCENE_B_CHANGED_LATER')
+    assert.strictEqual(fs.readFileSync(cutawayAbsPath, 'utf8'), 'SCENE_B_ORIGINAL_BYTES', 'the cutaway image is a copy — a later change to the source scene\'s own image must not affect it')
+    console.log('PASS: reuse mode copies the file — it is not a live reference to the source scene')
+
+    let onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.strictEqual(onDisk[0].cutaway.insert_at, 2)
+    assert.strictEqual(onDisk[0].cutaway.image_path, `/projects/${TEST_PROJECT}/assets/A_cutaway.png`)
+    console.log('PASS: cutaway persists to scenes.json')
+
+    // Primary image_path completely untouched by adding a cutaway
+    assert.strictEqual(onDisk[0].image_path, `/projects/${TEST_PROJECT}/assets/A.png`)
+    console.log('PASS: the scene\'s own primary image_path is untouched by adding a cutaway')
+
+    // 2. Invalid range rejection — insert_at + duration exceeding scene duration
+    res  = await patchCutaway('A', { insert_at: 4, duration: 3 }) // ends at 7s, scene is 5s
+    body = await res.json()
+    assert.strictEqual(res.status, 400, `expected 400, got ${res.status}`)
+    assert(/at least 0.5s of main visual after/.test(body.error))
+    console.log('PASS: insert_at + duration exceeding scene duration is rejected (400), not silently clamped')
+
+    onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.strictEqual(onDisk[0].cutaway.insert_at, 2, 'rejected update must not overwrite the previously-persisted value')
+    console.log('PASS: rejected range was not persisted (prior valid value from step 1 still intact)')
+
+    // 2b. insert_at too close to scene start
+    res  = await patchCutaway('A', { insert_at: 0.1, duration: 1 })
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/at least 0.5s of main visual before/.test(body.error))
+    console.log('PASS: insert_at too close to the scene start is rejected (400)')
+
+    // 2c. insert_at too close to scene end (even though insert_at + duration alone might fit)
+    res  = await patchCutaway('A', { insert_at: 4.7, duration: 0.2 }) // ends at 4.9, > 4.5 ceiling
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/at least 0.5s of main visual after/.test(body.error))
+    console.log('PASS: a range ending too close to the scene end is rejected (400)')
+
+    // 3. Non-image scene rejected
+    res  = await patchCutaway('C', { insert_at: 2, duration: 1 })
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/cutaway only applies to image scenes/.test(body.error))
+    console.log('PASS: cutaway on a non-image scene is rejected (400)')
+
+    // 4. DELETE — clean removal, scene reverts to normal single-image rendering
+    res  = await deleteCutaway('A')
+    body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    assert.deepStrictEqual(body.scene.cutaway, { image_path: null, insert_at: null, duration: null })
+    console.log('PASS: DELETE resets cutaway to its default null-shape — clean removal')
+
+    onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.deepStrictEqual(onDisk[0].cutaway, { image_path: null, insert_at: null, duration: null })
+    assert.strictEqual(onDisk[0].image_path, `/projects/${TEST_PROJECT}/assets/A.png`, 'primary image_path still intact after removing the cutaway — scene renders normally')
+    console.log('PASS: the removal persists to scenes.json; the scene\'s primary image is unaffected, so it falls back to normal single-image rendering')
+
+    // 5. Error cases
+    res = await patchCutaway('999', { insert_at: 1, duration: 1 })
+    assert.strictEqual(res.status, 404)
+    res = await fetch(`${base}/A/cutaway`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ insert_at: 1, duration: 1 }),
+    })
+    assert.strictEqual(res.status, 400)
+    console.log('PASS: unknown scene_id (404) and missing projectId (400) handled for PATCH')
+
+    res = await deleteCutaway('999')
+    assert.strictEqual(res.status, 404)
+    res = await fetch(`${base}/A/cutaway`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+    assert.strictEqual(res.status, 400)
+    console.log('PASS: unknown scene_id (404) and missing projectId (400) handled for DELETE')
+
+    res  = await patchCutaway('A', { insert_at: 2, duration: 1, source_scene_id: 'ZZZ' })
+    body = await res.json()
+    assert.strictEqual(res.status, 404)
+    assert(/Source scene ZZZ not found/.test(body.error))
+    console.log('PASS: unknown source_scene_id in reuse mode is rejected (404)')
+
+    console.log('\nAll cutaway checks passed.')
+  } finally {
+    server.close()
+    cleanup()
+  }
+}
+
 run()
   .then(runWrappedShapeTest)
   .then(runReorderTests)
@@ -896,6 +1028,7 @@ run()
   .then(runPacingBoundaryAndRevertTests)
   .then(runMatchCutTests)
   .then(runLayoutTests)
+  .then(runCutawayTests)
   .catch(err => {
     console.error('TEST FAILURE:', err)
     cleanup()

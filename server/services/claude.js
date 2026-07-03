@@ -471,6 +471,7 @@ function postProcessScenes(scenes, defaults = {}) {
       layout:                    scene.layout || 'single', // FT-7: split-screen layout
       secondary_image_path:      null,                     // FT-7: set via PATCH .../layout or regenerate-secondary
       secondary_source_scene_id: null,                      // FT-7: set only when reuse mode is chosen
+      cutaway: { image_path: null, insert_at: null, duration: null }, // FT-8: temporary in-scene image swap
       higgsfield_prompt: finalPrompt,
       real_footage_flag: scene.shot_type === 'real_footage',
       clip_search_tags:  scene.clip_search_tags || [],

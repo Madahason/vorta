@@ -273,8 +273,132 @@ async function runSecondaryRegenerateTests() {
   }
 }
 
+// FT-8: POST /api/higgsfield/regenerate-cutaway/:sceneId — cutaway image generation.
+async function runCutawayRegenerateTests() {
+  cleanup()
+  fs.mkdirSync(assetsDir, { recursive: true })
+  const scenes = [
+    {
+      scene_id: '001', script_excerpt: 'a documentary scene', shot_type: 'image', duration_seconds: 5, transition_out: 'dissolve',
+      higgsfield_prompt: 'traders on the floor', image_path: `/projects/${TEST_PROJECT}/assets/001.png`,
+      cutaway: { image_path: `/projects/${TEST_PROJECT}/assets/001_cutaway.png`, insert_at: 2, duration: 1 },
+    },
+    { scene_id: '002', script_excerpt: 'a motion graphic scene', shot_type: 'motion_graphic', duration_seconds: 5, transition_out: 'dissolve' },
+  ]
+  fs.writeFileSync(scenesPath, JSON.stringify(scenes, null, 2))
+  fs.writeFileSync(path.join(assetsDir, '001.png'), 'PRIMARY_ORIGINAL_BYTES')
+  fs.writeFileSync(path.join(assetsDir, '001_cutaway.png'), 'CUTAWAY_FROM_REUSE_BYTES') // as if reuse mode set this
+
+  const app = express()
+  app.use(express.json())
+  app.use('/api/higgsfield', require('./higgsfieldRegenerate'))
+  const server = app.listen(0)
+  const port   = server.address().port
+  const base   = `http://localhost:${port}/api/higgsfield`
+
+  const regenerateCutaway = (sceneId, body) => fetch(`${base}/regenerate-cutaway/${sceneId}`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  })
+
+  const originalGenerateImage = higgsfieldService.generateImage
+  const originalEnhancePrompt = promptEnhancer.enhancePrompt
+  const originalDownloadImage = imageDownloadSvc.downloadImage
+
+  try {
+    // ── Validation paths ──
+    let res  = await regenerateCutaway('001', { prompt: 'a storm cloud' }) // projectId omitted on purpose
+    let body = await res.json()
+    assert.strictEqual(res.status, 400)
+    console.log('PASS: missing projectId returns 400')
+
+    res = await regenerateCutaway('001', { projectId: TEST_PROJECT })
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/prompt required/.test(body.error))
+    console.log('PASS: missing prompt returns 400')
+
+    res = await regenerateCutaway('999', { projectId: TEST_PROJECT, prompt: 'x' })
+    assert.strictEqual(res.status, 404)
+    console.log('PASS: unknown scene_id returns 404')
+
+    res = await regenerateCutaway('002', { projectId: TEST_PROJECT, prompt: 'x' })
+    body = await res.json()
+    assert.strictEqual(res.status, 400)
+    assert(/cutaway only applies to image scenes/.test(body.error))
+    console.log('PASS: non-image scene rejected (400)')
+
+    // ── Happy path ──
+    let promptSeenBy = { enhance: null, generate: null }
+    promptEnhancer.enhancePrompt = async (scene) => {
+      promptSeenBy.enhance = scene.higgsfield_prompt
+      return `${scene.higgsfield_prompt}, enhanced`
+    }
+    higgsfieldService.generateImage = async (prompt) => {
+      promptSeenBy.generate = prompt
+      return 'https://fake.higgsfield.test/cutaway-image.png'
+    }
+    imageDownloadSvc.downloadImage = async (url, dest) => {
+      fs.writeFileSync(dest, `DOWNLOADED_FROM:${url}`)
+    }
+
+    res  = await regenerateCutaway('001', { projectId: TEST_PROJECT, prompt: 'a storm cloud' })
+    body = await res.json()
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(body)}`)
+    assert.strictEqual(body.cutaway.image_path, `/projects/${TEST_PROJECT}/assets/001_cutaway.png`, 'same location as before — filename preserved')
+    console.log('PASS: happy-path regenerate-cutaway returns 200 with the (same-location) cutaway.image_path')
+
+    assert.strictEqual(promptSeenBy.enhance, 'a storm cloud', 'enhancePrompt must receive the fresh user-supplied prompt, not the scene\'s own higgsfield_prompt')
+    console.log('PASS: pipeline reused with the USER-SUPPLIED prompt, not the scene\'s own stored prompt')
+
+    assert.strictEqual(fs.readFileSync(path.join(assetsDir, '001_cutaway.png'), 'utf8'), 'DOWNLOADED_FROM:https://fake.higgsfield.test/cutaway-image.png')
+    console.log('PASS: downloadImage wrote the generated content to the cutaway\'s location')
+
+    // Scoped correctly: only this scene's cutaway is affected — primary image untouched
+    assert.strictEqual(fs.readFileSync(path.join(assetsDir, '001.png'), 'utf8'), 'PRIMARY_ORIGINAL_BYTES', 'the primary panel image must be completely untouched')
+    console.log('PASS: only the cutaway is affected — the primary scene image is untouched')
+
+    // insert_at/duration preserved (not clobbered by the image regenerate)
+    assert.strictEqual(body.cutaway.insert_at, 2)
+    assert.strictEqual(body.cutaway.duration, 1)
+    console.log('PASS: insert_at/duration are preserved — only image_path changes on a regenerate')
+
+    // Backup/overwrite safety — distinct suffix, no collision with the primary panel's backup
+    const cutawayBackupPath = path.join(assetsDir, 'scene_001_cutaway_original.jpg')
+    assert.ok(fs.existsSync(cutawayBackupPath), 'the prior cutaway image must be backed up before regeneration overwrote it')
+    assert.strictEqual(fs.readFileSync(cutawayBackupPath, 'utf8'), 'CUTAWAY_FROM_REUSE_BYTES')
+    const primaryBackupPath = path.join(assetsDir, 'scene_001_original.jpg')
+    assert.ok(!fs.existsSync(primaryBackupPath), 'the primary panel\'s own backup file must not be created by a cutaway regenerate')
+    console.log('PASS: the cutaway backup uses a distinct filename and never collides with (or creates) the primary panel\'s backup')
+
+    let onDisk = JSON.parse(fs.readFileSync(scenesPath, 'utf8'))
+    assert.strictEqual(onDisk[0].cutaway.image_path, `/projects/${TEST_PROJECT}/assets/001_cutaway.png`)
+    assert.strictEqual(onDisk[0].image_path, `/projects/${TEST_PROJECT}/assets/001.png`, 'primary image_path untouched')
+    assert.strictEqual(onDisk[1].shot_type, 'motion_graphic', 'scene 002 (rejected — not an image scene) untouched')
+    console.log('PASS: scenes.json persists correctly; no other scene touched')
+
+    // ── Failure inside generateImage propagates as a clean 500, nothing persisted ──
+    higgsfieldService.generateImage = async () => { throw new Error('Higgsfield CLI exploded') }
+    res  = await regenerateCutaway('001', { projectId: TEST_PROJECT, prompt: 'x' })
+    body = await res.json()
+    assert.strictEqual(res.status, 500)
+    assert(/Higgsfield CLI exploded/.test(body.error))
+    console.log('PASS: a generation failure returns a clean 500 with the underlying error message')
+
+    console.log('\nAll regenerate-cutaway checks passed.')
+  } finally {
+    higgsfieldService.generateImage = originalGenerateImage
+    promptEnhancer.enhancePrompt    = originalEnhancePrompt
+    imageDownloadSvc.downloadImage  = originalDownloadImage
+    server.close()
+    cleanup()
+  }
+}
+
 run()
   .then(runSecondaryRegenerateTests)
+  .then(runCutawayRegenerateTests)
   .catch(err => {
     console.error('TEST FAILURE:', err)
     cleanup()

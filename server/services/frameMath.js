@@ -23,9 +23,55 @@ const NARRATION_BUFFER_SECONDS = 0.8
 const VALID_TRANSITIONS = ['dissolve', 'dip_black', 'dip_white', 'cut', 'match']
 const PACING_VALUES     = ['standard', 'action', 'montage']
 const LAYOUT_VALUES     = ['single', 'split_horizontal', 'split_vertical']
+// FT-8: minimum main-visual buffer required before AND after a cutaway insert.
+const CUTAWAY_EDGE_BUFFER_SECONDS = 0.5
 
 function isValidLayout(layout) {
   return LAYOUT_VALUES.includes(layout)
+}
+
+// Validates a proposed { insert_at, duration } cutaway update against the scene's own
+// duration_seconds. Rejects out-of-range values outright — never silently clamps, per the
+// task's explicit requirement. Returns an array of error strings — empty means valid.
+function validateCutawayUpdate(scene, updates) {
+  const errors = []
+  const { insert_at: insertAt, duration } = updates
+
+  if (insertAt === undefined || insertAt === null) {
+    errors.push('insert_at is required')
+  } else if (typeof insertAt !== 'number' || !isFinite(insertAt) || insertAt < 0) {
+    errors.push('insert_at must be a number >= 0')
+  }
+
+  if (duration === undefined || duration === null) {
+    errors.push('duration is required')
+  } else if (typeof duration !== 'number' || !isFinite(duration) || duration <= 0) {
+    errors.push('duration must be a positive number')
+  }
+
+  // Don't attempt range checks against malformed primitives — report the type errors first.
+  if (errors.length) return errors
+
+  const sceneDuration = Number(scene.duration_seconds) || 0
+  const minInsertAt    = CUTAWAY_EDGE_BUFFER_SECONDS
+  const maxCutawayEnd  = parseFloat((sceneDuration - CUTAWAY_EDGE_BUFFER_SECONDS).toFixed(2))
+
+  if (insertAt < minInsertAt) {
+    errors.push(
+      `insert_at must be >= ${minInsertAt}s (at least ${CUTAWAY_EDGE_BUFFER_SECONDS}s of main visual ` +
+      `before the cutaway)`
+    )
+  }
+
+  const cutawayEnd = parseFloat((insertAt + duration).toFixed(2))
+  if (cutawayEnd > maxCutawayEnd) {
+    errors.push(
+      `insert_at + duration (${cutawayEnd}s) must be <= ${maxCutawayEnd}s (at least ` +
+      `${CUTAWAY_EDGE_BUFFER_SECONDS}s of main visual after the cutaway — scene duration is ${sceneDuration}s)`
+    )
+  }
+
+  return errors
 }
 
 function minDurationSeconds(audioDuration) {
@@ -298,6 +344,7 @@ module.exports = {
   VALID_TRANSITIONS,
   PACING_VALUES,
   LAYOUT_VALUES,
+  CUTAWAY_EDGE_BUFFER_SECONDS,
   minDurationSeconds,
   canUseDipTransition,
   isValidTransition,
@@ -312,4 +359,5 @@ module.exports = {
   resetBrokenBoundaryAdjacency,
   clampDurationForActionCut,
   resetActionCutBoundaryOffsets,
+  validateCutawayUpdate,
 }

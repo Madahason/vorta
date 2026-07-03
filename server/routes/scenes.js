@@ -5,6 +5,7 @@ const fs      = require('fs')
 const {
   validateSceneUpdate, validateBoundaryUpdate, resetBrokenBoundaryAdjacency,
   clampDurationForActionCut, resetActionCutBoundaryOffsets, isValidLayout, LAYOUT_VALUES,
+  validateCutawayUpdate,
 } = require('../services/frameMath')
 const { PROJECTS_DIR, readScenesFile, writeScenesFile } = require('../services/scenesFile')
 const { backupOriginalIfNeeded } = require('../services/imageSwap')
@@ -230,6 +231,98 @@ router.patch('/:sceneId/layout', (req, res) => {
     updatedScene.secondary_source_scene_id = String(source_scene_id)
   }
 
+  file.scenes[idx] = updatedScene
+  writeScenesFile(file)
+
+  res.json({ scene: updatedScene })
+})
+
+// PATCH /api/scenes/:sceneId/cutaway
+// Body: { projectId, insert_at, duration, source_scene_id? }
+// FT-8 cutaway insert. insert_at/duration are validated against the scene's own
+// duration_seconds — out-of-range values are REJECTED, never silently clamped (both
+// insert_at >= 0.5s and insert_at + duration <= duration_seconds - 0.5s must hold, leaving
+// at least 0.5s of main visual on each side of the cutaway). Only applies to image scenes —
+// the cutaway's image_path only makes sense for a shot type that already has one.
+// source_scene_id (reuse mode) copies that scene's image_path file, same non-reference-copy
+// pattern as FT-7's /layout — a distinct 'cutaway_original' backup suffix keeps this from
+// colliding with the primary panel's backup or FT-7's secondary-panel backup. Regenerate mode
+// is a separate endpoint (POST /api/higgsfield/regenerate-cutaway/:sceneId), matching FT-7's
+// split between PATCH .../layout (reuse) and POST .../regenerate-secondary (AI generation).
+router.patch('/:sceneId/cutaway', (req, res) => {
+  const { sceneId } = req.params
+  const { projectId, insert_at, duration, source_scene_id } = req.body || {}
+
+  if (!projectId) return res.status(400).json({ error: 'projectId required' })
+
+  const file = readScenesFile(projectId)
+  if (!file) return res.status(404).json({ error: `No scenes.json found for project ${projectId}` })
+
+  const idx = file.scenes.findIndex(s => String(s.scene_id) === String(sceneId))
+  if (idx === -1) return res.status(404).json({ error: `Scene ${sceneId} not found in project ${projectId}` })
+
+  const scene = file.scenes[idx]
+  if (scene.shot_type !== 'image') {
+    return res.status(400).json({ error: `Scene ${sceneId} is shot_type "${scene.shot_type}" — cutaway only applies to image scenes` })
+  }
+
+  const errors = validateCutawayUpdate(scene, { insert_at, duration })
+  if (errors.length) return res.status(400).json({ error: errors[0], errors })
+
+  const existingCutaway = scene.cutaway || { image_path: null, insert_at: null, duration: null }
+  const updatedScene = { ...scene, cutaway: { ...existingCutaway, insert_at, duration } }
+
+  if (source_scene_id !== undefined) {
+    const sourceScene = file.scenes.find(s => String(s.scene_id) === String(source_scene_id))
+    if (!sourceScene) {
+      return res.status(404).json({ error: `Source scene ${source_scene_id} not found in project ${projectId}` })
+    }
+    if (!sourceScene.image_path) {
+      return res.status(400).json({ error: `Source scene ${source_scene_id} has no image_path to reuse` })
+    }
+
+    const assetsDir = path.join(PROJECTS_DIR, projectId, 'assets')
+    const sourceAbsPath = path.join(assetsDir, path.basename(sourceScene.image_path))
+    if (!fs.existsSync(sourceAbsPath)) {
+      return res.status(400).json({ error: `Source scene ${source_scene_id}'s image file is missing from disk` })
+    }
+
+    backupOriginalIfNeeded(assetsDir, sceneId, existingCutaway.image_path, 'cutaway_original')
+
+    const ext = path.extname(sourceAbsPath) || '.png'
+    const destFilename = existingCutaway.image_path ? path.basename(existingCutaway.image_path) : `${sceneId}_cutaway${ext}`
+    const destAbsPath = path.join(assetsDir, destFilename)
+
+    // A genuine copy — not a live reference, same guarantee as FT-7's reuse mode.
+    fs.copyFileSync(sourceAbsPath, destAbsPath)
+
+    updatedScene.cutaway.image_path = `/projects/${projectId}/assets/${destFilename}`
+  }
+
+  file.scenes[idx] = updatedScene
+  writeScenesFile(file)
+
+  res.json({ scene: updatedScene })
+})
+
+// DELETE /api/scenes/:sceneId/cutaway
+// Body: { projectId }
+// Removes the cutaway — resets the field to its default shape (matches "Revert to
+// generated": every scene starts with cutaway: { image_path: null, insert_at: null,
+// duration: null }, this restores exactly that, it never leaves a partially-set object).
+router.delete('/:sceneId/cutaway', (req, res) => {
+  const { sceneId } = req.params
+  const { projectId } = req.body || {}
+
+  if (!projectId) return res.status(400).json({ error: 'projectId required' })
+
+  const file = readScenesFile(projectId)
+  if (!file) return res.status(404).json({ error: `No scenes.json found for project ${projectId}` })
+
+  const idx = file.scenes.findIndex(s => String(s.scene_id) === String(sceneId))
+  if (idx === -1) return res.status(404).json({ error: `Scene ${sceneId} not found in project ${projectId}` })
+
+  const updatedScene = { ...file.scenes[idx], cutaway: { image_path: null, insert_at: null, duration: null } }
   file.scenes[idx] = updatedScene
   writeScenesFile(file)
 

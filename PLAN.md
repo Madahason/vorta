@@ -4087,3 +4087,70 @@ Also verified manually:
 - [x] No cutaway or montage flag added
 - [x] Client build clean — zero errors
 - [x] PLAN.md updated with FT-7 completion entry
+
+---
+
+### Phase FT-8 — Fine-Tune stage: cutaway insert ✅ COMPLETE
+
+**Documentary.jsx's `SceneRenderer` and FT-7's split-screen render path reviewed before making changes:** `SceneRenderer` is a pure per-scene visual dispatch with no awareness of the composition's overall timing — `useCurrentFrame()`, when called inside it, returns the frame *local to that scene's own `TransitionSeries.Sequence`* (Remotion scopes it to the nearest enclosing Sequence), i.e. exactly "seconds relative to the scene's own start." That's what made a temporary in-scene image swap possible as pure frame-conditional logic inside `SceneRenderer` itself, with zero changes to the Sequence structure, `sceneDur`, `getTransition`, or the narration `<Audio>` tracks (a completely separate part of the render tree, built from `narrationTracks`, with no knowledge of `SceneRenderer`'s internals at all).
+
+**What was built:**
+- One new optional scene field: `cutaway: { image_path: null, insert_at: null, duration: null }`, defaulted in `claude.js`'s `postProcessScenes` (Claude's analysis never sets this, only Fine-Tune user actions do — same precedent as FT-6/FT-7's fields).
+- `server/services/frameMath.js` — `validateCutawayUpdate(scene, updates)` and `CUTAWAY_EDGE_BUFFER_SECONDS = 0.5`. Rejects (never clamps) any `insert_at`/`duration` combination that doesn't leave at least 0.5s of main visual on both sides of the cutaway, per the task's explicit requirement. Type/range errors are reported before range errors, so a malformed request never gets a confusing range-check message.
+- `server/routes/scenes.js` — `PATCH /:sceneId/cutaway` (body: `{ projectId, insert_at, duration, source_scene_id? }`) validates the range server-side and, in reuse mode, copies the source scene's image file (never a live reference — same guarantee as FT-7, backup suffix `'cutaway_original'` so it never collides with the primary panel's own backup or FT-7's `'secondary_original'` backup). `DELETE /:sceneId/cutaway` resets the field to its exact default shape — this *is* the entire "Revert to generated" mechanism, no snapshot needed, mirroring FT-7's `layout: 'single'` revert.
+- `server/routes/higgsfieldRegenerate.js` — `POST /regenerate-cutaway/:sceneId` (body: `{ projectId, prompt }`), the same `enhancePrompt → generateImage → downloadImage` pipeline reused a third time now (FT-3 primary, FT-7 secondary, FT-8 cutaway), with a fresh user-supplied prompt. Only ever touches `cutaway.image_path` — `insert_at`/`duration` are read from the scene's existing `cutaway` object and preserved untouched, since this endpoint has no opinion about timing at all.
+- `Documentary.jsx`'s `SceneRenderer` — computes `frame`/`fps` unconditionally at the top (Rules of Hooks — must run before any early return) and, for `shot_type: 'image'` scenes, checks whether `frame` falls inside `[insert_at*fps, (insert_at+duration)*fps)`. If so, it substitutes `cutaway.image_path` for `image_path` before dispatching to whichever component actually renders — a single computation reused for both the split and non-split paths (see the interaction decision below), so there's exactly one place this logic lives.
+- `client/src/pages/wizard/FineTuneStep.jsx` — a "Cutaway" section per image scene card: numeric insert-at/duration inputs (with the 0.5s buffer surfaced directly in the UI copy) plus the same two-mode source picker as FT-7 (reuse-existing-scene grid / regenerate-new prompt field, reusing the same `otherScenesWithImages` prop). Regenerate mode always commits timing via `PATCH .../cutaway` first (validated server-side) before calling `POST .../regenerate-cutaway`, since that endpoint alone can't establish `insert_at`/`duration` on a scene that never had a cutaway before.
+
+**Split-screen + cutaway interaction — the decision the guardrail asked to be documented:** a cutaway on a split-layout (FT-7) scene replaces **only the primary panel**; the secondary panel keeps showing its own image throughout the cutaway window. Reasoning: a cutaway is meant to be a brief, contained insert, and collapsing the *entire* split layout to one full-frame image and back would be a far more jarring visual event than what a "cutaway" implies — it would look like the layout itself glitched rather than like an intentional brief insert. Keeping the secondary panel stable preserves the split layout's visual identity across the cutaway. Implementation-wise this fell out naturally: `SceneRenderer` computes the effective (possibly swapped) `image_path` once, then passes it through as `scene.image_path` to whichever component renders next — `ImageScene` for `layout: 'single'`, or `SplitScreenScene` for a split layout, whose `<Panel src={scene.image_path}>` is *always* the primary panel by construction. No separate branch was needed for the split case; the same one-line swap serves both.
+
+**Testing — commands run and results:**
+```
+$ node server/services/frameMath.test.js
+```
+73/73 assertions passed (64 from FT-1–FT-7 unchanged, plus 9 new): `CUTAWAY_EDGE_BUFFER_SECONDS` defined; valid ranges accepted, including exactly at both 0.5s edge buffers; `insert_at` too close to the scene start rejected; a range running too close to the scene end rejected; `insert_at + duration` exceeding the scene's total duration rejected; missing/negative/zero primitives rejected outright; and — the most important test per the task — `calculateDocumentaryDuration`, `getTransition`, and `sceneDur` are all **byte-for-byte identical** on the same scene before and after adding a `cutaway` object, proving a cutaway has zero effect on any timing function, not just "probably no effect."
+
+```
+$ node server/routes/scenes.test.js
+```
+90/90 assertions passed (76 from FT-1–FT-7 unchanged, plus 14 new): a valid cutaway range with reuse mode persists `insert_at`/`duration`/`image_path` correctly and the cutaway image is confirmed a **real, independent file copy** (proven by mutating the source scene's own image *after* the copy and confirming the cutaway panel bytes are unaffected — same proof pattern as FT-7); the scene's own primary `image_path` is untouched by adding a cutaway; an out-of-range request is rejected with 400 *and* confirmed **not persisted** (the prior valid value survives untouched); cutaway on a non-image scene rejected; `DELETE` resets the field to its exact default null-shape, confirmed both in the response and in `scenes.json`, with the primary image left intact so the scene falls back to normal single-image rendering; the full set of 404/400 error cases (unknown scene, missing projectId, unknown `source_scene_id`) handled correctly for both `PATCH` and `DELETE`.
+
+```
+$ node server/routes/higgsfieldRegenerate.test.js
+```
+39/39 assertions passed (27 from FT-3/FT-7 unchanged, plus 12 new): `regenerate-cutaway` receives the **user-supplied prompt**, not the scene's stored `higgsfield_prompt`; only the cutaway's image file changes — the primary scene image is confirmed byte-for-byte untouched; `insert_at`/`duration` are preserved across a regenerate (not clobbered by the image-only endpoint); the prior cutaway image is backed up with the distinct `'cutaway_original'` suffix before being overwritten, and this backup is confirmed to neither collide with nor accidentally create the primary panel's own backup file; a thrown generation error returns a clean 500 with nothing persisted.
+
+**Remotion render test (required — an in-scene, frame-conditional image swap can't be fully verified by unit tests alone):**
+Built a disposable 2-scene test project (`projects/__ft8_render_test__`, deleted after the test): scene 001 (5s, with real narration audio and a cutaway at `insert_at: 2, duration: 1.5` using a different real image) and scene 002 (a normal 3s scene, no cutaway, to prove the composition as a whole still renders correctly end to end).
+```
+$ npx remotion render src/index.jsx Documentary ../projects/__ft8_render_test__/output.mp4 --props=../projects/__ft8_render_test__/render_props.json --overwrite --concurrency=1 --timeout=120000 --gl=swangle
+```
+First attempt failed with `Error: ENOSPC: no space left on device` while Remotion was bundling (copying `remotion/public/clips`, 758MB, into a temp build directory) — the environment's C: drive had only ~2GB free at the time. This was an environment/disk-space issue, not a code defect: nothing in the actual render pipeline had run yet. Freed ~170MB by deleting two old, regenerable `remotion-webpack-bundle-*` temp caches left over from earlier phases' renders, then retried:
+```
+Rendered 228/228
+Encoded 228/228
++ ../projects/__ft8_render_test__/output.mp4 8.3 MB
+```
+Exit code 0. `ffprobe` confirmed the output as a valid, complete file with both a video and an audio stream (`duration=7.658667`, `size=8262460`) — the audio stream's presence and the successful full-duration encode confirm the narration track was not interrupted by the cutaway (which is expected by construction: the cutaway swap lives entirely inside `SceneRenderer`'s visual dispatch, and the narration `<Audio>` Sequence is a structurally separate part of the render tree that never reads `scene.cutaway` at all — already proven at the unit level above). Test project deleted afterward.
+
+Also verified manually:
+- `node -e "require(...)"` on `scenes.js` and `higgsfieldRegenerate.js` — load without error
+- `npx eslint src/pages/wizard/FineTuneStep.jsx` — clean
+- `npx vite build` — clean production build
+- Re-ran the full FT-1–FT-7 test suites after all FT-8 changes — all still pass
+
+**Production-readiness checklist:**
+- [x] `cutaway: { image_path, insert_at, duration }` added to the scene schema, optional/defaulted
+- [x] "Add cutaway" control added per image scene card: insert-at/duration inputs plus the reuse/regenerate source picker
+- [x] `PATCH /api/scenes/:sceneId/cutaway`, `POST /api/higgsfield/regenerate-cutaway/:sceneId`, and `DELETE /api/scenes/:sceneId/cutaway` implemented, registered, tested
+- [x] `insert_at`/`duration` bounds validated server-side — invalid ranges rejected outright, never silently clamped, and confirmed not persisted on rejection
+- [x] `Documentary.jsx`/`SceneRenderer` renders the cutaway as a temporary image swap inside the scene's existing `TransitionSeries.Sequence` — no new Sequence, no duration change, verified via a real Remotion render with narration audio present throughout
+- [x] `calculateDocumentaryDuration`, `getTransition`, and `sceneDur` confirmed byte-for-byte unchanged by a cutaway, both by unit test and by construction
+- [x] Split-screen (FT-7) + cutaway (FT-8) combination handled: cutaway replaces only the primary panel, decision and reasoning documented above
+- [x] Reverting (`DELETE`) falls back cleanly to normal single-image rendering — verified via test and by construction (the render-path guard requires all three cutaway sub-fields to be non-null)
+- [x] FT-1–FT-7 logic untouched
+- [x] No montage flag added
+- [x] Client build clean — zero errors
+- [x] PLAN.md updated with FT-8 completion entry
+
+**Resumed session (2026-07-03):** the original FT-8 session was interrupted after all code and this PLAN entry were written but *before anything was committed* — the entire FT-8 diff was sitting uncommitted in the working tree. This session diagnosed the actual state (all pieces present: endpoints, validation, `SceneRenderer` swap, Fine-Tune UI), then independently re-verified everything rather than trusting the entry above: re-ran all three test suites (frameMath 73/73, scenes 90/90, higgsfieldRegenerate 39/39 — FT-1–FT-7 legacy checks all included and passing), re-ran ESLint on FineTuneStep.jsx (clean) and the production client build (clean), and rebuilt the disposable render test from scratch (`projects/__ft8_render_test__`, deleted after): 2 scenes (6.4s with narration + cutaway at `insert_at: 2, duration: 1.5`; 3s plain), rendered 270/270 frames, exit 0. Verified beyond the original entry's checks: extracted frames at 1.5s / 2.5s / 4.5s visually confirm main image → cutaway image → main image, and `volumedetect` on the 2.0–3.5s window (mean −28.0 dB, max −12.1 dB) and the 3.6–5.5s tail (mean −32.2 dB) confirms narration plays through the cutaway uninterrupted. Output duration exactly 9.000s = 270 frames = `calculateDocumentaryDuration`'s value, so a cutaway provably doesn't shift composition timing in a real render. Committed as `feature: FT-8 Fine-Tune stage — cutaway insert`. Unrelated working-tree changes found alongside FT-8 (ScriptInput target-duration UI, render.js motion_component syntax guard, remotion.config/defaults tweaks, runtime data files) were deliberately left out of the FT-8 commit.

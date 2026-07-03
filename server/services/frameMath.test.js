@@ -5,10 +5,12 @@ const {
   FPS, DIP_FADE, DIP_MID, MIN_SCENE_FRAMES, TRANSITION_FRAMES, CUT_FRAMES,
   MAX_SCENE_SECONDS, NARRATION_BUFFER_SECONDS, BOUNDARY_SAFETY_MARGIN_SECONDS,
   ACTION_CUT_BUFFER_SECONDS, PACING_VALUES, VALID_TRANSITIONS, LAYOUT_VALUES,
+  CUTAWAY_EDGE_BUFFER_SECONDS,
   minDurationSeconds, canUseDipTransition, isValidTransition, validateSceneUpdate,
   getTransition, sceneDur, calculateDocumentaryDuration,
   maxBoundaryOffsetSeconds, validateBoundaryUpdate, resolveManualOverlapSeconds,
   resetBrokenBoundaryAdjacency, clampDurationForActionCut, resetActionCutBoundaryOffsets,
+  validateCutawayUpdate,
 } = require('./frameMath')
 
 // Constants must match remotion/src/compositions/Documentary.jsx exactly:
@@ -358,5 +360,80 @@ console.log('PASS: calculateDocumentaryDuration is byte-for-byte identical befor
 
 assert.deepStrictEqual(getTransition(sceneSplitH, 150), getTransition(sceneSingle, 150), 'the transition descriptor itself must be identical regardless of layout')
 console.log('PASS: getTransition ignores layout/secondary_image_path entirely — same descriptor either way')
+
+// ── FT-8: cutaway insert ──────────────────────────────────────────────────────
+assert.strictEqual(CUTAWAY_EDGE_BUFFER_SECONDS, 0.5)
+console.log('PASS: CUTAWAY_EDGE_BUFFER_SECONDS defined')
+
+const cutawayScene = { scene_id: 'A', duration_seconds: 5 } // valid window: [0.5, 4.5]
+
+// Valid range
+errs = validateCutawayUpdate(cutawayScene, { insert_at: 2, duration: 1 })
+assert.strictEqual(errs.length, 0, '2s insert_at + 1s duration on a 5s scene must be valid (ends at 3s, well within [0.5, 4.5])')
+console.log('PASS: validateCutawayUpdate accepts a valid range')
+
+// Exactly at the edges — must be accepted (0.5 and 4.5 are inclusive boundaries)
+errs = validateCutawayUpdate(cutawayScene, { insert_at: 0.5, duration: 4.0 }) // ends at exactly 4.5
+assert.strictEqual(errs.length, 0, 'insert_at exactly at the 0.5s floor, ending exactly at the 4.5s ceiling, must be valid')
+console.log('PASS: validateCutawayUpdate accepts a range exactly at both edge buffers')
+
+// insert_at too close to scene start
+errs = validateCutawayUpdate(cutawayScene, { insert_at: 0.2, duration: 1 })
+assert.strictEqual(errs.length, 1)
+assert(/at least 0.5s of main visual before/.test(errs[0]), `expected a "before" buffer error, got: ${errs[0]}`)
+console.log('PASS: validateCutawayUpdate rejects insert_at too close to the scene start')
+
+// insert_at + duration too close to scene end
+errs = validateCutawayUpdate(cutawayScene, { insert_at: 4, duration: 0.8 }) // ends at 4.8, > 4.5 ceiling
+assert.strictEqual(errs.length, 1)
+assert(/at least 0.5s of main visual after/.test(errs[0]), `expected an "after" buffer error, got: ${errs[0]}`)
+console.log('PASS: validateCutawayUpdate rejects a range that runs too close to the scene end')
+
+// insert_at + duration exceeding the scene's total duration entirely
+errs = validateCutawayUpdate(cutawayScene, { insert_at: 4, duration: 5 }) // ends at 9s, scene is only 5s
+assert.strictEqual(errs.length, 1)
+assert(/at least 0.5s of main visual after/.test(errs[0]))
+console.log('PASS: validateCutawayUpdate rejects insert_at + duration exceeding scene duration entirely')
+
+// Missing/invalid primitives — rejected outright, not silently defaulted
+errs = validateCutawayUpdate(cutawayScene, { insert_at: 2 }) // duration missing
+assert.strictEqual(errs.length, 1)
+assert(/duration is required/.test(errs[0]))
+console.log('PASS: validateCutawayUpdate rejects a missing duration')
+
+errs = validateCutawayUpdate(cutawayScene, { insert_at: -1, duration: 1 })
+assert.strictEqual(errs.length, 1)
+assert(/insert_at must be a number >= 0/.test(errs[0]))
+console.log('PASS: validateCutawayUpdate rejects a negative insert_at')
+
+errs = validateCutawayUpdate(cutawayScene, { insert_at: 2, duration: 0 })
+assert.strictEqual(errs.length, 1)
+assert(/duration must be a positive number/.test(errs[0]))
+console.log('PASS: validateCutawayUpdate rejects a zero/non-positive duration')
+
+// ── Scene duration and frame-overlap math completely unaffected by a cutaway ────
+// This is the most important FT-8 test per the task — proves cutaway is purely a render-time
+// per-frame image swap with zero effect on any timing function, byte-for-byte, not "probably
+// no effect."
+const sceneNoCutaway = { scene_id: 'A', duration_seconds: 5, transition_out: 'dissolve' }
+const sceneWithCutaway = {
+  ...sceneNoCutaway,
+  cutaway: { image_path: '/projects/x/assets/A_cutaway.png', insert_at: 2, duration: 1 },
+}
+const tailScene = { scene_id: 'Z', duration_seconds: 5, transition_out: 'cut' }
+
+const durationNoCutaway   = calculateDocumentaryDuration([sceneNoCutaway, tailScene], 30)
+const durationWithCutaway = calculateDocumentaryDuration([sceneWithCutaway, tailScene], 30)
+assert.strictEqual(durationWithCutaway, durationNoCutaway, 'adding a cutaway must not change calculateDocumentaryDuration at all')
+console.log('PASS: calculateDocumentaryDuration is byte-for-byte identical before/after adding a cutaway')
+
+assert.deepStrictEqual(
+  getTransition(sceneWithCutaway, 150), getTransition(sceneNoCutaway, 150),
+  'the transition descriptor must be identical regardless of cutaway — cutaway is not read by getTransition at all'
+)
+console.log('PASS: getTransition ignores the cutaway field entirely — same descriptor either way')
+
+assert.strictEqual(sceneDur(sceneWithCutaway, 30), sceneDur(sceneNoCutaway, 30), 'sceneDur (the scene\'s own frame count) must be identical regardless of cutaway')
+console.log('PASS: sceneDur ignores the cutaway field entirely')
 
 console.log('\nAll frameMath.test.js checks passed.')

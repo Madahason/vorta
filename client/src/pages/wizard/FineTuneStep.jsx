@@ -394,6 +394,16 @@ function FineTuneCard({
   const [regeneratePrompt, setRegeneratePrompt] = useState('')
   const [regeneratingSecondary, setRegeneratingSecondary] = useState(false)
 
+  // FT-8: cutaway insert
+  const [showCutawayEditor, setShowCutawayEditor] = useState(false)
+  const [cutawayInsertAt, setCutawayInsertAt] = useState(scene.cutaway?.insert_at ?? Math.min(2, Math.max(0.5, duration / 2)))
+  const [cutawayDuration, setCutawayDuration] = useState(scene.cutaway?.duration ?? 1)
+  const [cutawaySaving, setCutawaySaving] = useState(false)
+  const [cutawayError,  setCutawayError]  = useState(null)
+  const [cutawaySourceMode, setCutawaySourceMode] = useState('reuse') // 'reuse' | 'regenerate'
+  const [cutawayRegeneratePrompt, setCutawayRegeneratePrompt] = useState('')
+  const [cutawayRegenerating, setCutawayRegenerating] = useState(false)
+
   const durationError = duration < min
     ? `Must be at least ${min}s to preserve the narration-sync buffer (audio ${(scene.audio_duration || 0).toFixed(1)}s + 0.8s)`
     : duration > max
@@ -594,6 +604,78 @@ function FineTuneCard({
       setLayoutError(err.message)
     } finally {
       setRegeneratingSecondary(false)
+    }
+  }
+
+  // FT-8: cutaway insert. "Revert to generated" is just DELETE — every scene starts with no
+  // cutaway (Claude's analysis never sets one, only Fine-Tune user actions do), so there's no
+  // snapshot to restore, exactly like FT-7's layout revert.
+  async function patchCutaway(body) {
+    const res  = await fetch(`${SERVER_URL}/api/scenes/${scene.scene_id}/cutaway`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ projectId, ...body }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Cutaway update failed')
+    return data.scene
+  }
+
+  const reuseCutawaySource = async (sourceSceneId) => {
+    setCutawaySaving(true); setCutawayError(null)
+    try {
+      const updated = await patchCutaway({ insert_at: cutawayInsertAt, duration: cutawayDuration, source_scene_id: sourceSceneId })
+      onSceneUpdate(updated)
+      setShowCutawayEditor(false)
+    } catch (err) {
+      setCutawayError(err.message)
+    } finally {
+      setCutawaySaving(false)
+    }
+  }
+
+  const regenerateCutawaySource = async () => {
+    if (!cutawayRegeneratePrompt.trim()) return
+    setCutawayRegenerating(true); setCutawayError(null)
+    try {
+      // Commit timing first — validated server-side. regenerate-cutaway only ever touches
+      // image_path, it never sets insert_at/duration itself.
+      const timingUpdated = await patchCutaway({ insert_at: cutawayInsertAt, duration: cutawayDuration })
+      onSceneUpdate(timingUpdated)
+
+      const res  = await fetch(`${SERVER_URL}/api/higgsfield/regenerate-cutaway/${scene.scene_id}`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId, prompt: cutawayRegeneratePrompt.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Regeneration failed')
+      onSceneUpdate({ cutaway: data.cutaway })
+      setShowCutawayEditor(false)
+      setCutawayRegeneratePrompt('')
+    } catch (err) {
+      setCutawayError(err.message)
+    } finally {
+      setCutawayRegenerating(false)
+    }
+  }
+
+  const removeCutaway = async () => {
+    setCutawaySaving(true); setCutawayError(null)
+    try {
+      const res  = await fetch(`${SERVER_URL}/api/scenes/${scene.scene_id}/cutaway`, {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to remove cutaway')
+      onSceneUpdate(data.scene)
+      setShowCutawayEditor(false)
+    } catch (err) {
+      setCutawayError(err.message)
+    } finally {
+      setCutawaySaving(false)
     }
   }
 
@@ -910,6 +992,135 @@ function FineTuneCard({
                   </div>
                 )}
                 {layoutError && <div className="text-[10px] text-red-400/80 mt-1">{layoutError}</div>}
+              </div>
+            )}
+
+            {/* Cutaway — FT-8 */}
+            {scene.shot_type === 'image' && (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <FieldLabel>Cutaway</FieldLabel>
+                  <div className="flex items-center gap-2">
+                    {cutawaySaving && <Loader2 size={11} className="animate-spin text-blue-400" />}
+                    {scene.cutaway?.image_path && <RevertButton onClick={removeCutaway} />}
+                  </div>
+                </div>
+
+                {scene.cutaway?.image_path && !showCutawayEditor ? (
+                  <div className="flex items-center gap-2">
+                    <div className="w-16 rounded overflow-hidden border border-white/[0.1]" style={{ aspectRatio: '16/9' }}>
+                      <img src={scene.cutaway.image_path} alt="Cutaway" className="w-full h-full object-cover" loading="lazy" />
+                    </div>
+                    <span className="text-[10px] text-white/25">
+                      at {scene.cutaway.insert_at}s for {scene.cutaway.duration}s
+                    </span>
+                    <button
+                      onClick={() => setShowCutawayEditor(true)}
+                      className="text-[10px] text-blue-400/60 hover:text-blue-300 transition-colors"
+                    >
+                      Change
+                    </button>
+                  </div>
+                ) : !showCutawayEditor ? (
+                  <button
+                    onClick={() => setShowCutawayEditor(true)}
+                    className="text-[10px] px-2 py-1.5 bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.1] rounded text-white/60 transition-colors"
+                  >
+                    + Add cutaway
+                  </button>
+                ) : (
+                  <div className="rounded-lg border border-white/[0.08] bg-white/[0.02] p-2.5 space-y-2">
+                    <div className="flex gap-3">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-white/30">Insert at</span>
+                        <input
+                          type="number"
+                          min={0.5} max={Math.max(0.5, duration - 0.5)} step={0.1}
+                          value={cutawayInsertAt}
+                          onChange={e => setCutawayInsertAt(parseFloat(e.target.value) || 0)}
+                          className="w-14 bg-white/[0.05] border border-white/[0.12] rounded px-1.5 py-0.5 text-[10px] text-white/80 text-right"
+                        />
+                        <span className="text-[9px] text-white/20">s</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-white/30">Duration</span>
+                        <input
+                          type="number"
+                          min={0.1} step={0.1}
+                          value={cutawayDuration}
+                          onChange={e => setCutawayDuration(parseFloat(e.target.value) || 0)}
+                          className="w-14 bg-white/[0.05] border border-white/[0.12] rounded px-1.5 py-0.5 text-[10px] text-white/80 text-right"
+                        />
+                        <span className="text-[9px] text-white/20">s</span>
+                      </div>
+                    </div>
+                    <div className="text-[9px] text-white/15">
+                      Scene is {duration}s — insert_at must be ≥ 0.5s and insert_at + duration ≤ {Math.max(0.5, duration - 0.5).toFixed(1)}s.
+                    </div>
+
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={() => setCutawaySourceMode('reuse')}
+                        className={`flex-1 text-[10px] px-2 py-1 rounded border transition-colors ${cutawaySourceMode === 'reuse' ? 'bg-blue-500/15 border-blue-500/30 text-blue-300' : 'bg-white/[0.03] border-white/[0.08] text-white/40'}`}
+                      >
+                        Reuse existing scene image
+                      </button>
+                      <button
+                        onClick={() => setCutawaySourceMode('regenerate')}
+                        className={`flex-1 text-[10px] px-2 py-1 rounded border transition-colors ${cutawaySourceMode === 'regenerate' ? 'bg-blue-500/15 border-blue-500/30 text-blue-300' : 'bg-white/[0.03] border-white/[0.08] text-white/40'}`}
+                      >
+                        Regenerate new
+                      </button>
+                    </div>
+
+                    {cutawaySourceMode === 'reuse' ? (
+                      otherScenesWithImages?.length > 0 ? (
+                        <div className="grid grid-cols-4 gap-1.5 max-h-32 overflow-y-auto">
+                          {otherScenesWithImages.map(s => (
+                            <button
+                              key={s.scene_id}
+                              onClick={() => reuseCutawaySource(s.scene_id)}
+                              disabled={cutawaySaving}
+                              className="rounded overflow-hidden border border-white/[0.1] hover:border-blue-500/40 disabled:opacity-40 transition-colors"
+                              style={{ aspectRatio: '16/9' }}
+                              title={`Reuse scene ${s.scene_id}`}
+                            >
+                              <img src={s.thumbnail} alt={`Scene ${s.scene_id}`} className="w-full h-full object-cover" loading="lazy" />
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-white/20 italic">No other scenes with images yet to reuse.</p>
+                      )
+                    ) : (
+                      <div className="flex gap-1.5">
+                        <input
+                          type="text"
+                          value={cutawayRegeneratePrompt}
+                          onChange={e => setCutawayRegeneratePrompt(e.target.value)}
+                          placeholder="Describe the cutaway image…"
+                          className="flex-1 bg-white/[0.05] border border-white/[0.12] rounded px-2 py-1 text-[10px] text-white/80"
+                        />
+                        <button
+                          onClick={regenerateCutawaySource}
+                          disabled={cutawayRegenerating || !cutawayRegeneratePrompt.trim()}
+                          className="flex items-center gap-1 text-[10px] px-2 py-1 bg-white/[0.05] hover:bg-white/[0.09] disabled:opacity-40 border border-white/[0.1] rounded text-white/60 transition-colors"
+                        >
+                          {cutawayRegenerating ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+                          Generate
+                        </button>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={() => setShowCutawayEditor(false)}
+                      className="text-[10px] text-white/25 hover:text-white/50 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+                {cutawayError && <div className="text-[10px] text-red-400/80 mt-1">{cutawayError}</div>}
               </div>
             )}
 
