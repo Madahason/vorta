@@ -5,12 +5,23 @@ const NICHES          = ['Finance', 'History', 'Technology', 'Science', 'Busines
 const STYLE_PRESETS   = ['Dark Cinematic', 'Clean Modern', 'Gritty Documentary', 'High Contrast']
 const NARRATOR_TONES  = ['Authoritative', 'Conversational', 'Dramatic', 'Measured', 'Urgent']
 const LS_KEY          = 'vorta_script_metadata'
+const WORDS_PER_MIN   = 130
+
+const TARGET_DURATIONS = [
+  { label: '3 min',       value: 3   },
+  { label: '5 min',       value: 5   },
+  { label: '8 min',       value: 8   },
+  { label: '10 min',      value: 10  },
+  { label: '15 min',      value: 15  },
+  { label: 'Full Script', value: 'full' },
+]
 
 const DEFAULTS = {
-  title:        '',
-  niche:        'Finance',
-  stylePreset:  'Dark Cinematic',
-  narratorTone: 'Authoritative',
+  title:          '',
+  niche:          'Finance',
+  stylePreset:    'Dark Cinematic',
+  narratorTone:   'Authoritative',
+  targetDuration: 'full',
 }
 
 function lsRead() {
@@ -33,10 +44,11 @@ export default function ScriptInput({ onAnalyze, isAnalyzing }) {
     const saved = lsRead()
     if (!saved) return DEFAULTS
     return {
-      title:        saved.title        ?? DEFAULTS.title,
-      niche:        saved.niche        ?? DEFAULTS.niche,
-      stylePreset:  saved.stylePreset  ?? DEFAULTS.stylePreset,
-      narratorTone: saved.narratorTone ?? DEFAULTS.narratorTone,
+      title:          saved.title          ?? DEFAULTS.title,
+      niche:          saved.niche          ?? DEFAULTS.niche,
+      stylePreset:    saved.stylePreset    ?? DEFAULTS.stylePreset,
+      narratorTone:   saved.narratorTone   ?? DEFAULTS.narratorTone,
+      targetDuration: saved.targetDuration ?? DEFAULTS.targetDuration,
     }
   })
 
@@ -91,6 +103,54 @@ export default function ScriptInput({ onAnalyze, isAnalyzing }) {
           >
             {NARRATOR_TONES.map(t => <option key={t}>{t}</option>)}
           </select>
+        </div>
+
+        <div className="col-span-2 vorta-field">
+          <label className="vorta-label">Target Video Length</label>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {TARGET_DURATIONS.map(({ label, value }) => {
+              const active = metadata.targetDuration === value
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setMetadata(m => ({ ...m, targetDuration: value }))}
+                  style={{
+                    padding: '5px 14px',
+                    borderRadius: 6,
+                    border: `1px solid ${active ? 'rgba(99,102,241,0.7)' : 'rgba(255,255,255,0.1)'}`,
+                    background: active ? 'rgba(99,102,241,0.18)' : 'rgba(255,255,255,0.03)',
+                    color: active ? 'white' : 'rgba(255,255,255,0.45)',
+                    fontSize: 13,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+          {(() => {
+            const td = metadata.targetDuration
+            if (td === 'full') {
+              return (
+                <p className="vorta-hint">
+                  Full script · {wordCount} words · ~{Math.round(wordCount / WORDS_PER_MIN)} min · ~{Math.ceil(wordCount / 20)} scenes
+                </p>
+              )
+            }
+            const targetWords = td * WORDS_PER_MIN
+            const scenes      = Math.ceil(Math.min(wordCount, targetWords) / 20)
+            const overrun     = wordCount > targetWords
+            return (
+              <p className="vorta-hint">
+                ~{Math.min(wordCount, targetWords).toLocaleString()} words · ~{scenes} scenes
+                {overrun && ` · Claude will select the most important ${Math.round((targetWords / wordCount) * 100)}% of your script`}
+                {!overrun && ` · Full script fits within ${td} min`}
+              </p>
+            )
+          })()}
         </div>
       </div>
 
