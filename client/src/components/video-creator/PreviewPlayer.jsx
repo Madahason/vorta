@@ -74,6 +74,11 @@ export function PreviewPlayer({
 
   const sceneStarts = useMemo(() => computeSceneStartFrames(uniqueScenes, fps), [uniqueScenes, fps])
 
+  // Shared audio tag pool scaled to project size — same rationale and pattern as
+  // VideoPlayer.jsx (scenes.length + 2; frozen at first render because Remotion throws
+  // if this prop changes after mount).
+  const [sharedAudioTags] = useState(() => (scenes?.length || 0) + 2)
+
   // Voiceover-repeat fix — same guard as VideoPlayer.jsx: if scene timing changes while
   // playing (an edit or a sync-timings refresh landing mid-playback), every downstream
   // narration Sequence's `from` shifts under the playhead and Remotion seeks the playing
@@ -297,7 +302,7 @@ export function PreviewPlayer({
                   controls={false}
                   loop={false}
                   clickToPlay={false}
-                  numberOfSharedAudioTags={256}
+                  numberOfSharedAudioTags={sharedAudioTags}
                   acknowledgeRemotionLicense
                 />
               </div>

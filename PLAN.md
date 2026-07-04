@@ -2416,6 +2416,35 @@ function sceneDur(scene, fps) {
 
 ---
 
+## Session 28 — Attempted fix: scale numberOfSharedAudioTags to scene count — DID NOT FIX the stutter (mechanism now instrumented and confirmed)
+**Commit:** `fix: scale numberOfSharedAudioTags to scene count`
+**Date:** 2026-07-04
+
+### Hypothesis tested (user-directed)
+Audio tag pool too small → Remotion reuses a shared `<audio>` tag mid-playback without fully resetting it → overlapping fragments = the stutter. Proposed fix: scale the pool to `scenes.length + 2` (same pattern as the earlier Html5Audio-limit fix, PLAN.md "Audio tag architecture").
+
+### Step 1 facts (before changing anything)
+- Bug project `proj_1782504529155`: **65 scenes, 65 with narration**. Repro scene: scene_id **002** ("Apple doesn't sell groceries…" — first in the array after an FT-2 reorder).
+- The premise "`numberOfSharedAudioTags={10}`" did not match the code: at HEAD both players used **256** (set by Session 25). So the pool was never smaller than the scene count.
+- Live instrumentation (temporary `NarrationAudio` wrapper logging every mount/unmount/play/seek + a document-level tap on all `<audio>` elements) showed **max 1–2 narration elements mounted simultaneously** — narration `<Sequence>`s unmount outside their frame window, so pool exhaustion/reuse cannot occur at either 256 or 67 tags. No `AbortError`, no duplicate playing element, no remount loop (the earlier candidates A/C/D all ruled out by logs).
+
+### Change applied anyway (harmless, keeps the pool proportionate)
+- **`VideoPlayer.jsx` / `PreviewPlayer.jsx`** — `numberOfSharedAudioTags={256}` → `scenes.length + 2`, frozen at first render (`useState` initializer) because Remotion throws if this prop changes after mount.
+- Rationale for not keeping 256: Remotion's shared-audio manager (`rerenderAudios`) iterates the ENTIRE pool on every per-frame audio prop update (narration `volume` is a function → every frame). CPU profile over 8s of playback showed ~1.3s self-time in that loop at 256 tags.
+
+### Verification (puppeteer-driven, objective stutter detector)
+Detector: a `seeking` event that moves a narration element **backward** >0.05s while playing — the exact operation that produces the audible repeated words. Matrix: 5× scene-002 runs (2 with scrub-ins), 3 other scenes (frames 1600/4200/7000 → scene_006/016/026), and a 12-scene subset seed (pool = 14).
+
+**Result: NOT FIXED.** 8/9 runs still fail — 4–7 backward seeks per 10s run on the 65-scene project (e.g. scene_002 yanked 1.86 → 0.73, 2.51 → 1.27…). Only the 12-scene subset passed. Outcome reported honestly per the task instruction; no further fixes attempted this session.
+
+### Confirmed actual mechanism (for the next session — from the full instrumentation record)
+The narration `<audio>` element plays at **1× realtime**, but the Player's internal frame timeline advances at **~8% of wall clock** on the 65-scene project (measured frame 0→30 over 13.1s; backward-seek targets advance exactly +0.2s per ~2.5s cycle). Remotion's drift correction (threshold 0.65s) then repeatedly seeks the narration BACKWARD to the crawling timeline — each yank audibly replays the last ~1–2s: "groceries, gg, groc, groceries". Chrome lands mp3 seeks ~0.6s past the target, compounding the oscillation. Everything else was ruled out empirically: Player buffer state never engages (no `waiting`/`resume` events), AudioContext resumes exactly once, single mount, single element.
+- The stutter reproduces identically in the sticky mini player (no per-frame React state in the page) → the PreviewPlayer overlay's per-frame re-render is a load contributor, not the cause.
+- Scale correlation: 65-scene project stutters; 12-scene subset is clean. The starvation lives in per-frame render cost of the large composition (65 visual Sequences + 65 narration Sequences + full-screen effect stack incl. per-frame-regenerated SVG `feTurbulence` FilmGrain, `backdropFilter` ColorGrade/Halation) in the dev-mode Player — CPU profile: 4.5s/8s native (paint/raster), ~1.4s React element churn.
+- Next-session candidates, in evidence order: (1) per-frame paint cost of the CinematicEffects stack (FilmGrain regenerates a unique SVG turbulence filter EVERY frame; ColorGrade/Halation use full-screen `backdropFilter`), (2) React commit latency of the 130-Sequence tree, (3) PreviewPlayer overlay re-render per frameupdate (65-thumbnail strip).
+
+---
+
 ## Session 27 — Fix: voiceover cutoff (8s cap truncating narration) + repeat guard on mid-playback timing changes
 **Commit:** `fix: voiceover cutoff — narration floor beats 8s style cap everywhere; pause player when timings change mid-playback`
 **Date:** 2026-07-03

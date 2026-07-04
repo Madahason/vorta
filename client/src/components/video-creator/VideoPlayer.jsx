@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect } from 'react'
+import { useMemo, useRef, useEffect, useState } from 'react'
 import { Player } from '@remotion/player'
 import { Documentary, calculateDocumentaryDuration } from '@remotion-compositions/compositions/Documentary'
 
@@ -80,6 +80,13 @@ export function VideoPlayer({ scenes, imagePaths, selectedClips, globalSettings,
     [inputProps.scenes, fps]
   )
 
+  // Shared audio tag pool scaled to project size (scenes.length + 2, the same pattern as
+  // the earlier Html5Audio-limit fix) instead of a fixed 256. Remotion's shared-audio
+  // manager iterates the ENTIRE pool on every per-frame audio prop update (volume is a
+  // function, so that's every frame) — a 256-tag pool taxes the render loop constantly.
+  // Frozen at first render because Remotion throws if this prop changes after mount.
+  const [sharedAudioTags] = useState(() => (scenes?.length || 0) + 2)
+
   // Voiceover-repeat fix: pause if the timeline geometry changed while playing (see
   // timelineSignature above). Initial mount never pauses — the ref starts in sync.
   const playerRef = useRef(null)
@@ -117,7 +124,7 @@ export function VideoPlayer({ scenes, imagePaths, selectedClips, globalSettings,
       clickToPlay={!autoPlay}
       autoPlay={autoPlay}
       doubleClickToFullscreen
-      numberOfSharedAudioTags={256}
+      numberOfSharedAudioTags={sharedAudioTags}
       acknowledgeRemotionLicense
       {...(initialFrame !== undefined ? { initialFrame } : {})}
     />
