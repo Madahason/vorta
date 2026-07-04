@@ -4404,3 +4404,57 @@ All nine phases of the Fine-Tune roadmap are implemented, tested, and committed 
 - **FT-7:** Ken Burns motion is disabled on split-screen scenes — both panels render static (the guardrail's explicitly-offered escape hatch; single-panel Ken Burns untouched). Per-panel Ken Burns is a reasonable future phase.
 - **FT-9:** `scene.chapter` did not exist before this phase — chapters are derived from `dip_black` chapter breaks and persisted (analysis-time for new projects, backfilled on first chapter operation for old ones). After an FT-2 reorder interleaves chapters, a chapter's scenes may be non-contiguous in display order (header repeats per run; the apply still targets the correct set).
 - **General:** match-cut detection (FT-6) requires a Claude API call at analysis time and degrades gracefully to "no suggestions" on failure; FT-3/FT-7/FT-8 regeneration requires the Higgsfield CLI to be configured.
+
+---
+
+## Session — Overlay + match-cut consolidation into a single analysis call
+
+**Goal:** reduce Claude API usage per project by producing scene breakdown, overlays, AND
+match-cut flags from ONE `/api/analyze` call, and gate the overlay *review UI* behind the
+Visuals step completing (client-side only — no second call).
+
+**Net effect on Claude API calls per project: 2 → 1.** Before this session the live analysis
+path fired the Sonnet scene-breakdown call *plus* a separate Haiku match-cut call
+(`detectMatchCutCandidates`). Overlays themselves had been removed entirely in `0622b2e`
+("remove … overlays permanently"); this session re-adds them, but folded into the single
+call rather than as any separate request. (Note: the task framed this as reverting a
+"separate post-Visuals overlay call," but no such call/endpoint ever existed — `/api/overlays/generate`
+was never implemented. Confirmed via search; nothing to remove there.)
+
+**Server (`server/services/claude.js`):**
+- Restored the OVERLAY GENERATION RULES block into the single `SYSTEM_PROMPT` (lower_third,
+  date_stamp, stat_callout, kinetic_text as the pull-quote fallback, chapter_title, and the
+  default background_overlay legibility helper). Added an explicit shot-type exclusion:
+  overlays only on image/real_footage; never on motion_graphic/3d_graphic.
+- Added a MATCH CUT DETECTION section so Claude sets `match_cut_candidate` inline per scene.
+- `postProcessScenes` now assigns each overlay a UUID + normalises status to `"suggested"`
+  (image/real_footage only — strips overlays off motion_graphic/3d_graphic as a hard backstop),
+  and reads `match_cut_candidate` straight from the response.
+- `attemptAnalysis` injects the user's `overlayTemplates` (from `defaults.json`) into the prompt.
+- `analyzeScript` no longer calls `detectMatchCutCandidates` — that helper (and its unit tests)
+  is retained for reference/tests but is no longer in the live path, so exactly one Claude call runs.
+
+**Remotion:** new shared `components/overlays/SceneOverlays.jsx` renders `status:"accepted"`
+(and legacy no-status) overlays via the surviving overlay components; wired into ImageScene,
+FootageScene, and SplitScreenScene. Each overlay's `appearAt` is clamped up to the scene's
+incoming-transition duration (computed in `Documentary.jsx` from the previous scene's outgoing
+transition frames) so overlays never pop on mid-crossfade — the transition-clamped appearAt
+behaviour, applied purely at render time and independent of when the overlay was generated.
+
+**Client:** restored `OverlayReviewModal`, the review banner, per-scene SceneGrid accept/reject
+badges, and the six accept/reject handlers in `VideoCreator`. All of it is gated on
+`overlaysVisible = wizard.isComplete('visuals')` — overlays exist in scene data from analysis but
+the review surface only appears once Visuals is done, and every accept/reject action mutates
+local scene state (`setScenes`) with zero API calls. `OverlayStudio` (the deleted per-scene
+visual editor) was NOT restored — only the review/accept/reject surface the task called for.
+
+**Tests (all passing):**
+- `node server/services/overlaySingleCall.test.js` — mocks the Anthropic SDK, asserts exactly
+  ONE `messages.create` call, overlays get ids + `"suggested"` status, `match_cut_candidate`
+  flags carry through, motion_graphic overlays are stripped, pre-accepted status is preserved.
+- `node server/services/claude.test.js` — the retained match-cut helper tests still pass.
+- `node client/overlayGate.test.cjs` — asserts the gate is `wizard.isComplete('visuals')`,
+  banner/modal/badges render only when open, the 6 handlers perform no `fetch`, and there is no
+  orphaned `/api/overlays` reference anywhere in `client/src`.
+- `npx vite build` (client) — clean; the Remotion composition (incl. SceneOverlays and the
+  modified scene components) is bundled via VideoPlayer and compiles.

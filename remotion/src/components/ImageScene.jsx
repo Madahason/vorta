@@ -1,5 +1,6 @@
 import { useCurrentFrame, useVideoConfig, interpolate } from 'remotion';
 import { LetterboxBars, FilmGrain, Vignette, ColorGrade, LightLeak, Halation, DustParticles, SceneFade } from './effects/CinematicEffects';
+import SceneOverlays from './overlays/SceneOverlays';
 import { easeOut } from '../utils/easings';
 
 function extractYear(text) {
@@ -7,7 +8,7 @@ function extractYear(text) {
   return match ? parseInt(match[1]) : null;
 }
 
-export const ImageScene = ({ scene, brand }) => {
+export const ImageScene = ({ scene, brand, overlayInDelaySec = 0 }) => {
   const frame = useCurrentFrame();
   const { durationInFrames } = useVideoConfig();
   const motion = scene.motion || { type: 'push_in', intensity: 'subtle' };
@@ -95,6 +96,8 @@ export const ImageScene = ({ scene, brand }) => {
       <LightLeak mood={mood} enabled={true} />
       <SceneFade fadeInFrames={6} fadeOutFrames={6} />
       <LetterboxBars enabled={scene.letterbox !== false} />
+
+      <SceneOverlays overlays={scene.overlays || []} transitionInSeconds={overlayInDelaySec} />
     </div>
   );
 };

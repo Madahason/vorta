@@ -1,4 +1,5 @@
 import { LetterboxBars, FilmGrain, Vignette, ColorGrade, SceneFade } from './effects/CinematicEffects';
+import SceneOverlays from './overlays/SceneOverlays';
 
 // FT-7: dual-panel split-screen render for a single scene. Deliberately static (no Ken Burns)
 // — see the note in Documentary.jsx's SceneRenderer for why animating two independent panels
@@ -30,7 +31,7 @@ function Panel({ src, sceneId, label }) {
   );
 }
 
-export const SplitScreenScene = ({ scene }) => {
+export const SplitScreenScene = ({ scene, overlayInDelaySec = 0 }) => {
   const grade = scene.grade || 'cool_blue';
   const isHorizontal = scene.layout === 'split_horizontal'; // left / right
   // split_vertical = top / bottom
@@ -53,6 +54,8 @@ export const SplitScreenScene = ({ scene }) => {
       <FilmGrain intensity={0.055} />
       <SceneFade fadeInFrames={6} fadeOutFrames={6} />
       <LetterboxBars enabled={scene.letterbox !== false} />
+
+      <SceneOverlays overlays={scene.overlays || []} transitionInSeconds={overlayInDelaySec} />
     </div>
   );
 };

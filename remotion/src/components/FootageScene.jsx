@@ -1,8 +1,9 @@
 import { Video, staticFile, AbsoluteFill } from 'remotion';
 import { useState } from 'react';
 import { FilmGrain, Vignette, ColorGrade, LightLeak, LetterboxBars, SceneFade } from './effects/CinematicEffects';
+import SceneOverlays from './overlays/SceneOverlays';
 
-export const FootageScene = ({ clip, scene }) => {
+export const FootageScene = ({ clip, scene, overlayInDelaySec = 0 }) => {
   const [error, setError] = useState(false);
   const mood = scene?.mood || 'neutral';
   const grade = scene?.grade || 'cool_blue';
@@ -31,6 +32,8 @@ export const FootageScene = ({ clip, scene }) => {
       <LightLeak mood={mood} enabled={true} />
       <SceneFade fadeInFrames={6} fadeOutFrames={6} />
       <LetterboxBars enabled={scene?.letterbox !== false} />
+
+      <SceneOverlays overlays={scene?.overlays || []} transitionInSeconds={overlayInDelaySec} />
     </AbsoluteFill>
   );
 };

@@ -15,8 +15,8 @@ export function VisualsStep({
   scenes, sceneStatuses, isGenerating, generateDone, generateProgress, generateError,
   onGenerateAll, onRetry, motionStatuses, onBuildComponent,
   clipMatches, selectedClips, onSelectClip, onConvertToImage, onManualMatch, onOpenLibrary,
-  onPreviewScene, voiceoverStatuses, onOpenVoiceover, onOpenOverlayStudio,
-  onAcceptSceneOverlays, onRejectSceneOverlays,
+  onPreviewScene, voiceoverStatuses, onOpenVoiceover,
+  overlaysVisible, onAcceptSceneOverlays, onRejectSceneOverlays,
   projectId,
   wizard,
 }) {
@@ -232,7 +232,7 @@ export function VisualsStep({
         onPreviewScene={onPreviewScene}
         voiceoverStatuses={voiceoverStatuses}
         onOpenVoiceover={onOpenVoiceover}
-        onOpenOverlayStudio={onOpenOverlayStudio}
+        overlaysVisible={overlaysVisible}
         onAcceptSceneOverlays={onAcceptSceneOverlays}
         onRejectSceneOverlays={onRejectSceneOverlays}
       />

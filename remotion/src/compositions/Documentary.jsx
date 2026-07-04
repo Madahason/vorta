@@ -1,5 +1,5 @@
-import { useMemo }                                                            from 'react'
-import { AbsoluteFill, Audio, Sequence, interpolate, useVideoConfig, useCurrentFrame } from 'remotion'
+import { useMemo, useRef, useEffect }                                         from 'react'
+import { AbsoluteFill, Audio, Sequence, interpolate, useVideoConfig, useCurrentFrame, getRemotionEnvironment } from 'remotion'
 import { TransitionSeries, springTiming, linearTiming }                      from '@remotion/transitions'
 import { fade }                                                              from '@remotion/transitions/fade'
 import ImageScene             from '../components/ImageScene'
@@ -126,7 +126,7 @@ export function computeLayout(scenes) {
 const isValidUrl = (src) => !!src && (src.startsWith('/') || src.startsWith('http'))
 
 // ── SceneRenderer — per-scene visual dispatch ─────────────────────────────────
-function SceneRenderer({ scene, imagePath, selectedClip, globalSettings }) {
+function SceneRenderer({ scene, imagePath, selectedClip, globalSettings, overlayInDelaySec = 0 }) {
   // FT-8: cutaway insert. Hooks must run unconditionally before any early return (Rules of
   // Hooks) — cheap, and every child component this dispatches to already reads frame/fps
   // itself anyway, so this adds no meaningful overhead. useCurrentFrame() here returns the
@@ -173,9 +173,9 @@ function SceneRenderer({ scene, imagePath, selectedClip, globalSettings }) {
     // the full reasoning.
     const isSplit = withCutaway.layout === 'split_horizontal' || withCutaway.layout === 'split_vertical'
     if (isSplit && withCutaway.secondary_image_path) {
-      return <SplitScreenScene scene={withCutaway} />
+      return <SplitScreenScene scene={withCutaway} overlayInDelaySec={overlayInDelaySec} />
     }
-    return <ImageScene scene={withCutaway} />
+    return <ImageScene scene={withCutaway} overlayInDelaySec={overlayInDelaySec} />
   }
   if (scene.shot_type === 'motion_graphic') {
     if (!scene.motion_component) return <PlaceholderScene scene={scene} />
@@ -183,7 +183,7 @@ function SceneRenderer({ scene, imagePath, selectedClip, globalSettings }) {
   }
   if (scene.shot_type === 'real_footage') {
     if (!selectedClip) return <PlaceholderScene scene={scene} />
-    return <FootageScene clip={selectedClip} scene={scene} />
+    return <FootageScene clip={selectedClip} scene={scene} overlayInDelaySec={overlayInDelaySec} />
   }
   return <PlaceholderScene scene={scene} />
 }
@@ -204,6 +204,74 @@ function NarrationTrack({ audio }) {
   return <Audio src={audio.path} startFrom={startFrom} volume={volume} />
 }
 
+// ── STUTTER-DEBUG instrumentation (temporary — remove after root cause confirmed) ──
+// Logs every narration <Audio> mount/unmount plus every play/pause/seek on the underlying
+// media element, with wall-clock ms and element currentTime. Player preview only — never
+// active during headless rendering. Mount counts are kept on window.__NARR_MOUNTS so an
+// automated test can assert single-mount behavior.
+const NARR_DEBUG_ON = typeof window !== 'undefined' && !getRemotionEnvironment().isRendering
+
+function narrLog(msg) {
+  if (NARR_DEBUG_ON) console.log(`[NARR ${performance.now().toFixed(0)}ms] ${msg}`)
+}
+
+function NarrationAudio({ sceneId, src, volumeFn }) {
+  const mediaRef = useRef(null)
+  useEffect(() => {
+    if (!NARR_DEBUG_ON) return
+    window.__NARR_MOUNTS = window.__NARR_MOUNTS || {}
+    window.__NARR_MOUNTS[sceneId] = (window.__NARR_MOUNTS[sceneId] || 0) + 1
+    narrLog(`MOUNT scene=${sceneId} (mount #${window.__NARR_MOUNTS[sceneId]}) src=${src}`)
+
+    const el = mediaRef.current
+    const listeners = []
+    if (el) {
+      const evs = ['play', 'playing', 'pause', 'seeking', 'seeked', 'waiting', 'stalled', 'ended']
+      evs.forEach(ev => {
+        const h = () => narrLog(`${ev.toUpperCase()} scene=${sceneId} currentTime=${el.currentTime.toFixed(3)} paused=${el.paused}`)
+        el.addEventListener(ev, h)
+        listeners.push([ev, h])
+      })
+      narrLog(`media element attached scene=${sceneId} currentTime=${el.currentTime.toFixed(3)} sharedSrc=${(el.currentSrc || '').split('/').pop()}`)
+    } else {
+      narrLog(`MOUNT scene=${sceneId} — no media element ref available`)
+    }
+    return () => {
+      listeners.forEach(([ev, h]) => el?.removeEventListener(ev, h))
+      narrLog(`UNMOUNT scene=${sceneId}`)
+    }
+  }, [sceneId, src])
+
+  return (
+    <Audio
+      ref={mediaRef}
+      src={src}
+      volume={volumeFn}
+      onError={(e) => narrLog(`ONERROR scene=${sceneId} ${e?.message || e}`)}
+    />
+  )
+}
+
+// Document-level capture tap — catches play/seek on EVERY <audio> element on the page,
+// including any duplicate element playing the same narration file outside this composition
+// (candidate D). Media events don't bubble but ARE observable in the capture phase.
+function useNarrationDocumentTap() {
+  useEffect(() => {
+    if (!NARR_DEBUG_ON || window.__narrTapInstalled) return
+    window.__narrTapInstalled = true
+    const tap = (e) => {
+      const el = e.target
+      if (el?.tagName !== 'AUDIO') return
+      const file = (el.currentSrc || el.src || '').split('/').pop()
+      if (!file || !file.includes('scene_')) return
+      narrLog(`TAP ${e.type} file=${file} currentTime=${el.currentTime.toFixed(3)} paused=${el.paused}`)
+    }
+    const evs = ['play', 'pause', 'seeking', 'seeked']
+    evs.forEach(ev => document.addEventListener(ev, tap, true))
+    // Intentionally never removed — installed once per page for the debug session.
+  }, [])
+}
+
 // ── Documentary composition ───────────────────────────────────────────────────
 export function Documentary({
   scenes         = [],
@@ -214,6 +282,9 @@ export function Documentary({
   audioSpecs     = [],
 }) {
   const { fps, durationInFrames: configDuration } = useVideoConfig()
+
+  // STUTTER-DEBUG: page-wide audio event tap (temporary)
+  useNarrationDocumentTap()
 
   // Deduplicate scenes by scene_id — duplicates cause TransitionSeries to replay scenes.
   const uniqueScenes = useMemo(() => {
@@ -268,6 +339,15 @@ export function Documentary({
     const durationFrames = sceneDur(scene, fps)
     const outT = getTransition(scene, durationFrames)
 
+    // Transition-clamped overlay appearAt: an overlay must not pop on while this scene is still
+    // crossfading/dipping in from the previous shot. The incoming fade duration equals the
+    // PREVIOUS scene's outgoing transition frames (0 for the first scene, which has no incoming
+    // transition). SceneOverlays clamps every overlay's appearAt up to this value.
+    const prevScene = index > 0 ? uniqueScenes[index - 1] : null
+    const overlayInDelaySec = prevScene
+      ? getTransition(prevScene, sceneDur(prevScene, fps)).frames / fps
+      : 0
+
     const sequence = (
       <TransitionSeries.Sequence
         key={String(scene.scene_id)}
@@ -280,6 +360,7 @@ export function Documentary({
               imagePath={imagePaths[scene.scene_id]}
               selectedClip={selectedClips[scene.scene_id] || null}
               globalSettings={globalSettings}
+              overlayInDelaySec={overlayInDelaySec}
             />
           </ErrorBoundaryScene>
         </AbsoluteFill>
@@ -443,7 +524,7 @@ export function Documentary({
       }
     }
 
-    return { key: `narr-${scene.scene_id}`, narrationStart, sequenceDuration, narrationUrl, volumeFn }
+    return { key: `narr-${scene.scene_id}`, sceneId: scene.scene_id, narrationStart, sequenceDuration, narrationUrl, volumeFn }
   }).filter(Boolean), [uniqueScenes, audioSpecMap, sceneStartFrames, fps])
 
   // Regression guard: warn if any narration URL appears more than once (runs once when tracks change)
@@ -467,9 +548,9 @@ export function Documentary({
 
       {/* Per-scene narration — outside TransitionSeries so audio can cross boundaries.
           J-cut: narration starts before the visual; L-cut: narration bleeds past scene end. */}
-      {narrationTracks.map(({ key, narrationStart, sequenceDuration, narrationUrl, volumeFn }) => (
+      {narrationTracks.map(({ key, sceneId, narrationStart, sequenceDuration, narrationUrl, volumeFn }) => (
         <Sequence key={key} from={narrationStart} durationInFrames={sequenceDuration}>
-          <Audio src={narrationUrl} volume={volumeFn} />
+          <NarrationAudio sceneId={sceneId} src={narrationUrl} volumeFn={volumeFn} />
         </Sequence>
       ))}
     </AbsoluteFill>

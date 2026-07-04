@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const { randomUUID } = require('crypto'); // overlay ids assigned at analysis time
 const { deriveChapters } = require('./frameMath'); // FT-9: chapter numbers from dip_black chapter breaks
 
 const STYLE_LOCK = 'dark cinematic 4K shallow depth of field slow dolly movement documentary aesthetic muted tones';
@@ -200,6 +201,87 @@ intensity:
 - moderate: main narrative beat
 - strong: turning point, climax, emotional peak — use for no more than 3 scenes per script
 
+OVERLAY GENERATION RULES
+
+For every scene, analyze the script excerpt and generate an overlays array.
+Apply these rules strictly:
+
+SHOT-TYPE EXCLUSION (mandatory):
+- ONLY image and real_footage scenes may carry text overlays.
+- NEVER add any overlay to a motion_graphic or 3d_graphic scene — those render their own
+  charts/counters/globe and text overlays would collide with that content. Return overlays: []
+  for every motion_graphic and 3d_graphic scene.
+
+LOWER THIRD rules:
+- Add a lower_third when a real named person or company is introduced for the FIRST TIME in the entire script
+- Track entity introductions across ALL scenes — never add a lower_third for an entity already introduced in a previous scene
+- text.line1 = person or company name, text.line2 = their role/title/context at that moment
+- Never add lower_third for abstract concepts, dates, or locations — only named people and companies
+- Never add lower_third to more than one scene per named entity across the whole video
+
+DATE STAMP rules:
+- Add a date_stamp when the script mentions a specific year, date, or named location
+- text.line1 = "City/Location · Year" or just "Year" if no location
+- Maximum 1 date_stamp per scene
+- Do not add date_stamp if a lower_third is already on this scene
+
+STAT CALLOUT rules:
+- Add a stat_callout when the script contains a specific financial figure, percentage, user count, or measurable milestone
+- text.line1 = the number/stat with prefix/suffix (e.g. "$3T"), text.line2 = context label (e.g. "Market Cap · 2023")
+- Maximum 1 stat_callout per scene
+- Do not add stat_callout if another overlay type is already on this scene
+
+KINETIC TEXT rules (pull-quote fallback):
+- Add kinetic_text for a single punchy declarative statement that carries narrative weight — this is the pull-quote fallback for image/real_footage scenes that have no named entity, date, or stat to surface
+- Use sparingly — maximum 1 in every 4 scenes across the whole video
+- Examples: "The most valuable company in human history" / "90 days from bankruptcy"
+- Never duplicate kinetic_text and stat_callout on the same scene
+
+CHAPTER TITLE rules:
+- Insert a chapter_title overlay on scenes that mark major narrative transitions (new era, new phase, new subject)
+- text.line1 = "Chapter N", text.line2 = short evocative title (e.g. "The Fall")
+- Maximum 3-5 across a full documentary
+- Chapter title scenes should have no other overlays
+
+BACKGROUND OVERLAY rules (default legibility helper):
+- Add background_overlay (template "gradient_bottom") to any image/real_footage scene that carries another text overlay, so the text stays legible over the image
+- background_overlay can combine with any other overlay type
+
+PRIORITY RULES:
+- lower_third takes priority over date_stamp on the same scene — never both together
+- stat_callout and kinetic_text cannot coexist on same scene — pick the more impactful
+- background_overlay can always be combined with other types
+- Maximum 2 overlays per scene (excluding background_overlay)
+
+OVERLAY OUTPUT FORMAT per scene:
+"overlays": [
+  {
+    "type": "lower_third",
+    "template": "USE_THE_TEMPLATE_FROM_USER_MESSAGE",
+    "text": { "line1": "Steve Jobs", "line2": "Co-Founder · Apple" },
+    "timing": { "appearAt": 0.7 },
+    "confidence": 0.95,
+    "reason": "First mention of Steve Jobs",
+    "status": "suggested"
+  }
+]
+
+- "status" must always be "suggested" — never "accepted"
+- "template" must use the template name provided in the user message for that overlay type
+- "confidence" is 0.0–1.0 — how certain you are this overlay is appropriate
+- "reason" is a plain English explanation of why you added this overlay (maximum 10 words)
+- Leave overlays: [] for purely atmospheric or action scenes with no named subjects, stats, or key locations
+
+MATCH CUT DETECTION
+
+Set match_cut_candidate: true on a scene when THIS scene and the NEXT scene (the following
+scene in the array) share strong VISUAL continuity that would make a match cut work: matching
+shapes or silhouettes, similar composition/framing, continuous motion direction, or color/lighting
+continuity — NOT merely thematic or narrative similarity. Only image and real_footage scenes have a
+comparable visual; never flag a boundary where either side is motion_graphic or 3d_graphic. Be
+selective — most consecutive shots do NOT qualify. Set match_cut_candidate: false otherwise, and
+always false on the final scene.
+
 TRANSITIONS
 
 - dissolve: default — smooth cross-fade for continuity
@@ -269,12 +351,14 @@ Keep each scene JSON compact to avoid truncation. Hard limits per field:
 - script_excerpt: 12–22 words per scene (must end at a sentence boundary). This keeps each scene to 5–10 seconds of narration. If a sentence is longer than 22 words, split at a comma or natural pause.
 - subject_anchors: maximum 4 items
 - clip_search_tags: maximum 4 items
+- overlays: maximum 1 overlay per scene (pick the most important; background_overlay may accompany it)
+- reason field in overlays: maximum 10 words
 These limits are mandatory. Verbose responses get truncated and fail. Compact = complete.
 
 Return ONLY a raw JSON array. No markdown, no explanation, no wrapper.
 
 Example (Apple documentary):
-{"scene_id":"001","script_excerpt":"It began not in a boardroom, but in a garage. Cupertino, California, 1976.","shot_type":"image","mood":"intimate","composition":"wide","higgsfield_prompt":"Wide establishing shot of a cluttered residential garage in Cupertino California 1976, wooden workbench covered in circuit boards and soldering equipment, bare concrete floor, single bare incandescent bulb overhead casting warm shadows, faded cardboard boxes stacked against wood-panel walls, a hand-painted Apple Computer sign propped against the workbench","subject_anchors":["Cupertino California","1976","Apple garage","Steve Jobs","Steve Wozniak"],"motion":{"type":"drift_right","intensity":"subtle"},"transition_out":"dissolve","grade":"warm_amber","motion_graphic_type":"","style_lock":"","real_footage_flag":false,"clip_search_tags":[],"duration_seconds":6}`;
+{"scene_id":"001","script_excerpt":"It began not in a boardroom, but in a garage. Cupertino, California, 1976.","shot_type":"image","mood":"intimate","composition":"wide","higgsfield_prompt":"Wide establishing shot of a cluttered residential garage in Cupertino California 1976, wooden workbench covered in circuit boards and soldering equipment, bare concrete floor, single bare incandescent bulb overhead casting warm shadows, faded cardboard boxes stacked against wood-panel walls, a hand-painted Apple Computer sign propped against the workbench","subject_anchors":["Cupertino California","1976","Apple garage","Steve Jobs","Steve Wozniak"],"motion":{"type":"drift_right","intensity":"subtle"},"overlays":[{"type":"date_stamp","template":"minimal_pill","text":{"line1":"Cupertino, California · 1976"},"timing":{"appearAt":0.5},"confidence":0.9,"reason":"Establishes historical time and place","status":"suggested"}],"match_cut_candidate":false,"transition_out":"dissolve","grade":"warm_amber","motion_graphic_type":"","style_lock":"","real_footage_flag":false,"clip_search_tags":[],"duration_seconds":6}`;
 
 // Build a fallback higgsfield_prompt from subject_anchors + script_excerpt
 // Used when Claude returns an empty or malformed prompt
@@ -451,6 +535,20 @@ function postProcessScenes(scenes, defaults = {}) {
     const duration = narratedDuration(scene.script_excerpt)
       ?? Math.max(MIN_SCENE_SECONDS, scene.duration_seconds || style.durationSeconds || 5);
 
+    // Overlays: only image/real_footage scenes may carry them (motion_graphic/3d_graphic
+    // exclusion — enforced here as a hard backstop even if Claude ignores the prompt rule).
+    // Every overlay gets a stable UUID and its status normalised to "suggested" so the
+    // client review UI has something deterministic to accept/reject. Chapter/background/etc.
+    // rules themselves are unchanged — this only assigns ids and gates by shot type.
+    const canHaveOverlays = scene.shot_type === 'image' || scene.shot_type === 'real_footage';
+    const overlaysWithIds = canHaveOverlays
+      ? (scene.overlays || []).map(o => ({
+          id: o.id || randomUUID(),
+          ...o,
+          status: o.status === 'accepted' ? 'accepted' : 'suggested',
+        }))
+      : [];
+
     return {
       ...scene,
       scene_id:          String(i + 1).padStart(3, '0'),
@@ -460,7 +558,7 @@ function postProcessScenes(scenes, defaults = {}) {
       motion:            scene.shot_type === 'image'
         ? (scene.motion || { type: style.motionType || 'push_in', intensity: 'subtle' })
         : null,
-      overlays:          [],
+      overlays:          overlaysWithIds,
       transition_out:         scene.transition_out || style.transition || 'dissolve',
       grade:                  scene.shot_type === 'image' ? (scene.grade || style.grade || 'cool_blue') : null,
       letterbox:              scene.shot_type !== 'motion_graphic',
@@ -468,7 +566,7 @@ function postProcessScenes(scenes, defaults = {}) {
       audio_cut:              scene.audio_cut              || 'hard',
       audio_overlap_seconds:  Number(scene.audio_overlap_seconds) || 0,
       globe_markers:          scene.globe_markers          || [],
-      match_cut_candidate:    false, // FT-6: set true per-boundary by detectMatchCutCandidates below
+      match_cut_candidate:    scene.match_cut_candidate === true, // FT-6: now produced inline by the single analysis call (see MATCH CUT DETECTION in SYSTEM_PROMPT)
       layout:                    scene.layout || 'single', // FT-7: split-screen layout
       secondary_image_path:      null,                     // FT-7: set via PATCH .../layout or regenerate-secondary
       secondary_source_scene_id: null,                      // FT-7: set only when reuse mode is chosen
@@ -521,15 +619,29 @@ async function attemptAnalysis(script, metadata, defaults) {
 
   console.log(`[claude] script ${wordCount} words | target ${td ?? 'full'} | ${targetScenes} scenes | max_tokens ${maxTokens}`);
 
+  const overlayTemplates = defaults.overlayTemplates || {};
+  const templateContext = `USER DEFAULT OVERLAY TEMPLATES (use these exact template names in every overlay you emit):
+- lower_third template: ${overlayTemplates.lower_third || 'minimal_line'}
+- date_stamp template: ${overlayTemplates.date_stamp || 'minimal_pill'}
+- kinetic_text template: ${overlayTemplates.kinetic_text || 'center_impact'}
+- stat_callout template: ${overlayTemplates.stat_callout || 'big_number'}
+- chapter_title template: ${overlayTemplates.chapter_title || 'minimal_chapter'}
+- background_overlay template: ${overlayTemplates.background_overlay || 'gradient_bottom'}`;
+
   const userMessage = `VIDEO TITLE: ${metadata.title || 'Untitled'}
 NICHE: ${metadata.niche || 'General'}
 STYLE PRESET: ${metadata.stylePreset || 'Dark Cinematic'}
 NARRATOR TONE: ${metadata.narratorTone || 'Authoritative'}
 
+${templateContext}
+
+ENTITIES ALREADY INTRODUCED: [] (nothing yet — track named people/companies across scenes for lower_third dedup)
+
 SCRIPT (${wordCount} words):
 ${script}
 
 ${coverageInstruction}
+Generate overlays and set match_cut_candidate inline for every scene as instructed — do not omit these fields.
 Keep all field values compact (see COMPACT JSON RULES).`;
 
   const message = await client.messages.create({
@@ -609,8 +721,14 @@ Return ONLY the JSON array, no markdown, no explanation.`,
   return extractJSON(raw);
 }
 
-// ─── FT-6: match cut suggestion ──────────────────────────────────────────────
-// Runs once, after the main scene breakdown, comparing each consecutive scene pair's
+// ─── FT-6: match cut suggestion (RETAINED, NO LONGER IN THE LIVE PATH) ───────
+// As of the overlay/match-cut consolidation, match_cut_candidate is produced inline by the
+// single analysis call (see MATCH CUT DETECTION in SYSTEM_PROMPT), so analyzeScript no longer
+// invokes this batched helper — that would be a second Claude call. The function and its
+// helpers stay here because claude.test.js exercises them directly with an injected fake caller,
+// and the batched pair-comparison remains a valid alternative implementation to reach for.
+//
+// (Historical note) Runs once, after the main scene breakdown, comparing each consecutive scene pair's
 // visual prompt/composition for match-cut potential (shape/color/framing/subject
 // continuity — not narrative similarity). Sets match_cut_candidate: true on the OUTGOING
 // scene of any boundary Claude judges to qualify. Deliberately a single batched Claude call
@@ -689,17 +807,13 @@ async function analyzeScript({ script, metadata, defaults = {} }) {
     scenes = await attemptAnalysisSimplified(script, metadata);
   }
 
-  const processed = postProcessScenes(scenes, defaults);
-
-  // FT-6: best-effort — must never block or crash the main scene-analysis flow. Any failure
-  // (API error, malformed response, timeout) just leaves match_cut_candidate false for every
-  // scene, exactly as postProcessScenes already defaulted it.
-  try {
-    return await detectMatchCutCandidates(processed);
-  } catch (err) {
-    console.warn('[claude] match-cut detection failed — leaving match_cut_candidate false for all scenes:', err.message);
-    return processed;
-  }
+  // Scene breakdown, overlays, AND match_cut_candidate flags all come from the SINGLE
+  // analysis call above — postProcessScenes reads scene.match_cut_candidate and scene.overlays
+  // straight from that response. FT-6 no longer fires a separate Claude request. The
+  // detectMatchCutCandidates helper below is retained (and still unit-tested) for the batched
+  // pair-comparison approach, but is intentionally NOT invoked in the live analysis path so
+  // each project costs exactly one Claude call.
+  return postProcessScenes(scenes, defaults);
 }
 
 // Generic Claude call for use by other services (e.g. clipIntelligence)
