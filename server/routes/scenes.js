@@ -6,9 +6,15 @@ const {
   validateSceneUpdate, validateBoundaryUpdate, resetBrokenBoundaryAdjacency,
   clampDurationForActionCut, resetActionCutBoundaryOffsets, isValidLayout, LAYOUT_VALUES,
   validateCutawayUpdate, resolveChapterMap, montageAudioMixOverride,
+  narrationSafeSceneDuration,
 } = require('../services/frameMath')
 const { PROJECTS_DIR, readScenesFile, writeScenesFile } = require('../services/scenesFile')
 const { backupOriginalIfNeeded } = require('../services/imageSwap')
+const { backupOriginalVoiceIfNeeded } = require('../services/voiceSwap')
+const { preprocessForTTS, validateTTSText } = require('../services/textPreprocessor')
+// Required as a module object (not destructured) so tests can monkey-patch generateAudio /
+// getAudioDuration — same technique higgsfieldRegenerate.js established for FT-3.
+const elevenlabsService = require('../services/elevenlabs')
 
 // PATCH /api/scenes/pacing
 // Body: { projectId, scene_ids: [...], pacing: 'action' }
@@ -186,6 +192,226 @@ router.patch('/:sceneId', (req, res) => {
         ...(existingScene.audio_mix_override || {}),
         ...updates.audio_mix_override,
       }
+    }
+  }
+
+  file.scenes[idx] = updatedScene
+  writeScenesFile(file)
+
+  res.json({ scene: updatedScene })
+})
+
+// PATCH /api/scenes/:sceneId/script
+// Body: { projectId, script_excerpt }
+// Fine-Tune script editing. Validates the new text through the exact same
+// preprocess-then-validate gate generateAudio() itself uses (preprocessForTTS →
+// validateTTSText), so text accepted here can never fail TTS validation at regeneration
+// time. On rejection NOTHING is saved. On success: script_excerpt is updated,
+// voice_stale: true marks the narration as out of sync with the text, and the scene's
+// pre-edit script is preserved once in original_script_excerpt (backup-once, mirroring
+// the scene_{id}_original.mp3 audio backup) so "Revert to generated" can restore the
+// state at Fine-Tune entry.
+router.patch('/:sceneId/script', (req, res) => {
+  const { sceneId } = req.params
+  const { projectId, script_excerpt } = req.body || {}
+
+  if (!projectId) return res.status(400).json({ error: 'projectId required' })
+  if (typeof script_excerpt !== 'string') {
+    return res.status(400).json({ error: 'script_excerpt (string) required' })
+  }
+
+  const raw     = script_excerpt.trim()
+  const cleaned = preprocessForTTS(raw)
+  const { valid, issues } = validateTTSText(cleaned)
+  if (!valid) {
+    return res.status(400).json({ error: `Script rejected: ${issues.join(', ')}`, issues })
+  }
+
+  const file = readScenesFile(projectId)
+  if (!file) return res.status(404).json({ error: `No scenes.json found for project ${projectId}` })
+
+  const idx = file.scenes.findIndex(s => String(s.scene_id) === String(sceneId))
+  if (idx === -1) return res.status(404).json({ error: `Scene ${sceneId} not found in project ${projectId}` })
+
+  const scene = file.scenes[idx]
+  const updatedScene = { ...scene, script_excerpt: raw, voice_stale: true }
+  if (updatedScene.original_script_excerpt === undefined) {
+    updatedScene.original_script_excerpt = scene.script_excerpt ?? ''
+  }
+
+  file.scenes[idx] = updatedScene
+  writeScenesFile(file)
+
+  res.json({ scene: updatedScene })
+})
+
+// POST /api/scenes/:sceneId/regenerate-voice
+// Body: { projectId, voiceId, modelId?, voiceSettings?, useMoodSettings?,
+//         usePreprocessing?, normaliseVolume? }
+// Regenerates this one scene's narration from its CURRENT stored script_excerpt through
+// the exact same pipeline /api/voiceover/generate uses — elevenlabs.generateAudio()
+// (preprocess → validate → generateSingleAudio/generateAndConcatenate → addSilencePadding)
+// — reused via the service module, never duplicated. The text is always read from the
+// project's own scenes.json, never trusted from the request body.
+//
+// Failure safety (never a broken/partial audio state): generation writes to a TEMP file
+// first; only after both generation and duration measurement succeed does the old file get
+// backed up (scene_{id}_original.mp3, backup-once) and the temp renamed over the live
+// path. Any error → temp deleted, 500 returned, scene untouched on disk (voice_stale stays
+// true so the UI keeps showing it needs attention).
+//
+// Downstream conflict handling: a prior manual FT-1 duration trim or FT-4 boundary offset
+// was calibrated against the OLD narration length. duration_seconds is re-synced to the
+// fresh audio (narrationSafeSceneDuration — the same formula /api/voiceover/sync-timings
+// uses), and is_manual_offset is cleared for THIS scene only. The response reports
+// manual_adjustments_reset so the client can surface the warning.
+router.post('/:sceneId/regenerate-voice', async (req, res) => {
+  const { sceneId } = req.params
+  const {
+    projectId, voiceId, modelId, voiceSettings,
+    useMoodSettings, usePreprocessing, normaliseVolume,
+  } = req.body || {}
+
+  if (!projectId) return res.status(400).json({ error: 'projectId required' })
+  if (!voiceId)   return res.status(400).json({ error: 'voiceId required' })
+
+  const file = readScenesFile(projectId)
+  if (!file) return res.status(404).json({ error: `No scenes.json found for project ${projectId}` })
+
+  const idx = file.scenes.findIndex(s => String(s.scene_id) === String(sceneId))
+  if (idx === -1) return res.status(404).json({ error: `Scene ${sceneId} not found in project ${projectId}` })
+
+  const scene = file.scenes[idx]
+  const raw   = (scene.script_excerpt || '').trim()
+
+  // Guardrail: validate BEFORE any generation attempt — never send invalid text to
+  // ElevenLabs. Same gate as the /script PATCH and generateAudio() itself.
+  const cleaned = preprocessForTTS(raw)
+  const { valid, issues } = validateTTSText(cleaned)
+  if (!valid) {
+    return res.status(400).json({ error: `Script is not valid for TTS: ${issues.join(', ')}`, issues })
+  }
+
+  const audioDir = path.join(PROJECTS_DIR, projectId, 'audio')
+  if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir, { recursive: true })
+
+  // Regeneration overwrites the scene's existing audio location (same filename) so nothing
+  // else referencing that URL has to change — FT-3's image-replace precedent.
+  const liveFilename = scene.audio_path ? path.basename(scene.audio_path) : `scene_${sceneId}.mp3`
+  const liveAbsPath  = path.join(audioDir, liveFilename)
+  const tempAbsPath  = path.join(audioDir, `scene_${sceneId}_regen_${Date.now()}.mp3`)
+
+  let audioDuration
+  try {
+    await elevenlabsService.generateAudio({
+      text:             raw,
+      voiceId,
+      modelId:          modelId || 'eleven_multilingual_v2',
+      outputPath:       tempAbsPath,
+      voiceSettings:    voiceSettings || {},
+      mood:             scene.mood || 'neutral',
+      useMoodSettings:  !!useMoodSettings,
+      usePreprocessing: !!usePreprocessing,
+      normalise:        !!normaliseVolume,
+    })
+    audioDuration = await elevenlabsService.getAudioDuration(tempAbsPath)
+    if (!audioDuration || audioDuration < 0.1) {
+      throw new Error('Regenerated audio has no measurable duration — corrupt output')
+    }
+  } catch (err) {
+    try { if (fs.existsSync(tempAbsPath)) fs.unlinkSync(tempAbsPath) } catch { /* best-effort */ }
+    console.error(`[regenerate-voice] scene ${sceneId} failed:`, err.message)
+    return res.status(500).json({ error: err.message })
+  }
+
+  // Success — preserve the true original narration exactly once, then swap the new take in.
+  const { backedUp } = backupOriginalVoiceIfNeeded(audioDir, sceneId, scene.audio_path)
+  fs.renameSync(tempAbsPath, liveAbsPath)
+
+  // Generation can take a while — re-read scenes.json fresh in case another Fine-Tune edit
+  // landed meanwhile (FT-3's higgsfieldRegenerate precedent), and only touch this scene.
+  const freshFile = readScenesFile(projectId)
+  const freshIdx  = freshFile.scenes.findIndex(s => String(s.scene_id) === String(sceneId))
+  const freshScene = freshFile.scenes[freshIdx]
+
+  // Detect pre-existing manual adjustments that the new narration length invalidates:
+  // an FT-4 manual boundary offset, or an FT-1 duration that no longer equals the value
+  // derived from the OLD audio (i.e. the user had trimmed it away from the synced default).
+  const hadManualOffset = freshScene.is_manual_offset === true
+  const oldDerived      = Number(freshScene.audio_duration) > 0
+    ? narrationSafeSceneDuration(freshScene.audio_duration)
+    : null
+  const hadManualTrim = oldDerived !== null &&
+    freshScene.duration_seconds !== undefined &&
+    Math.abs(freshScene.duration_seconds - oldDerived) > 0.05
+
+  const updatedScene = {
+    ...freshScene,
+    audio_path:       `/projects/${projectId}/audio/${liveFilename}`,
+    audio_duration:   audioDuration,
+    // Same per-scene duration sync formula as /api/voiceover/sync-timings.
+    duration_seconds: narrationSafeSceneDuration(audioDuration),
+    voice_stale:      false,
+  }
+  if (hadManualOffset) updatedScene.is_manual_offset = false
+
+  freshFile.scenes[freshIdx] = updatedScene
+  writeScenesFile(freshFile)
+
+  res.json({
+    scene: updatedScene,
+    manual_adjustments_reset: hadManualOffset || hadManualTrim,
+    backed_up: backedUp,
+  })
+})
+
+// POST /api/scenes/:sceneId/revert-voice
+// Body: { projectId }
+// "Revert to generated" for the script-editing feature: restores BOTH script_excerpt
+// (from original_script_excerpt, stored by the first /script edit) and the narration audio
+// (from the scene_{id}_original.mp3 backup, created by the first regeneration) to their
+// state at Fine-Tune entry, re-syncs audio_duration/duration_seconds from the restored
+// file, and clears voice_stale. The backup file itself is kept — it is still the true
+// original if the user edits again after reverting.
+router.post('/:sceneId/revert-voice', async (req, res) => {
+  const { sceneId } = req.params
+  const { projectId } = req.body || {}
+
+  if (!projectId) return res.status(400).json({ error: 'projectId required' })
+
+  const file = readScenesFile(projectId)
+  if (!file) return res.status(404).json({ error: `No scenes.json found for project ${projectId}` })
+
+  const idx = file.scenes.findIndex(s => String(s.scene_id) === String(sceneId))
+  if (idx === -1) return res.status(404).json({ error: `Scene ${sceneId} not found in project ${projectId}` })
+
+  const scene      = file.scenes[idx]
+  const audioDir   = path.join(PROJECTS_DIR, projectId, 'audio')
+  const backupPath = path.join(audioDir, `scene_${sceneId}_original.mp3`)
+
+  const hasBackup       = fs.existsSync(backupPath)
+  const hasOriginalText = scene.original_script_excerpt !== undefined
+
+  if (!hasBackup && !hasOriginalText) {
+    return res.status(400).json({ error: `Nothing to revert — scene ${sceneId}'s script/voice was never edited` })
+  }
+
+  const updatedScene = { ...scene, voice_stale: false }
+
+  if (hasOriginalText) {
+    updatedScene.script_excerpt = scene.original_script_excerpt
+    delete updatedScene.original_script_excerpt
+  }
+
+  if (hasBackup) {
+    const liveFilename = scene.audio_path ? path.basename(scene.audio_path) : `scene_${sceneId}.mp3`
+    const liveAbsPath  = path.join(audioDir, liveFilename)
+    fs.copyFileSync(backupPath, liveAbsPath)
+    updatedScene.audio_path = `/projects/${projectId}/audio/${liveFilename}`
+    const duration = await elevenlabsService.getAudioDuration(liveAbsPath)
+    if (duration) {
+      updatedScene.audio_duration   = duration
+      updatedScene.duration_seconds = narrationSafeSceneDuration(duration)
     }
   }
 

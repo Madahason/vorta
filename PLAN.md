@@ -2416,6 +2416,105 @@ function sceneDur(scene, fps) {
 
 ---
 
+## Session 29 — Feature: Fine-Tune script editing with auto/manual voice regeneration ✅ COMPLETE
+**Commit:** `feature: Fine-Tune script editing with auto/manual voice regeneration`
+**Date:** 2026-07-04
+
+### What was built
+Editable narration script per scene card in Fine-Tune, with a session-level choice between
+auto-regenerating the voice on every save and an explicit per-scene "Regenerate Voice" button.
+
+**Scene fields (new):** `voice_stale` (boolean — narration out of sync with the text),
+`original_script_excerpt` (the pre-edit script, stored once by the first edit, cleared by revert —
+the text counterpart of the `scene_{id}_original.mp3` audio backup).
+
+**Server — `server/routes/scenes.js` (three new routes):**
+- `PATCH /api/scenes/:sceneId/script` — validates the new text through the exact gate
+  `generateAudio()` itself uses (`preprocessForTTS` → `validateTTSText` from
+  `textPreprocessor.js`), so accepted text can never fail TTS validation later. Rejection = 400
+  with the issues, NOTHING saved. Success = `script_excerpt` updated, `voice_stale: true`,
+  `original_script_excerpt` preserved backup-once, persisted via `scenesFile.js`.
+- `POST /api/scenes/:sceneId/regenerate-voice` — regenerates that one scene's narration from its
+  CURRENT stored `script_excerpt` (never client-supplied text) through the same
+  `elevenlabs.generateAudio()` pipeline `/api/voiceover/generate` uses (preprocess → validate →
+  `generateSingleAudio`/`generateAndConcatenate` → `addSilencePadding`), reused via the service
+  module object (FT-3's monkey-patchable-module technique), never duplicated.
+  - **Failure safety:** generation writes to a temp file; only after generation AND duration
+    measurement succeed does the old file get backed up (`scene_{id}_original.mp3`, backup-once via
+    the new `voiceSwap.backupOriginalVoiceIfNeeded`, mirroring `imageSwap`) and the temp renamed
+    over the live path (same URL — nothing else referencing it changes). Any error → temp deleted,
+    500, scene bytes/fields completely untouched, `voice_stale` stays true (the UI's badge doubles
+    as the retry affordance).
+  - **Duration sync:** `duration_seconds = narrationSafeSceneDuration(audio_duration)` — the exact
+    formula `/api/voiceover/sync-timings` uses (Session 27), for this scene only.
+  - **FT-1/FT-4 conflict reset (scoped to this scene only):** a pre-existing manual boundary offset
+    (`is_manual_offset`) is cleared, and a manual duration trim (detected as `duration_seconds` ≠
+    the value derived from the OLD audio) is overwritten by the fresh sync; the response reports
+    `manual_adjustments_reset` so the client shows: "Script changed — manual duration/offset was
+    reset because it no longer matched the new narration length."
+  - Re-reads `scenes.json` fresh before the final write (generation takes time; FT-3 precedent).
+- `POST /api/scenes/:sceneId/revert-voice` — restores BOTH `script_excerpt` (from
+  `original_script_excerpt`) and the audio (from the `*_original.mp3` backup) to their state at
+  Fine-Tune entry, re-syncs durations from the restored file, clears `voice_stale`. The backup file
+  is kept (still the true original), so revert is idempotent; 400 only when nothing was ever edited.
+
+**Server — `server/services/voiceSwap.js` (NEW):** `backupOriginalVoiceIfNeeded(audioDir, sceneId,
+currentAudioPath)` — `.mp3` twin of `imageSwap.backupOriginalIfNeeded`, same backup-once guarantee.
+
+**Client — `client/src/pages/wizard/FineTuneStep.jsx`:**
+- Mode toggle in the Fine-Tune header bar: "Auto-regenerate voice on save" — a session setting in
+  localStorage (`vorta_finetune_auto_regenerate`), default ON, not per-scene.
+- Each card gets a Script textarea (saves on blur or the explicit Save button; no-op when clean).
+  Auto mode: PATCH script → POST regenerate-voice in sequence with a single combined
+  "Saving and regenerating…" state. Manual mode: PATCH only; the card shows a "⚠ voice out of sync"
+  badge (`voice_stale`) + "Regenerate Voice" button. That badge+button pair also appears after an
+  auto-mode regeneration failure — the saved-but-stale state and its retry path are the same thing.
+- `voiceId` comes from `vorta_selected_voice` (persisted by VoiceoverPanel); a clear inline error
+  asks the user to pick a voice in the Voice step if none is saved yet.
+- Regeneration success re-syncs the FT-1 duration slider to the fresh value; the conflict-reset
+  warning renders inline on that card. All loading/stale/error states are per-card — other scenes
+  stay fully interactive.
+- "Revert script & voice to generated" appears once a scene has been edited
+  (`original_script_excerpt` present) and calls revert-voice, restoring textarea + audio + slider.
+
+**Guardrails respected:** FT-1–FT-9 logic untouched beyond the scoped conflict reset (confirmed:
+full existing suites re-run green, see below). Validation runs before ANY generation attempt in
+both modes — enforced server-side in both endpoints, including a test that force-writes invalid
+text into scenes.json and proves zero `generateAudio` calls.
+
+### Testing — commands run and results
+```
+$ node server/routes/voiceRegenerate.test.js
+```
+18/18 assertions passed (real Express app over HTTP, ElevenLabs pipeline monkey-patched on the
+module object writing real bytes to disk): valid PATCH sets `voice_stale`/preserves
+`original_script_excerpt` once and leaves audio untouched; short/punctuation-only/empty text →
+400 with zero state change; first regeneration creates `scene_{id}_original.mp3` with the true
+original bytes and a second edit+regeneration never touches it; `audio_duration`/
+`duration_seconds` re-synced via `narrationSafeSceneDuration`, `voice_stale` cleared; a scene with
+no prior narration gets a file and no spurious backup; a simulated ElevenLabs failure leaves
+audio_path/audio_duration/duration_seconds/file bytes byte-identical with `voice_stale` still true
+and no temp leftovers; invalid stored text → 400 with generateAudio never called; FT-1 manual trim
++ FT-4 manual offset reset with `manual_adjustments_reset: true`, scoped to that scene only (and
+`false` when nothing manual existed); the auto-mode endpoint sequence (PATCH → POST) and
+manual-mode sequence (PATCH alone changes no audio, fires no generation, until the explicit POST)
+both verified end-to-end; revert restores script + original audio bytes, clears the marker, keeps
+the backup, is idempotent, and 400s only on a never-edited scene.
+
+```
+$ node server/services/frameMath.test.js && node server/routes/scenes.test.js
+$ node server/routes/images.test.js && node server/routes/higgsfieldRegenerate.test.js
+$ node server/services/imageSwap.test.js && node server/services/claude.test.js
+```
+All existing FT-1–FT-9 suites pass unchanged — guardrail confirmed.
+
+```
+$ cd client && npx eslint src/pages/wizard/FineTuneStep.jsx   # clean
+$ cd client && npm run build                                   # ✓ built (2236 modules)
+```
+
+---
+
 ## Session 28 — Attempted fix: scale numberOfSharedAudioTags to scene count — DID NOT FIX the stutter (mechanism now instrumented and confirmed)
 **Commit:** `fix: scale numberOfSharedAudioTags to scene count`
 **Date:** 2026-07-04

@@ -34,6 +34,9 @@ const LAYOUTS = [
 
 const DEFAULT_MIX = { narration: 1.0, music: 0.12, ambient: 0.06 }
 const SNAPSHOT_KEY = 'vorta_finetune_snapshot'
+// Script editing: session-level (not per-scene) choice between regenerating narration
+// automatically on every script save vs. an explicit per-scene "Regenerate Voice" button.
+const AUTO_REGEN_KEY = 'vorta_finetune_auto_regenerate'
 
 function minDurationFor(scene) {
   const buffer = scene.audio_duration > 0 ? scene.audio_duration : 0
@@ -113,6 +116,21 @@ export function FineTuneStep({
   const [overIndex,    setOverIndex]    = useState(null)
   const [isReordering, setIsReordering] = useState(false)
   const [reorderError, setReorderError] = useState(null)
+
+  // Script editing mode toggle — a Fine-Tune session setting, persisted across visits.
+  // Default: auto-regenerate on save.
+  const [autoRegenerate, setAutoRegenerate] = useState(() => {
+    try {
+      const saved = localStorage.getItem(AUTO_REGEN_KEY)
+      return saved === null ? true : saved === 'true'
+    } catch { return true }
+  })
+  const toggleAutoRegenerate = () => {
+    setAutoRegenerate(v => {
+      try { localStorage.setItem(AUTO_REGEN_KEY, String(!v)) } catch { /* quota */ }
+      return !v
+    })
+  }
 
   const totalFrames  = useMemo(() => calculateDocumentaryDuration(scenes, 30), [scenes])
   const totalSeconds = totalFrames / 30
@@ -267,9 +285,25 @@ export function FineTuneStep({
             </span>
             {isReordering && <Loader2 size={12} className="animate-spin text-blue-400" />}
           </div>
-          {orderChanged && (
-            <RevertButton onClick={revertOrder} label="Revert order to generated" />
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <label
+              className="flex items-center gap-2 cursor-pointer select-none"
+              title="On: saving a scene's script immediately regenerates its narration. Off: saving only marks the voice out of sync — regenerate per scene when ready."
+            >
+              <input
+                type="checkbox"
+                checked={autoRegenerate}
+                onChange={toggleAutoRegenerate}
+                style={{ width: 13, height: 13, accentColor: '#3b82f6' }}
+              />
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)' }}>
+                Auto-regenerate voice on save
+              </span>
+            </label>
+            {orderChanged && (
+              <RevertButton onClick={revertOrder} label="Revert order to generated" />
+            )}
+          </div>
         </div>
       )}
 
@@ -370,6 +404,7 @@ export function FineTuneStep({
                   }
                   clip={selectedClips[scene.scene_id] || null}
                   projectId={projectId}
+                  autoRegenerate={autoRegenerate}
                   otherScenesWithImages={
                     // FT-7: candidates for "Reuse existing scene image" — every OTHER image
                     // scene that actually has a resolvable thumbnail right now.
@@ -559,7 +594,7 @@ function ChapterMontageHeader({ chapter, chapterScenes, projectId, snapshot, sce
 function FineTuneCard({
   index, scene, snapshot, thumbnail, clip, projectId, onSceneUpdate,
   isDragging, isDragOver, onDragHandleStart, onDragHandleEnd, onCardDragOver, onCardDrop,
-  otherScenesWithImages,
+  otherScenesWithImages, autoRegenerate,
 }) {
   const min = minDurationFor(scene)
   // Voiceover-cutoff fix: mirrors frameMath.maxDurationSeconds — the 8s style cap yields
@@ -584,6 +619,13 @@ function FineTuneCard({
   const [secondaryMode, setSecondaryMode] = useState('reuse') // 'reuse' | 'regenerate'
   const [regeneratePrompt, setRegeneratePrompt] = useState('')
   const [regeneratingSecondary, setRegeneratingSecondary] = useState(false)
+
+  // Script editing + voice regeneration
+  const [scriptText,  setScriptText]  = useState(scene.script_excerpt || '')
+  const [voiceAction, setVoiceAction] = useState(null) // 'saving' | 'saving_regen' | 'regenerating' | 'reverting' | null
+  const [voiceError,  setVoiceError]  = useState(null)
+  const [voiceNotice, setVoiceNotice] = useState(null) // FT-1/FT-4 conflict-reset warning
+  const scriptDirty = scriptText.trim() !== (scene.script_excerpt || '').trim()
 
   // FT-8: cutaway insert
   const [showCutawayEditor, setShowCutawayEditor] = useState(false)
@@ -693,6 +735,92 @@ function FineTuneCard({
       setSaveError(err.message)
     } finally {
       setSavingField(null)
+    }
+  }
+
+  // ── Script editing + voice regeneration ─────────────────────────────────────
+  // Validation (validateTTSText) runs server-side inside BOTH endpoints — the /script
+  // PATCH rejects invalid text before saving, and /regenerate-voice re-validates the
+  // stored text before any ElevenLabs call, so invalid text can never reach generation
+  // in either auto or manual mode.
+
+  const regenerateVoice = async () => {
+    let selectedVoiceId = null
+    try { selectedVoiceId = localStorage.getItem('vorta_selected_voice') } catch { /* unavailable */ }
+    if (!selectedVoiceId) {
+      throw new Error('No narration voice selected — pick a voice in the Voice step first.')
+    }
+    const res = await fetch(`${SERVER_URL}/api/scenes/${scene.scene_id}/regenerate-voice`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ projectId, voiceId: selectedVoiceId }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Voice regeneration failed')
+    onSceneUpdate(data.scene)
+    // Keep the FT-1 duration slider in sync with the freshly re-synced duration.
+    setDuration(data.scene.duration_seconds ?? min)
+    if (data.manual_adjustments_reset) {
+      setVoiceNotice('Script changed — manual duration/offset was reset because it no longer matched the new narration length.')
+    }
+  }
+
+  const handleSaveScript = async () => {
+    if (!scriptDirty || voiceAction) return
+    setVoiceError(null); setVoiceNotice(null)
+    setVoiceAction(autoRegenerate ? 'saving_regen' : 'saving')
+    try {
+      const res = await fetch(`${SERVER_URL}/api/scenes/${scene.scene_id}/script`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId, script_excerpt: scriptText }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Script update failed')
+      onSceneUpdate(data.scene)
+      // Auto mode: regenerate immediately, as one combined operation. On regeneration
+      // failure the text stays saved (voice_stale: true) and the card's "Regenerate
+      // Voice" button doubles as the retry.
+      if (autoRegenerate) await regenerateVoice()
+    } catch (err) {
+      setVoiceError(err.message)
+    } finally {
+      setVoiceAction(null)
+    }
+  }
+
+  const handleManualRegenerate = async () => {
+    if (voiceAction) return
+    setVoiceError(null); setVoiceNotice(null)
+    setVoiceAction('regenerating')
+    try {
+      await regenerateVoice()
+    } catch (err) {
+      setVoiceError(err.message)
+    } finally {
+      setVoiceAction(null)
+    }
+  }
+
+  const handleRevertVoice = async () => {
+    if (voiceAction) return
+    setVoiceError(null); setVoiceNotice(null)
+    setVoiceAction('reverting')
+    try {
+      const res = await fetch(`${SERVER_URL}/api/scenes/${scene.scene_id}/revert-voice`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Revert failed')
+      onSceneUpdate(data.scene)
+      setScriptText(data.scene.script_excerpt || '')
+      setDuration(data.scene.duration_seconds ?? min)
+    } catch (err) {
+      setVoiceError(err.message)
+    } finally {
+      setVoiceAction(null)
     }
   }
 
@@ -973,6 +1101,74 @@ function FineTuneCard({
           </div>
 
           <div className="flex-1 min-w-0 space-y-4">
+            {/* Script editing + voice regeneration */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <FieldLabel>Script</FieldLabel>
+                <div className="flex items-center gap-2">
+                  {voiceAction && <Loader2 size={11} className="animate-spin text-blue-400" />}
+                  {scene.original_script_excerpt !== undefined && (
+                    <RevertButton onClick={handleRevertVoice} label="Revert script & voice to generated" />
+                  )}
+                </div>
+              </div>
+              <textarea
+                value={scriptText}
+                onChange={e => setScriptText(e.target.value)}
+                onBlur={handleSaveScript}
+                rows={3}
+                disabled={voiceAction !== null}
+                className="w-full text-[12px] leading-snug px-2.5 py-2 rounded-md border border-white/[0.12] bg-white/[0.04] text-white/75 focus:outline-none focus:border-blue-500/40 resize-y disabled:opacity-50"
+                placeholder="Scene narration script…"
+              />
+              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                {scriptDirty && !voiceAction && (
+                  <button
+                    onClick={handleSaveScript}
+                    className="text-[10px] px-2.5 py-1 rounded bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/30 text-blue-300 transition-colors"
+                  >
+                    {autoRegenerate ? 'Save & Regenerate Voice' : 'Save Script'}
+                  </button>
+                )}
+                {voiceAction === 'saving_regen' && (
+                  <span className="text-[10px] text-blue-300/80">Saving and regenerating…</span>
+                )}
+                {voiceAction === 'saving' && (
+                  <span className="text-[10px] text-blue-300/80">Saving…</span>
+                )}
+                {voiceAction === 'regenerating' && (
+                  <span className="text-[10px] text-blue-300/80">Regenerating voice…</span>
+                )}
+                {voiceAction === 'reverting' && (
+                  <span className="text-[10px] text-blue-300/80">Reverting…</span>
+                )}
+                {scene.voice_stale && !voiceAction && (
+                  <>
+                    <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-300">
+                      ⚠ voice out of sync
+                    </span>
+                    <button
+                      onClick={handleManualRegenerate}
+                      className="flex items-center gap-1 text-[10px] px-2.5 py-1 rounded bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.1] text-white/60 transition-colors"
+                      title="Regenerate this scene's narration from the current script"
+                    >
+                      <RefreshCw size={10} />
+                      Regenerate Voice
+                    </button>
+                  </>
+                )}
+              </div>
+              {voiceError && (
+                <div className="text-[10px] text-red-400/80 mt-1">
+                  {voiceError}
+                  {scene.voice_stale ? ' — the script is saved; use "Regenerate Voice" to retry.' : ''}
+                </div>
+              )}
+              {voiceNotice && (
+                <div className="text-[10px] text-amber-400/80 mt-1">{voiceNotice}</div>
+              )}
+            </div>
+
             {/* Generated narration */}
             <div>
               <FieldLabel>Generated Narration</FieldLabel>
