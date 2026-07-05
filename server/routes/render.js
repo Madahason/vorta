@@ -57,6 +57,33 @@ function syncClipsToRemotionPublic(selectedClips) {
   }
 }
 
+// Derive the bare filename Remotion's staticFile('clips/<filename>') expects from
+// whatever shape a clip's stored `file` field takes — a bare filename, a
+// "/library/clips/x.mp4" relative path, or (post-toHttpUrl) a full "http://..." URL.
+function extractClipFilename(file) {
+  if (!file) return null;
+  return file.split('/').pop().split('\\').pop().split('?')[0] || null;
+}
+
+// Pre-render safety net: a real_footage scene whose selected clip file is missing
+// from remotion/public/clips/ causes Remotion's <Video> to 404 and hang its internal
+// delayRender("Loading <Html5Video> duration") until the CLI timeout aborts the WHOLE
+// render — potentially hours into it. Catch that in seconds, before spawning anything.
+function findMissingRealFootageClips(scenes, selectedClips) {
+  const remotionClipsDir = path.resolve(__dirname, '../../remotion/public/clips');
+  const missing = [];
+  for (const scene of scenes) {
+    if (scene.shot_type !== 'real_footage') continue;
+    const clip = selectedClips?.[scene.scene_id];
+    if (!clip?.file) continue;  // no clip selected — SceneRenderer already falls back to PlaceholderScene
+    const filename = extractClipFilename(clip.file);
+    if (!filename || !fs.existsSync(path.join(remotionClipsDir, filename))) {
+      missing.push(filename || clip.file);
+    }
+  }
+  return missing;
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────────
 
 const q = (p) => `"${p}"`;  // quote a path for shell command
@@ -123,6 +150,26 @@ router.post('/', async (req, res) => {
 
   // Sync selected clip files to remotion/public/clips/ before rendering
   syncClipsToRemotionPublic(selectedClips);
+
+  // Re-check after sync: any real_footage clip still missing means the render would
+  // hang and die hours in. Fail fast instead — store an already-errored job so the
+  // client's subsequent GET /progress/:projectId (existing job.status === 'error'
+  // branch) surfaces it over SSE within seconds, with zero changes to that endpoint.
+  const missingClips = findMissingRealFootageClips(scenes, selectedClips);
+  if (missingClips.length > 0) {
+    const message = `Render aborted before starting: missing clip file(s) in remotion/public/clips/: ${missingClips.join(', ')}. Re-sync or re-select these clips before rendering.`;
+    console.error(`[render] ${message}`);
+    renderJobs.set(projectId, {
+      process:    null,
+      progress:   { percent: 0, frame: 0, totalFrames: 0 },
+      status:     'error',
+      outputPath: null,
+      stderr:     message,
+      sseClients: new Set(),
+      cancelled:  false,
+    });
+    return res.json({ started: true, projectId });
+  }
 
   // ── Build render props with full HTTP URLs ────────────────────────────────
   // All asset URLs in props must be full http://localhost:PORT/... URLs.

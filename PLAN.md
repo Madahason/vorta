@@ -4522,3 +4522,80 @@ on a separate port so the already-running dev server's stale in-memory code wasn
 **Not fixed / out of scope this session:** the tree-kill gap above. Also note the server process
 that was already running on port 3001 before this session has old `render.js` in memory — it needs
 a restart to pick up these fixes (Node doesn't hot-reload `require`d CommonJS modules).
+
+---
+
+## Session — real_footage staticFile fix, pre-render clip validation, bounded delayRender fallback
+
+**Reported bug:** a 2-hour render died at 78% with a 404 on
+`http://localhost:3000/public/clips/pexels_35392015_chengdu_cityscape_with_apple_s.mp4`, followed
+by `delayRender() "Loading <Html5Video> duration" was called but not cleared after 58000ms`. The
+clip existed in `remotion/public/clips/`.
+
+**Investigation before changing anything:** read `Documentary.jsx`'s `SceneRenderer` (dispatches
+`shot_type: 'real_footage'` to `<FootageScene clip={selectedClip} scene={scene} .../>`, falling back
+to `PlaceholderScene` only when no clip is selected at all) and `FootageScene.jsx`. Traced every place
+a clip's `file` field is set (`clipStore.js`, `clipDownloader.js`, `autoClipper.js`, `stockFootage.js`,
+the `sources/*.js` downloaders, `library.js`'s upload route) — all consistently store
+`/library/clips/{filename}`. Confirmed via the installed `remotion` package (`4.0.474`)'s
+`static-file.js` that `staticFile()` **throws** if given a path starting with `public/` and never
+itself emits a `/public/...`-prefixed URL — so the literal `/public/clips/...` in the bug report could
+only come from a manually-constructed URL string, not a `staticFile()` call. Grepped the entire repo
+(both `main` and the `production` branch) for `localhost:3000` and `public/clips` outside
+`node_modules` — found none; current `FootageScene.jsx` already called
+`staticFile('clips/' + filename)` with the filename derived from `clip.file.split('/').pop()...`
+(fixed back in `db50104`, session "video clips in render"). **Conclusion:** Part A's specific root
+cause does not reproduce from current source — the real, actionable gap is that *nothing* bounded
+how long Remotion's own internal `delayRender` for `<Video>` duration-loading could hang if a clip
+ever *is* unreachable (wrong environment/branch, disk desync, transient fetch failure, etc.), and
+*nothing* checked clip existence before committing to a multi-hour render. Fixed both anyway, per the
+task's explicit ask, since the hardening is correct regardless of which exact incident triggered it.
+
+**Part A (`remotion/src/components/FootageScene.jsx`) — hardened, not newly introduced:**
+- Extracted the filename derivation into `extractClipFilename(file)` — strips any directory prefix
+  (`/` and `\`), any http(s) origin, and now also any trailing query string, from whatever shape
+  `clip.file` takes (bare filename, `/library/clips/x.mp4`, or a full URL). Passed to
+  `staticFile('clips/' + filename)`, same as before.
+
+**Part B1 — pre-render clip-existence validation (`server/routes/render.js`):**
+- New `findMissingRealFootageClips(scenes, selectedClips)`: for every `shot_type: 'real_footage'`
+  scene with a selected clip, resolves the expected filename and checks it exists in
+  `remotion/public/clips/` via `fs.existsSync`. Scenes with no clip selected at all are left alone —
+  `SceneRenderer` already handles that via `PlaceholderScene`, not a bug.
+- Runs in the POST handler right after the existing `syncClipsToRemotionPublic(selectedClips)` call,
+  so "attempt to sync first, then re-check" falls out naturally — sync already ran; this is the
+  re-check. If anything is still missing, the handler does **not** write `scenes.json` or spawn the
+  Remotion CLI at all. Instead it stores a job directly in `renderJobs` with
+  `status: 'error', stderr: <message listing every missing filename>` and returns the normal
+  `{ started: true, projectId }` — the client's next `GET /progress/:projectId` hits the *existing*
+  `job.status === 'error'` branch and gets the SSE error immediately. Zero changes to the SSE
+  progress-streaming logic itself, the `renderJobs` Map shape, or the POST contract.
+
+**Part B2 — bounded delayRender fallback (`FootageScene.jsx`):**
+- Before mounting Remotion's `<Video>`, a `useEffect` now does its own bounded reachability check: a
+  detached `<video preload="metadata">` probe element loads the same `staticFile()` URL, gated by our
+  own `delayRender(label, { timeoutInMilliseconds: 8000 })` (down from the CLI's 58-60s). `loadedmetadata`
+  → proceed to render the real `<Video>`; `error`, or a same-effect `setTimeout` firing 500ms before
+  the delayRender timeout → fall back to the existing `PlaceholderScene`. Either way `continueRender`
+  is called, including on unmount before settling (cleanup clears the handle without touching state,
+  avoiding a "set state on unmounted component" warning). A real load failure now costs ~8s of the
+  render, not the whole job.
+
+**Verified against a real render** (disposable `__footage_fix_render_test__`, 3 scenes: image →
+`real_footage` (the exact `pexels_35392015_chengdu_cityscape_with_apple_s.mp4` from the bug report) →
+image; run against a freshly-started server instance on a separate port, same reasoning as the
+previous session):
+1. Normal render: log showed `clip already synced`, no missing-clip abort; render finished
+   (`exit code 0`); `ffprobe` confirmed a valid 1920×1080 H.264/AAC MP4 (`duration=8.256`). Extracted
+   a frame from the footage scene's time range — the actual Chengdu Apple Store clip rendered
+   correctly (letterboxed, color-graded), not a placeholder.
+2. Safety net: renamed the clip in **both** `remotion/public/clips/` and its `library/clips/` source
+   (so the existing sync couldn't silently restore it) and re-ran the identical request. The render
+   aborted in **~150ms** — `[render] clip file not found: ...` logged, and the SSE stream immediately
+   returned `{ type: 'error', message: 'Render aborted before starting: missing clip file(s) in
+   remotion/public/clips/: pexels_35392015_chengdu_cityscape_with_apple_s.mp4. Re-sync or re-select
+   these clips before rendering.' }` — no Remotion CLI process was ever spawned.
+3. Restored both files, re-ran the same request: clean render, `ffprobe`-valid MP4 again.
+
+**Not changed:** image/audio path handling, `TransitionSeries` structure, `SplitScreenScene.jsx`
+(images only, no clip resolution there), the SSE contract, and the `renderJobs` Map shape.
