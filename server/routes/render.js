@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const path   = require('path');
 const fs     = require('fs');
+const os     = require('os');
 const { spawn } = require('child_process');
 
 // In-memory render job store — keyed by projectId
@@ -114,6 +115,7 @@ router.post('/', async (req, res) => {
   // Kill any previous render for this project
   const existing = renderJobs.get(projectId);
   if (existing?.process) {
+    existing.cancelled = true;
     try { existing.process.kill(); } catch {}
   }
 
@@ -201,10 +203,16 @@ router.post('/', async (req, res) => {
 
   const remotionDir = path.resolve(PROJECT_ROOT, 'remotion');
 
-  // Load render settings from defaults.json
+  // Load render settings from defaults.json — use the Settings-page value when present,
+  // otherwise scale with the machine's core count instead of leaving the rest of the
+  // machine idle on a single core.
   let renderDefaults = {};
   try { renderDefaults = require('../config/defaults.json').render || {}; } catch {}
-  const concurrency = Math.max(1, parseInt(renderDefaults.concurrency) || 1);
+  const defaultConcurrency  = Math.max(2, os.cpus().length - 1);
+  const configuredConcurrency = parseInt(renderDefaults.concurrency);
+  const concurrency = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
+    ? configuredConcurrency
+    : defaultConcurrency;
 
   // On Linux (Docker/Railway) Remotion needs the system Chromium path explicitly.
   // PUPPETEER_EXECUTABLE_PATH is set in the Dockerfile and Railway env vars.
@@ -213,32 +221,32 @@ router.post('/', async (req, res) => {
     : undefined;
   const chromeFlag = chromeExecutable ? `--browser-executable ${q(chromeExecutable)}` : '';
 
-  // --timeout=120000 : large clip files (85 MB+) can exceed the 30 s default.
-  // --gl=swangle    : SwiftShader+ANGLE is Remotion's recommended headless GL on Windows;
-  //                   avoids GPU driver issues that can stall or crash the render.
-  const cmd = `npx remotion render src/index.jsx Documentary ${q(outputPath)} --props ${q(propsPath)} --overwrite --concurrency=${concurrency} --timeout=120000 --gl=swangle ${chromeFlag}`.trimEnd();
+  // --gl=angle/--gl=swiftshader : ThreeGlobe (3d_graphic / globe_markers) scenes use WebGL,
+  // which intermittently fails to initialise in headless Chrome without an explicit,
+  // platform-appropriate GL backend.
+  // --timeout=60000            : per-frame delayRender timeout so one slow frame doesn't abort the job.
+  const glFlag = process.platform === 'win32' ? '--gl=angle'
+    : process.platform === 'linux' ? '--gl=swiftshader'
+    : '';
 
-  console.log(`[render] Starting render for project ${projectId}`);
-  console.log(`[render] ${cmd}`);
-
-  const proc = spawn(cmd, [], {
-    cwd:   remotionDir,
-    shell: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env:   { ...process.env, NODE_TLS_REJECT_UNAUTHORIZED: '0' },
-  });
+  function buildRenderCommand(attemptConcurrency) {
+    return `npx remotion render src/index.jsx Documentary ${q(outputPath)} --props ${q(propsPath)} --overwrite --concurrency=${attemptConcurrency} --timeout=60000 ${glFlag} ${chromeFlag}`
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
 
   const job = {
-    process:    proc,
+    process:    null,
     progress:   { percent: 0, frame: 0, totalFrames: 0 },
     status:     'rendering',
     outputPath,
     stderr:     '',
     sseClients: new Set(),
+    cancelled:  false,
   };
   renderJobs.set(projectId, job);
 
-  const handleChunk = (chunk) => {
+  function handleChunk(chunk) {
     const lines = chunk.toString().split(/\r?\n/);
     lines.forEach(line => {
       if (parseProgress(line, job)) {
@@ -250,43 +258,77 @@ router.post('/', async (req, res) => {
         });
       }
     });
-  };
+  }
 
-  proc.stdout.on('data', handleChunk);
-  proc.stderr.on('data', (chunk) => {
-    job.stderr += chunk.toString();
-    handleChunk(chunk);
-  });
-
-  proc.on('close', (code) => {
-    console.log(`[render] Exited with code ${code} for project ${projectId}`);
-    if (code === 0) {
-      job.status = 'done';
-      let fileSize = 0;
-      try { fileSize = fs.statSync(outputPath).size; } catch {}
-      broadcast(job, {
-        type:       'done',
-        outputPath: `/projects/${projectId}/output/final.mp4`,
-        fileSize,
-      });
+  // On first failure, retry once at reduced concurrency (transient OOM/asset-fetch blips
+  // often clear at lower concurrency). Only surface the SSE error after the retry also fails.
+  function handleAttemptFailure(attemptConcurrency, isRetry, message) {
+    if (job.cancelled) return;
+    if (!isRetry) {
+      const retryConcurrency = Math.max(1, Math.floor(attemptConcurrency / 2));
+      const retryMsg = `Render failed, retrying once at reduced concurrency=${retryConcurrency}`;
+      console.log(`[render] ${retryMsg}`);
+      broadcast(job, { type: 'log', message: retryMsg });
+      startAttempt(retryConcurrency, true);
     } else {
       job.status = 'error';
-      broadcast(job, {
-        type:    'error',
-        message: job.stderr || `Render process exited with code ${code}`,
-      });
+      broadcast(job, { type: 'error', message });
+      job.sseClients.forEach(c => { try { c.end(); } catch {} });
+      job.sseClients.clear();
     }
-    job.sseClients.forEach(c => { try { c.end(); } catch {} });
-    job.sseClients.clear();
-  });
+  }
 
-  proc.on('error', (err) => {
-    console.error(`[render] Spawn error for ${projectId}:`, err);
-    job.status = 'error';
-    broadcast(job, { type: 'error', message: err.message });
-    job.sseClients.forEach(c => { try { c.end(); } catch {} });
-    job.sseClients.clear();
-  });
+  function startAttempt(attemptConcurrency, isRetry) {
+    const cmd = buildRenderCommand(attemptConcurrency);
+    const startMsg = isRetry
+      ? `Retrying render: concurrency=${attemptConcurrency}`
+      : `Render starting: concurrency=${attemptConcurrency}`;
+    console.log(`[render] ${startMsg}`);
+    console.log(`[render] ${cmd}`);
+    broadcast(job, { type: 'log', message: startMsg });
+
+    job.stderr = '';
+    const proc = spawn(cmd, [], {
+      cwd:   remotionDir,
+      shell: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env:   { ...process.env, NODE_TLS_REJECT_UNAUTHORIZED: '0' },
+    });
+    job.process = proc;
+
+    proc.stdout.on('data', handleChunk);
+    proc.stderr.on('data', (chunk) => {
+      job.stderr += chunk.toString();
+      handleChunk(chunk);
+    });
+
+    proc.on('close', (code) => {
+      if (job.cancelled) return;
+      console.log(`[render] Exited with code ${code} for project ${projectId}${isRetry ? ' (retry attempt)' : ''}`);
+      if (code === 0) {
+        job.status = 'done';
+        let fileSize = 0;
+        try { fileSize = fs.statSync(outputPath).size; } catch {}
+        broadcast(job, {
+          type:       'done',
+          outputPath: `/projects/${projectId}/output/final.mp4`,
+          fileSize,
+        });
+        job.sseClients.forEach(c => { try { c.end(); } catch {} });
+        job.sseClients.clear();
+      } else {
+        handleAttemptFailure(attemptConcurrency, isRetry, job.stderr || `Render process exited with code ${code}`);
+      }
+    });
+
+    proc.on('error', (err) => {
+      if (job.cancelled) return;
+      console.error(`[render] Spawn error for ${projectId}:`, err);
+      handleAttemptFailure(attemptConcurrency, isRetry, err.message);
+    });
+  }
+
+  startAttempt(concurrency, false);
 
   res.json({ started: true, projectId });
 });
@@ -337,6 +379,7 @@ router.delete('/:projectId', (req, res) => {
   const job = renderJobs.get(projectId);
 
   if (job?.process) {
+    job.cancelled = true;
     try { job.process.kill(); } catch {}
     job.status = 'cancelled';
     job.sseClients.forEach(c => { try { c.end(); } catch {} });

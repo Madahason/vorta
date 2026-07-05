@@ -4458,3 +4458,67 @@ visual editor) was NOT restored — only the review/accept/reject surface the ta
   orphaned `/api/overlays` reference anywhere in `client/src`.
 - `npx vite build` (client) — clean; the Remotion composition (incl. SceneOverlays and the
   modified scene components) is bundled via VideoPlayer and compiles.
+
+---
+
+## Session — Render concurrency, WebGL GL backend, timeout, and auto-retry
+
+**Goal:** renders were slow (single-core-bound) and sometimes failed outright (intermittent
+WebGL init failures in headless Chrome, transient OOM/asset-fetch blips). All changes scoped
+to `server/routes/render.js`.
+
+**Why renders were slow:** concurrency defaulted to `Math.max(1, parseInt(renderDefaults.concurrency) || 1)`
+— effectively 1 unless Settings explicitly set it higher, so Remotion rendered on a single
+CPU core while the rest of the machine sat idle.
+
+**Fix 1 — concurrency:** added `const os = require('os')` and
+`defaultConcurrency = Math.max(2, os.cpus().length - 1)`. `concurrency` now uses the
+`defaults.json` `render.concurrency` value when it's a finite positive number, otherwise falls
+back to the CPU-scaled default — no path hardcodes `1` anymore. Resolved value is logged to
+stdout **and** broadcast as a new SSE `{ type: 'log', message: 'Render starting: concurrency=N' }`
+event (the client's `EventSource.onmessage` only branches on `progress`/`done`/`error`, so an
+unrecognized `type` is safely ignored — no client changes needed).
+
+**Fix 2 — WebGL hardening:** replaced the single hardcoded `--gl=swangle` with a platform switch —
+`--gl=angle` on `win32`, `--gl=swiftshader` on `linux` — since ThreeGlobe (`3d_graphic` /
+`globe_markers` scenes, [[video_research]]-adjacent but really the Session 19 Three.js globe work)
+requires WebGL and intermittently failed to init in headless Chrome without an explicit backend,
+falling back to `ErrorBoundaryScene`. Also dropped `--timeout` from 120000 → 60000 (per-frame
+`delayRender` timeout — one slow frame no longer stalls the whole job as long). Linux's
+`--browser-executable /usr/bin/chromium` handling untouched.
+
+**Fix 3 — auto-retry-once:** the render spawn is now wrapped in `startAttempt(attemptConcurrency, isRetry)` /
+`handleAttemptFailure(...)`, reusing the same `job` object and `renderJobs` Map entry across both
+attempts (job.process is reassigned to whichever attempt is live). On first non-zero exit or spawn
+`error`, it retries once at `Math.max(1, Math.floor(concurrency / 2))` and broadcasts
+`{ type: 'log', message: 'Render failed, retrying once at reduced concurrency=N' }`; only a
+second failure sends the real `{ type: 'error', message }` with the final attempt's stderr.
+Added a `job.cancelled` flag (set by both the DELETE cancel endpoint and the "kill any previous
+render for this project" path in the POST handler) so a killed process's `close`/`error` handlers
+no-op instead of retrying or broadcasting after cancellation.
+
+**Verified with a real render** (disposable `__concurrency_fix_render_test__` project, 3 scenes:
+image → `3d_graphic`/`globe_markers` → image, run against a fresh `node server/index.js` instance
+on a separate port so the already-running dev server's stale in-memory code wasn't what got tested):
+- Log + SSE showed `Render starting: concurrency=2` (from `defaults.json`'s configured value) and
+  the exact `--gl=angle --timeout=60000` flags on Windows.
+- Render completed (`exit code 0`); `ffprobe` confirmed a valid 1920×1080 H.264/AAC MP4
+  (`duration=8.256`, matching the 3×~3s scenes plus dissolve).
+- Extracted a frame from the `3d_graphic` scene's time range — the globe rendered correctly
+  (starfield sphere + marker halo), confirming `--gl=angle` fixes the WebGL init failure instead
+  of falling back to `ErrorBoundaryScene`.
+- Retry logic verified by temporarily pointing the render command at a nonexistent composition ID
+  (reverted immediately after): SSE showed `Render failed, retrying once at reduced concurrency=1`,
+  a second attempt at concurrency=1, then the final `{ type: 'error' }` with Remotion's real
+  "Could not find composition" stderr — confirming the retry-once-then-surface behavior end to end.
+- Cancel endpoint (`DELETE /api/render/:projectId`) verified mid-render: returns `{"success":true}`
+  and no retry/error fires afterward (the `cancelled` flag works). **Known pre-existing limitation
+  surfaced by this test, not introduced or fixed here:** `job.process.kill()` on a `shell:true`
+  spawn only kills the top-level shell on Windows — it left orphaned `esbuild`/`chrome-headless-shell`
+  processes running after cancel (visible via `Get-CimInstance Win32_Process`). This predates this
+  session's changes and wasn't in the requested fix list; flagged for a future session (a tree-kill,
+  e.g. via `tree-kill` npm package or `taskkill /T /F`, would be the fix).
+
+**Not fixed / out of scope this session:** the tree-kill gap above. Also note the server process
+that was already running on port 3001 before this session has old `render.js` in memory — it needs
+a restart to pick up these fixes (Node doesn't hot-reload `require`d CommonJS modules).
