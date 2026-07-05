@@ -4599,3 +4599,150 @@ previous session):
 
 **Not changed:** image/audio path handling, `TransitionSeries` structure, `SplitScreenScene.jsx`
 (images only, no clip resolution there), the SSE contract, and the `renderJobs` Map shape.
+
+---
+
+## Session — audio/image render crash: single asset resolver, staticFile() sync, pre-render validation
+**Date:** 2026-07-05
+
+### Problem
+Renders crashed non-deterministically at a different % every run (78%, 55%, 20%...). Server logs
+showed narration audio and scene images being passed to the CLI as
+`http://localhost:3001/projects/proj_xxx/...` URLs. During CLI rendering, headless Chrome fetched
+every one of these from the same Express server handling the rest of the app; under load a fetch
+stalled, Remotion's internal `delayRender()` for that asset hung, and the CLI's `--timeout` killed
+the whole render — at whatever frame happened to be rendering when the stall occurred. `clip.file`
+(real_footage) had the identical bug (also converted to an HTTP URL by the old `toHttpUrl()`), it
+just didn't surface because clips already had a *different*, correct fix (see Session 13 / "real_footage
+staticFile fix" above) that bypassed it.
+
+### First attempt (rejected) — absolute filesystem paths
+Tried converting `image_path`/`audio_path` to absolute Windows paths (`C:\Users\...`). **This is the
+exact same thing Session 12 already tried and rejected**: Remotion's headless Chrome turns an
+absolute path into `file:///C:/...` and refuses it ("Can only download URLs starting with http:// or
+https://"). Caught this against `PLAN.md` before implementing and pivoted to the approach that
+actually works for clips: copy the file into `remotion/public/` and load it via Remotion's own bundle
+server instead of fetching it from Express.
+
+### Second attempt (rejected) — hardcoded root-relative paths (`/images/...`)
+Made `resolveRenderAssetPath` return a root-relative URL (`/images/proj_x__scene_001.jpg`) and had
+the composition use it directly, on the theory that Remotion's bundler serves `remotion/public/` at
+its root. **Wrong** — confirmed by reading `@remotion/bundler`'s `bundle.js` and `static-file.js`
+directly: Remotion copies `remotion/public/` into the render bundle under a `/public` mount and
+injects `window.remotion_staticBase = "/public"` into the bundle's HTML; `staticFile()` is the *only*
+thing that reads that global to prepend the right prefix. A hand-built `/images/...` URL is missing
+that prefix and 404s during CLI render — confirmed directly by curling Remotion's own bundle server
+(port 3000) mid-render and finding `/images/...` and even the previously-"working" `/clips/...` both
+404, while `/public/clips/...` (inside the bundle's temp dir) had the file. In a bare
+`@remotion/player` embed (no Remotion bundle HTML wrapper — the Fine-Tune live preview), that global
+is never set, so `staticFile()` resolves to the *other* shape (`/images/...`, no `/public` prefix) —
+which is what the existing `/clips` Express+Vite route already relied on. The two contexts need
+different URL shapes and only `staticFile()` (called from inside the composition) knows which one to
+produce; hardcoding either breaks the other.
+
+### Third complication — scenes.json is dual-purpose
+`server/services/scenesFile.js`'s own comment says it plainly: render.js overwrites the *same*
+`scenes.json` the Fine-Tune UI treats as canonical per-project scene storage. `FineTuneStep.jsx` reads
+`scene.image_path` / `scene.secondary_image_path` / `scene.cutaway.image_path` directly into plain
+`<img>` tags. If render.js overwrote those fields with a bare `staticFile()`-only path
+(`"images/proj_x__scene_001.jpg"`, no leading slash), the wizard's own preview would break on the next
+page load after a render (that string isn't a browser-loadable URL at all). Resolved by never touching
+those per-scene/clip fields — the resolved (bare, `staticFile()`-ready) values now go into *separate*
+top-level fields the composition already prefers over the scene's own field: `imagePaths`,
+`audioSpecs[].narration.url` (both pre-existing), plus two new ones, `secondaryImagePaths` and
+`cutawayImagePaths`. `clip.file` is left untouched entirely — `FootageScene.jsx` already derives the
+filename and calls `staticFile()` itself regardless of `clip.file`'s shape, so `resolveAsset` only
+needs to run for its sync-to-disk + validation side effect there, never for a return value.
+
+### Final fix
+- **`server/routes/render.js`** — one shared `resolveRenderAssetPath(sourceAbsolutePath, category,
+  namespace)`: copies the source file into `remotion/public/<category>/` (namespaced by `projectId`
+  for images/audio, since every project reuses filenames like `scene_001.jpg`; `namespace=null` for
+  clips, preserving the existing de-duplicated `library/clips/` → `remotion/public/clips/` sync) and
+  returns the bare relative path `staticFile()` expects. `toAbsoluteSourcePath()` resolves any stored
+  reference (root-relative URL, stale `http://` URL, or genuine absolute path) back to the real file
+  on disk — **must not** use Node's `path.isAbsolute()` for this: on win32 it returns `true` for a
+  bare leading slash like `/projects/x/...` (drive-relative-root), which silently skipped the
+  `PROJECT_ROOT`-relative resolution and made every asset "not exist". Added `isRealAbsolutePath()`
+  (drive-letter or UNC only) instead.
+- Every scene's `image_path`, `secondary_image_path`, `cutaway.image_path`, and `audio_path` gets
+  resolved into `imagePaths` / `secondaryImagePaths` / `cutawayImagePaths` / `audioSpecs[].narration.url`
+  (all keyed by `scene_id`) — never back into the scene object itself. `selectedClips` is passed
+  through completely unchanged; `resolveAsset` still runs per clip for its sync + validation side
+  effect.
+- **Pre-render validation**: a referenced-but-missing file (path was set, but nothing exists on disk)
+  collects into `missingAssets` and aborts *before* `scenes.json` is written or the CLI is spawned —
+  the SSE stream immediately gets `{ type: 'error', message: '...missing asset file(s): scene 003
+  (audio): ...; scene 005 (image): ...' }` naming every offending scene_id. A null/absent path (never
+  generated yet) is NOT a validation failure — existing `PlaceholderScene` fallback + a warn-level log
+  (`scenesWithMissingImages`) handles that, unchanged.
+- **Final localhost/http guard**: after building `imagePaths`/`secondaryImagePaths`/
+  `cutawayImagePaths`/`audioSpecs`/`audioProps.path`, a `checkHttp()` pass rejects the render (same
+  abort-before-spawn path) if any of those resolved fields still contains an `http://` URL.
+- **`remotion/src/utils/resolveAssetSrc.js`** (new) — the client-side counterpart: passes through
+  values already shaped like a URL (`/...` or `http...`, i.e. browser-preview values), calls
+  `staticFile()` on anything else (the bare CLI-render form). Used in `Documentary.jsx`'s
+  `SceneRenderer` (image_path, secondary_image_path, cutaway image swap), the per-scene narration
+  track builder, and the global uploaded-narration `<Audio>` track.
+- **`remotion/src/compositions/Documentary.jsx`** — `SceneRenderer` gained two new props,
+  `secondaryImagePath` and `cutawayImagePath` (mirroring the existing `imagePath` prop), sourced from
+  the two new top-level maps. `Documentary()` itself gained `secondaryImagePaths`/`cutawayImagePaths`
+  params and threads them through.
+- **`server/index.js`** — added `/images` and `/audio` static routes (serving
+  `remotion/public/images/` and `remotion/public/audio/` directly), mirroring the existing `/clips`
+  route. **`client/vite.config.js`** — matching proxy entries. Needed for the Fine-Tune live
+  `<Player>` preview specifically: in that bare-embed context `staticFile()` has no
+  `window.remotion_staticBase` to read and falls back to the no-prefix shape (`/images/...`), which
+  these routes serve.
+
+### Fourth discovery, mid-validation — the machine's C: drive is almost completely full
+Validating the fix against the full 63-scene project kept failing with plain
+`ENOSPC: no space left on device` thrown from `@remotion/bundler`'s own `copyDir()` — confirmed by
+reading `copy-dir.js`/`bundle.js`: **every CLI render does a full recursive copy of `remotion/public/`
+into a fresh temp bundle directory** (this is also what actually serves `staticFile()` assets during
+CLI render — not a live filesystem passthrough). `remotion/public/clips/` alone is 787MB (46 files);
+the whole `vorta` repo is ~4.2GB, but the machine's C: drive had only ~1–2.5GB free out of 238GB
+during this session (99–100% full). This is a **pre-existing, machine-wide disk-space problem
+unrelated to this project or this fix** — the repo itself isn't the cause (confirmed via `du -sh`
+across `remotion/`, `projects/`, `library/`, `.git`, `node_modules`: ~4.2GB total). It fully explains
+an unrelated-looking symptom reported mid-session (`OffthreadVideo` proxy fetch hanging on a
+`localhost:3000/public/clips/...` URL) — that URL shape is `staticFile()` resolving *correctly*
+(root-relative `/public/clips/...` becomes absolute against the render's own origin, `localhost:3000`,
+which is normal browser URL resolution, not a bug); the file was simply missing from that render's
+bundle copy because the copy step ran out of disk space partway through. **Left for the user to
+resolve independently** (out of scope for this repo) — full 63-scene validation is blocked until
+there's enough free space for a `copyDir()` of the whole `remotion/public/` folder to complete.
+
+### Verified
+- Minimal 1-scene (image + audio) render: completed successfully; `ffprobe` confirmed H.264 video +
+  AAC audio, narration audible in the encoded track (correct duration).
+- Comprehensive 3-scene render (image scene, image scene with `split_horizontal` layout +
+  `secondary_image_path` + a FT-8 cutaway insert, and a `real_footage` scene with a `selectedClips`
+  entry) in one render: completed successfully; `ffprobe`-valid H.264/AAC MP4; every resolved map
+  (`imagePaths`, `secondaryImagePaths`, `cutawayImagePaths`, `audioSpecs[].narration.url`) confirmed
+  free of `localhost`/`http://` while the *original* scene fields were confirmed **unchanged** (still
+  whatever shape the client sent — proving the wizard's own `<img>` tags won't break after a render).
+- Missing-asset fast-fail: renamed a scene's audio file on disk, fired the identical render request —
+  aborted in ~1 second with `{ type: 'error', message: 'Render aborted before starting: missing asset
+  file(s): scene 003 (audio): ...' }`, naming the exact scene; no Remotion CLI process was ever
+  spawned. Restored the file, re-ran: clean render again.
+- Full 63-scene `proj_1783141891744` render: **blocked by the disk-space issue above**, not
+  re-validated at that scale yet.
+
+### Files changed
+- `server/routes/render.js` — `resolveRenderAssetPath`, `toAbsoluteSourcePath`/`isRealAbsolutePath`,
+  per-scene/clip `resolveAsset` calls into the new top-level maps, `missingAssets` pre-render
+  validation, final `httpOffenders` guard. Removed `toHttpUrl`, `syncClipsToRemotionPublic`,
+  `findMissingRealFootageClips`, and the old per-route `extractClipFilename` (superseded).
+- `remotion/src/utils/resolveAssetSrc.js` — new.
+- `remotion/src/compositions/Documentary.jsx` — `secondaryImagePath`/`cutawayImagePath` props on
+  `SceneRenderer`; `secondaryImagePaths`/`cutawayImagePaths` params on `Documentary()`;
+  `resolveAssetSrc()` applied at every asset consumption point.
+- `server/index.js` — `/images`, `/audio` static routes.
+- `client/vite.config.js` — matching Vite proxy entries.
+
+**Not changed:** `FootageScene.jsx` (already correct — calls `staticFile()` unconditionally regardless
+of `clip.file`'s shape; verified by direct code read when a follow-up report suspected it needed the
+same fix), audio volume mix, `numberOfSharedAudioTags`, font loading, `TransitionSeries` structure,
+`String(scene.scene_id)` keys, `audioSpecs`/`scenes` count-matching, SSE contract, `renderJobs` Map
+shape, `/api/render` POST contract, concurrency/`--gl`/`--timeout` flags.

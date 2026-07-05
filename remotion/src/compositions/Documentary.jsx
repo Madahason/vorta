@@ -9,6 +9,7 @@ import PlaceholderScene       from '../components/PlaceholderScene'
 import { MotionGraphicScene } from '../components/MotionGraphicScene'
 import { ErrorBoundaryScene } from '../components/ErrorBoundaryScene'
 import { ThreeGlobe }         from '../components/ThreeGlobe'
+import { resolveAssetSrc }    from '../utils/resolveAssetSrc'
 
 // ── Transition frame constants ────────────────────────────────────────────────
 const TRANSITION_FRAMES  = 12  // dissolve — crossfade overlap (0.4 s at 30 fps)
@@ -121,12 +122,14 @@ export function computeLayout(scenes) {
   return { startFrames, totalFrames: cursor }
 }
 
-// Accept relative (/...) and HTTP URLs only — Windows absolute paths are not
-// supported by Remotion headless Chrome; render.js always converts to HTTP URLs.
+// Accept relative (/...) and HTTP URLs — browser-preview values are already in this
+// shape, and resolveAssetSrc() (applied before this check runs) turns CLI-render bare
+// relative paths ("audio/proj_x__scene_001.mp3") into a staticFile() URL that is also
+// root-relative, so both cases land here identically.
 const isValidUrl = (src) => !!src && (src.startsWith('/') || src.startsWith('http'))
 
 // ── SceneRenderer — per-scene visual dispatch ─────────────────────────────────
-function SceneRenderer({ scene, imagePath, selectedClip, globalSettings, overlayInDelaySec = 0 }) {
+function SceneRenderer({ scene, imagePath, secondaryImagePath, cutawayImagePath, selectedClip, globalSettings, overlayInDelaySec = 0 }) {
   // FT-8: cutaway insert. Hooks must run unconditionally before any early return (Rules of
   // Hooks) — cheap, and every child component this dispatches to already reads frame/fps
   // itself anyway, so this adds no meaningful overhead. useCurrentFrame() here returns the
@@ -141,8 +144,10 @@ function SceneRenderer({ scene, imagePath, selectedClip, globalSettings, overlay
     return <ThreeGlobe scene={scene} />
   }
   if (scene.shot_type === 'image') {
-    const s = imagePath ? { ...scene, image_path: imagePath } : scene
-    if (!s.image_path) return <PlaceholderScene scene={scene} />
+    const resolvedImagePath = resolveAssetSrc(imagePath) || resolveAssetSrc(scene.image_path)
+    if (!resolvedImagePath) return <PlaceholderScene scene={scene} />
+    const resolvedSecondary = resolveAssetSrc(secondaryImagePath) || resolveAssetSrc(scene.secondary_image_path)
+    const s = { ...scene, image_path: resolvedImagePath, secondary_image_path: resolvedSecondary }
 
     // FT-8: temporarily swap in the cutaway's image for the [insert_at, insert_at+duration)
     // window, then revert to the main image_path — purely a per-frame image_path swap. It
@@ -150,12 +155,13 @@ function SceneRenderer({ scene, imagePath, selectedClip, globalSettings, overlay
     // completely separate element elsewhere in this file, with zero awareness of this) — the
     // scene's duration and its narration play through exactly as if no cutaway existed.
     const cutaway = scene.cutaway
+    const resolvedCutawayImagePath = resolveAssetSrc(cutawayImagePath) || resolveAssetSrc(cutaway?.image_path)
     let effectiveImagePath = s.image_path
-    if (cutaway?.image_path && cutaway.insert_at != null && cutaway.duration != null) {
+    if (resolvedCutawayImagePath && cutaway?.insert_at != null && cutaway?.duration != null) {
       const insertAtFrames = Math.round(cutaway.insert_at * fps)
       const endFrames       = insertAtFrames + Math.round(cutaway.duration * fps)
       if (frame >= insertAtFrames && frame < endFrames) {
-        effectiveImagePath = cutaway.image_path
+        effectiveImagePath = resolvedCutawayImagePath
       }
     }
     const withCutaway = effectiveImagePath !== s.image_path ? { ...s, image_path: effectiveImagePath } : s
@@ -201,7 +207,7 @@ function NarrationTrack({ audio }) {
     if (f > fadeStart) return interpolate(f, [fadeStart, durationInFrames], [vol, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
     return vol
   }
-  return <Audio src={audio.path} startFrom={startFrom} volume={volume} />
+  return <Audio src={resolveAssetSrc(audio.path)} startFrom={startFrom} volume={volume} />
 }
 
 // ── STUTTER-DEBUG instrumentation (temporary — remove after root cause confirmed) ──
@@ -274,12 +280,14 @@ function useNarrationDocumentTap() {
 
 // ── Documentary composition ───────────────────────────────────────────────────
 export function Documentary({
-  scenes         = [],
-  imagePaths     = {},
-  selectedClips  = {},
-  globalSettings = {},
-  audio          = null,
-  audioSpecs     = [],
+  scenes               = [],
+  imagePaths           = {},
+  secondaryImagePaths  = {},
+  cutawayImagePaths    = {},
+  selectedClips        = {},
+  globalSettings       = {},
+  audio                = null,
+  audioSpecs           = [],
 }) {
   const { fps, durationInFrames: configDuration } = useVideoConfig()
 
@@ -358,6 +366,8 @@ export function Documentary({
             <SceneRenderer
               scene={scene}
               imagePath={imagePaths[scene.scene_id]}
+              secondaryImagePath={secondaryImagePaths[scene.scene_id]}
+              cutawayImagePath={cutawayImagePaths[scene.scene_id]}
               selectedClip={selectedClips[scene.scene_id] || null}
               globalSettings={globalSettings}
               overlayInDelaySec={overlayInDelaySec}
@@ -419,7 +429,7 @@ export function Documentary({
   // new volumeFn references every frame can cause Remotion's <Audio> to restart playback.
   const narrationTracks = useMemo(() => uniqueScenes.map((scene, index) => {
     const spec        = audioSpecMap[scene.scene_id] || null
-    const narrationUrl = spec?.narration?.url || scene.audio_path || null
+    const narrationUrl = resolveAssetSrc(spec?.narration?.url) || resolveAssetSrc(scene.audio_path)
     if (!isValidUrl(narrationUrl)) return null
 
     const durationFrames = sceneDur(scene, fps)

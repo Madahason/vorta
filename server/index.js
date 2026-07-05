@@ -43,6 +43,19 @@ app.use('/library', express.static(libraryPath));
 // Remotion <Player> (browser preview) resolves correctly via the Vite proxy.
 app.use('/clips', express.static(libraryClipsPath));
 
+// /images, /audio — serve the per-project image/audio files render.js copies into
+// remotion/public/images/ and remotion/public/audio/ (see resolveRenderAssetPath in
+// server/routes/render.js). staticFile('images/...')/staticFile('audio/...'), called
+// from inside the Remotion <Player> composition (browser preview, no Remotion bundle
+// HTML wrapper), resolves to "/images/..."/"/audio/..." — this route (plus the matching
+// Vite proxy) is what serves that during live Fine-Tune preview. CLI rendering doesn't
+// need this route at all: Remotion's own bundler copies remotion/public/ into the
+// render bundle and serves it under "/public/...", which staticFile() also handles
+// automatically — same reasoning as the /clips route above.
+const remotionPublicPath = path.resolve(__dirname, '..', 'remotion', 'public');
+app.use('/images', express.static(path.join(remotionPublicPath, 'images')));
+app.use('/audio',  express.static(path.join(remotionPublicPath, 'audio')));
+
 // /output — clean URL for MP4 downloads; forces browser download for .mp4 files
 app.use('/output', express.static(path.join(__dirname, '../projects'), {
   setHeaders: (res, filePath) => {
