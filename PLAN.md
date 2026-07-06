@@ -4746,3 +4746,136 @@ of `clip.file`'s shape; verified by direct code read when a follow-up report sus
 same fix), audio volume mix, `numberOfSharedAudioTags`, font loading, `TransitionSeries` structure,
 `String(scene.scene_id)` keys, `audioSpecs`/`scenes` count-matching, SSE contract, `renderJobs` Map
 shape, `/api/render` POST contract, concurrency/`--gl`/`--timeout` flags.
+
+---
+
+## Session — Remotion Lambda migration, Phase 1: S3 asset resolver
+**Date:** 2026-07-06
+
+### Why
+Local Remotion CLI rendering has hit hard disk and CPU ceilings on this Windows machine (see the
+`ENOSPC` disk-space discovery in the previous session — the machine's C: drive was down to ~1-2GB
+free, well under what a full render's `remotion/public/` bundle copy needs). Migrating to Remotion
+Lambda removes that ceiling entirely. This is Phase 1 of 4 — a pure refactor building the S3 asset
+resolver only, with no Lambda invocation and no actual upload yet, so it can be verified
+independently before any cloud render exists.
+
+### Premise correction, before building anything
+The task briefing referenced `audioMixer.js` / `soundLibrary.js` and assumed music/ambient/sting/
+overlay-sound audio was already wired into rendering. Neither file exists anywhere in the repo.
+Confirmed by direct code read: `Documentary.jsx` has exactly two `<Audio>` elements — per-scene
+narration and the global ExportPanel-uploaded narration track. `DEFAULT_AUDIO_MIX = { narration: 1.0,
+music: 0.12, ambient: 0.06 }` in `frameMath.js` is validation/UI metadata only for FineTuneStep's
+mixing sliders — `FineTuneStep.jsx` itself says outright *"Music/ambient tracks aren't wired into the
+pipeline yet — values are saved for a future phase."* `library/ambientIndex.json` (7 entries) is
+orphaned data nothing reads. `render.js` already says *"music and sound effects are handled in
+post-production."* Given this, Phase 1 builds the resolver generically enough to support a shared
+`library/<type>/<basename>` S3 key for when that feature ships, but adds no new wiring into
+`Documentary.jsx` and no new render-prop field for asset types the pipeline doesn't produce today —
+there's nothing to resolve a path FROM for those types yet.
+
+### Scheme deviation from the literal briefing (approved)
+The briefing's S3 key template put `real_footage` clips under `proj_<id>/clips/...` (project-scoped).
+Clips are actually a **shared, deduplicated** resource — `library/clips/` — reused across every
+project (the local resolver already passes `namespace=null` for clips for exactly this reason).
+Namespacing them per-project in S3 would re-upload the same clip library once per project. Clips
+(and, when built, library music/ambient/stings/overlay-sounds) key under the shared
+`library/<category>/<basename>` tier instead; `proj_<id>/<category>/<basename>` is reserved for
+genuinely per-project assets (image, audio).
+
+### Built
+- **`server/services/s3.js`** (new) — `getClient()` (lazily-constructed `S3Client` — see the crash
+  below for why it can't be eager), `uploadFile(localPath, s3Key)` (via `@aws-sdk/lib-storage`
+  `Upload`; unused until Phase 2), `getPublicUrl(s3Key)` (pure string interpolation, no client
+  needed — `https://<bucket>.s3.<region>.amazonaws.com/<key>`), `objectExists(s3Key)`
+  (`HeadObjectCommand`; unused until Phase 2). AWS config (`AWS_REGION`, `AWS_S3_BUCKET`,
+  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) read from the root `.env` only, same discipline as
+  `ANTHROPIC_API_KEY` — added as empty placeholders to `.env`, and to the new `.env.example`
+  (created this session; didn't exist before, so it now mirrors every existing key too).
+- **`server/services/renderAssets.js`** (new) — the single shared resolver,
+  `resolveRenderAssetUrl(rawPath, category, namespace)`. Pure string logic (no `fs`, no network):
+  strips any `http(s)://host:port` origin and any leading `/projects` or `/public` prefix, takes the
+  basename, and builds the key — `${namespace}/${category}/${basename}` when namespaced (namespace
+  is the already-`"proj_<id>"`-shaped projectId used everywhere else in this codebase, not
+  re-prefixed), `library/${category}/${basename}` when shared (namespace null/undefined). Returns
+  `getPublicUrl(key)`, or `null` for a falsy `rawPath` (not-generated-yet, same as the local
+  resolver's null-input case). Covered by `renderAssets.test.js` (plain-`assert` style, matching
+  `frameMath.test.js`'s convention) — every stored-path shape: stale `http://localhost` URL,
+  `/projects/...`, `/library/...`, `/public/...`, bare filename, trailing query string.
+- **`server/routes/render.js`** — added a `renderTarget` field to the `POST /` body, default
+  `'local'` (every existing caller omits it, so behavior is byte-for-byte unchanged for them).
+  `resolveAsset()` now branches: `'local'` keeps doing exactly what it did before (sync into
+  `remotion/public/<category>/`, return the bare staticFile()-ready path); `'lambda'` checks the
+  same local-file-existence signal (`fs.existsSync` — per Phase 1 scope, this checks existence, it
+  does not upload or check S3) but returns `resolveRenderAssetUrl(...)` instead, with no local sync
+  copy. Applies to image, secondary_image, cutaway_image, and audio the same way in both modes via
+  the top-level maps (`imagePaths`, `secondaryImagePaths`, `cutawayImagePaths`, `audioPaths` →
+  `audioSpecs[].narration.url`). Clips are the one asset type that must diverge by mode: in `local`
+  mode `clip.file` stays untouched (as before — `FootageScene.jsx` already self-resolves it via
+  `staticFile()` regardless of shape); in `lambda` mode `clip.file` **is** overwritten with the S3
+  URL, because a Lambda site's bundled `public/` has no equivalent of the local CLI's "sync this
+  project's clips fresh before every render" step — there's nothing for `staticFile()` to find, so
+  the actual URL has to travel in the prop. The `httpOffenders` guard was updated to allow
+  `https://` through (an S3 URL) while still flagging bare `http://` or any `localhost` substring —
+  the old version flagged *all* `http(s)://`, which would have wrongly rejected every legitimate S3
+  URL. The clip-file check within that guard only runs in `lambda` mode, for the same untouched-in-
+  local-mode reason above (a stale `http://localhost` clip.file is expected and harmless in local
+  mode; `FootageScene.jsx` never reads that URL directly).
+- **`.gitignore`** — added `remotion/public/images/` and `remotion/public/audio/` (the per-project
+  sync targets from the previous session's fix were never added; caught as untracked directories
+  while preparing this commit).
+
+### Bug caught before it shipped: eager S3Client construction crashed the whole server
+First implementation constructed `S3Client` at module load time in `s3.js`. The AWS SDK's
+`S3Client` constructor throws synchronously (`Error: Region is missing`) if `AWS_REGION` is unset —
+and since `render.js` requires `renderAssets.js` requires `s3.js` unconditionally, **the entire
+Express server crashed on startup** the moment these files existed, even for `renderTarget: 'local'`
+(the default, no-AWS-needed path) — reproduced live: `node index.js` printed the full startup log
+and then died with `Error: Region is missing` at `s3.js:10`. Fixed by making `S3Client` construction
+lazy (`getClient()`, called only from `uploadFile`/`objectExists`, both unused until Phase 2) and by
+making `getPublicUrl()` pure string interpolation with no client dependency at all. Confirmed fixed:
+server now starts cleanly with zero AWS env vars set.
+
+### Verified
+- `node server/services/renderAssets.test.js` — all assertions pass.
+- `renderTarget` omitted (default `'local'`): re-ran a render — `scenes.json`'s `imagePaths`/
+  `audioSpecs` still resolve to bare local staticFile paths exactly as before; scene's own
+  `image_path`/`audio_path` and `selectedClips[].file` remain untouched; render completes
+  successfully (`{"type":"done", ...}`).
+- `renderTarget: 'lambda'`: same request, only the new field added — `scenes.json`'s `imagePaths`
+  resolved to `https://<bucket>.s3.<region>.amazonaws.com/<projectId>/images/003.png`, `audioSpecs`
+  to the equivalent `.../audio/scene_003.mp3`, and — the key check — `selectedClips["001"].file`
+  resolved to `https://.../library/clips/<basename>` (shared tier, not project-namespaced,
+  confirming the approved clips-sharing deviation). Scene's own `image_path`/`audio_path` fields
+  still untouched, confirming the wizard-preservation design holds in both modes. `AWS_REGION`/
+  `AWS_S3_BUCKET` are still empty placeholders in this `.env`, so the actual render attempt failed at
+  the browser-fetch stage with `net::ERR_NAME_NOT_RESOLVED` against the resulting
+  `https://.s3..amazonaws.com/...` URL — expected and correct for Phase 1 (no bucket configured, no
+  upload has happened yet); the URL *shape* is what mattered here, not a successful fetch.
+- Missing-asset guard in `lambda` mode: attempted to repro by renaming a scene's audio file, but the
+  rename hit a Windows file-lock (`Access to the path is denied` — some other process had the file
+  open) and never actually took effect, so this specific run didn't exercise the missing-file branch
+  live. Not re-attempted — `lambda` mode's existence check is the identical `fs.existsSync` call
+  already exhaustively verified for `local` mode in the previous session, just gated behind the
+  `renderTarget` branch with no new logic of its own.
+
+### Files changed
+- `server/package.json` / `package-lock.json` — added `@aws-sdk/client-s3`, `@aws-sdk/lib-storage`.
+- `.env` — added empty `AWS_REGION`/`AWS_S3_BUCKET`/`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
+- `.env.example` (new) — mirrors every `.env` key with placeholder values (didn't exist before).
+- `server/services/s3.js` (new), `server/services/renderAssets.js` (new),
+  `server/services/renderAssets.test.js` (new).
+- `server/routes/render.js` — `renderTarget` toggle, lambda-mode branch in `resolveAsset()`, lambda-
+  mode `clip.file` resolution, `httpOffenders` guard allows `https://`.
+- `.gitignore` — `remotion/public/images/`, `remotion/public/audio/`.
+
+**Not changed:** `Documentary.jsx`, `FootageScene.jsx`, audio volume mix, `numberOfSharedAudioTags`,
+font loading, `TransitionSeries` structure, `String(scene.scene_id)` keys, `audioSpecs`/`scenes`
+count-matching, the actual `spawn()` call (still spawns the local CLI in both modes — Phase 4
+replaces this with a Lambda invocation), SSE contract, `renderJobs` Map shape.
+
+### What's next (Phase 2/3/4, not started)
+Phase 2: actually upload a project's referenced assets to S3 (wire `uploadFile`/`objectExists` in),
+decide the bucket's public-read vs. presigned-URL access policy. Phase 3/4: deploy a Remotion Lambda
+site + function, replace the `spawn('npx remotion render', ...)` call with a Lambda `renderMediaOnLambda`
+invocation when `renderTarget === 'lambda'`.

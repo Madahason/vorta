@@ -36,5 +36,10 @@ library/clips/*.webm
 library/clips/*.mov
 library/thumbnails/
 
+# Per-project image/audio files synced at runtime for CLI rendering (resolveRenderAssetPath
+# in server/routes/render.js) — regenerated fresh from projects/ on every render
+remotion/public/images/
+remotion/public/audio/
+
 # Claude Code internal state
 .claude/

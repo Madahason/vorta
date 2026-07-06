@@ -3,6 +3,7 @@ const path   = require('path');
 const fs     = require('fs');
 const os     = require('os');
 const { spawn } = require('child_process');
+const { resolveRenderAssetUrl } = require('../services/renderAssets');
 
 // In-memory render job store — keyed by projectId
 const renderJobs = new Map();
@@ -135,7 +136,15 @@ function parseProgress(line, job) {
 
 // ── POST / — start render ──────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const { projectId, scenes, selectedClips, audio } = req.body;
+  // renderTarget: 'local' (default, unchanged behavior — every existing caller omits this
+  // field) or 'lambda' — Phase 1 of the Remotion Lambda migration. 'lambda' switches every
+  // resolveAsset() call below from the local staticFile sync (resolveRenderAssetPath) to
+  // computing an S3 URL (resolveRenderAssetUrl) instead. The local CLI is still spawned
+  // either way in this phase — no Lambda invocation yet (that's Phase 4) — so 'lambda' is
+  // for inspecting the resulting scenes.json's asset URLs, not for producing a working
+  // local render (real_footage clips in particular won't resolve locally in this mode,
+  // since staticFile() has nothing synced to find — see the clips block below).
+  const { projectId, scenes, selectedClips, audio, renderTarget = 'local' } = req.body;
 
   if (!projectId || !Array.isArray(scenes) || !scenes.length) {
     return res.status(400).json({ error: 'projectId and scenes array are required' });
@@ -173,6 +182,19 @@ router.post('/', async (req, res) => {
 
   function resolveAsset(rawPath, category, namespace, kind, sceneId) {
     if (!rawPath) return null;
+
+    if (renderTarget === 'lambda') {
+      // Same "does the source file actually exist" signal as local mode, but no local
+      // sync copy — a Lambda render will fetch this from S3 (Phase 2 uploads it there;
+      // Phase 4 invokes Lambda), never from remotion/public/ on this machine.
+      const abs = toAbsoluteSourcePath(rawPath);
+      if (!abs || !fs.existsSync(abs)) {
+        missingAssets.push({ scene_id: sceneId, kind, path: rawPath });
+        return null;
+      }
+      return resolveRenderAssetUrl(rawPath, category, namespace);
+    }
+
     const resolved = resolveRenderAssetPath(toAbsoluteSourcePath(rawPath), category, namespace);
     if (!resolved) {
       missingAssets.push({ scene_id: sceneId, kind, path: rawPath });
@@ -217,13 +239,32 @@ router.post('/', async (req, res) => {
     if (aud) audioPaths[scene.scene_id] = aud;
   });
 
-  // Clips: run resolveAsset purely for its sync-to-disk + validation side effect —
-  // namespace=null preserves the existing de-duplicated sync into remotion/public/clips/
-  // (library filenames are already globally unique, unlike per-project
-  // "scene_001.jpg"-style image/audio filenames). clip.file itself is left untouched.
-  Object.entries(selectedClips || {}).forEach(([sceneId, clip]) => {
-    if (clip?.file) resolveAsset(clip.file, 'clips', null, 'clip', sceneId);
-  });
+  // Clips — namespace=null in both modes: clips live in one shared, deduplicated
+  // library/clips/ folder reused across every project, never namespaced per-project
+  // (unlike per-project "scene_001.jpg"-style image/audio filenames).
+  //
+  // local mode: run resolveAsset purely for its sync-to-disk + validation side effect;
+  // clip.file itself is left untouched because FootageScene.jsx already derives the
+  // filename and calls staticFile() itself regardless of clip.file's shape.
+  //
+  // lambda mode: that self-sufficient local resolution has nothing to lean on — a Lambda
+  // site's bundled public/ can't contain an arbitrary, per-render clip selection the way
+  // remotion/public/clips/ gets freshly synced before each local CLI run — so clip.file
+  // MUST be overwritten with the real S3 URL here.
+  let renderClips;
+  if (renderTarget === 'lambda') {
+    renderClips = Object.fromEntries(
+      Object.entries(selectedClips || {}).map(([sceneId, clip]) => [
+        sceneId,
+        clip?.file ? { ...clip, file: resolveAsset(clip.file, 'clips', null, 'clip', sceneId) } : clip,
+      ])
+    );
+  } else {
+    Object.entries(selectedClips || {}).forEach(([sceneId, clip]) => {
+      if (clip?.file) resolveAsset(clip.file, 'clips', null, 'clip', sceneId);
+    });
+    renderClips = selectedClips;
+  }
 
   // Uploaded narration audio (ExportPanel upload flow): this field isn't read directly
   // by the Fine-Tune UI elsewhere, so it's safe to resolve and overwrite in place.
@@ -280,26 +321,40 @@ router.post('/', async (req, res) => {
     imagePaths,
     secondaryImagePaths,
     cutawayImagePaths,
-    selectedClips,
+    selectedClips: renderClips,
     audio:                audioProps,
     audioSpecs,
   };
 
-  // Final guard: no resolved asset field should ever contain an HTTP/localhost URL at
+  // Final guard: no resolved asset field should ever contain a local/dev-server URL at
   // this point. If one slipped through, fail loudly instead of silently spawning a
-  // render that will hang the same way this whole fix was written to prevent.
+  // render that will hang the same way this whole fix was written to prevent. Flags
+  // plain "http://" (this app never serves anything else over http) and any "localhost"
+  // substring (belt-and-suspenders in case one somehow appeared behind https); does NOT
+  // flag "https://" generally — a Lambda-mode S3 URL (https://<bucket>.s3...) is correct
+  // and must pass through untouched.
   const httpOffenders = [];
   const checkHttp = (label, value) => {
-    if (typeof value === 'string' && /^https?:\/\//i.test(value)) httpOffenders.push(`${label}: ${value}`);
+    if (typeof value === 'string' && (/^http:\/\//i.test(value) || /localhost/i.test(value))) {
+      httpOffenders.push(`${label}: ${value}`);
+    }
   };
   Object.entries(imagePaths).forEach(([sceneId, v]) => checkHttp(`scene ${sceneId} imagePaths`, v));
   Object.entries(secondaryImagePaths).forEach(([sceneId, v]) => checkHttp(`scene ${sceneId} secondaryImagePaths`, v));
   Object.entries(cutawayImagePaths).forEach(([sceneId, v]) => checkHttp(`scene ${sceneId} cutawayImagePaths`, v));
   Object.entries(audioPaths).forEach(([sceneId, v]) => checkHttp(`scene ${sceneId} audioPaths`, v));
+  // clip.file is only checked in lambda mode — in local mode it's intentionally left
+  // untouched (may legitimately still carry a stale http://localhost URL from an older
+  // scenes.json) because FootageScene.jsx never uses that field's URL directly; it only
+  // extracts the basename and calls staticFile() itself. In lambda mode renderClips[].file
+  // WAS just overwritten with the real S3 URL above, so it's meaningful to check here.
+  if (renderTarget === 'lambda') {
+    Object.entries(renderClips).forEach(([sceneId, clip]) => checkHttp(`clip ${sceneId} file`, clip?.file));
+  }
   checkHttp('uploaded narration audio.path', audioProps?.path);
 
   if (httpOffenders.length > 0) {
-    const message = `Render aborted: asset field(s) resolved to an HTTP/localhost URL instead of a local staticFile path: ${httpOffenders.join('; ')}`;
+    const message = `Render aborted: asset field(s) resolved to a local/dev-server URL instead of a valid ${renderTarget === 'lambda' ? 'S3' : 'local staticFile'} path: ${httpOffenders.join('; ')}`;
     console.error(`[render] ${message}`);
     renderJobs.set(projectId, {
       process:    null,
