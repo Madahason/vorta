@@ -4879,3 +4879,110 @@ Phase 2: actually upload a project's referenced assets to S3 (wire `uploadFile`/
 decide the bucket's public-read vs. presigned-URL access policy. Phase 3/4: deploy a Remotion Lambda
 site + function, replace the `spawn('npx remotion render', ...)` call with a Lambda `renderMediaOnLambda`
 invocation when `renderTarget === 'lambda'`.
+
+---
+
+## Session — Remotion Lambda migration, Phase 2: S3 asset upload before render
+**Date:** 2026-07-06
+
+### Scope
+Phase 2 of 4. Phase 1 computed the S3 URL/key an asset WILL have; this phase makes those objects
+actually exist in S3 before a `renderTarget: 'lambda'` render is allowed to proceed. Still no Lambda
+invocation (Phase 4) and — per this session's explicit test-scope decision — no requirement for a
+real bucket/IAM to exist yet either (see "Testing scope" below). `renderTarget: 'local'` (the
+default, every existing caller) is completely unaffected.
+
+### Built
+- **`server/services/renderAssets.js`** — extracted the key-building logic that used to live inline
+  inside `resolveRenderAssetUrl` into a new exported `buildAssetKey(rawPath, category, namespace)`;
+  `resolveRenderAssetUrl` is now just `getPublicUrl(buildAssetKey(...))`. Pure refactor, zero
+  behavior change (re-ran `renderAssets.test.js` — all 9 assertions still pass unmodified). This is
+  what makes the upload key and the resolved-URL key structurally unable to diverge: `render.js`'s
+  upload queue and its `resolveRenderAssetUrl` call for the *same* asset both go through this one
+  function with the *same* arguments.
+- **`server/services/s3Sync.js`** (new) — `syncAssetsToS3(assets, { onProgress, uploadFile,
+  objectExists })`:
+  - `assets: [{ localPath, key, shared, sceneId, kind }]`. Deduplicates by `key` first (two scenes
+    can reference the identical clip or narration file).
+  - `shared: true` (clips today; the shared `library/<type>/` tier is ready for music/ambient/
+    stings/overlay-sounds whenever that feature ships) — `objectExists(key)` gates the upload;
+    already-present objects are skipped. This is what stops every render from re-pushing the whole
+    deduplicated clip library.
+  - `shared: false` (per-project image/audio/uploaded-narration) — always uploaded/overwritten, no
+    existence pre-check, since these are project-specific and may have regenerated.
+  - Uploads run through a small internal `mapWithConcurrency` batch runner (limit 6) — no new
+    dependency for this.
+  - Each successful `uploadFile` is immediately followed by an `objectExists` re-check (the
+    "post-upload validation" from the brief) — a false there is treated as a failure, not trusted
+    silently.
+  - Failures are collected, not thrown — one bad asset doesn't stop the rest of the batch from being
+    attempted. Returns `{ failures, uploadedCount, skippedCount, totalReferenced }`.
+  - `uploadFile`/`objectExists` are injectable (default to the real `s3.js` functions) specifically
+    so the orchestration logic — dedup, shared-vs-project branching, concurrency, failure collection,
+    `onProgress` — is testable with in-memory fakes and zero AWS dependency. Covered by
+    `s3Sync.test.js` (9 cases: key dedup, shared-skip, shared-upload-when-absent, project-always-
+    uploads-even-if-"exists", one-failure-doesn't-abort-the-rest, bounded concurrency with an
+    observed-peak assertion, `onProgress` call count/values, and the empty-input no-op case).
+- **`server/routes/render.js`**:
+  - `resolveAsset`'s `lambda` branch now also pushes `{ localPath: abs, key: buildAssetKey(...),
+    shared: !namespace, sceneId, kind }` onto a closure-scoped `uploadQueue` (always empty in `local`
+    mode) — the exact same `key` it hands to `resolveRenderAssetUrl` for the URL that ends up in
+    `scenes.json`.
+  - Restructured the end of the handler: `job` creation and `res.json({started:true})` now happen
+    *before* the upload (previously `startAttempt()` ran and the response went out in the same
+    tick, right after — no upload existed to wait on). The HTTP response is never blocked on the
+    upload; the client can start `GET /progress/:projectId` immediately and observe the upload via
+    the same SSE channel the render itself already streams progress through. `local` mode (and
+    `lambda` mode with an empty `uploadQueue`) falls straight through to `startAttempt()`, identical
+    to pre-Phase-2 behavior.
+  - `lambda` mode with a non-empty `uploadQueue`: `syncAssetsToS3(...)` runs (not awaited by the HTTP
+    response, which already went out), broadcasting `{ type: 'progress', percent, stage: 'uploading'
+    }` via the existing SSE channel. Any failure aborts exactly like the existing
+    `missingAssets`/`httpOffenders` checks — `job.status = 'error'`, SSE `{ type: 'error', message }`
+    naming every failed key + scene + underlying reason, and the CLI is never spawned. On success,
+    logs a `{ type: 'log' }` message and calls `startAttempt()` — **the local CLI is still spawned
+    after a successful upload** (not short-circuited), since Phase 1 already confirmed the local
+    CLI's headless Chrome will attempt to fetch arbitrary `https://` URLs, so this validates the real
+    S3 asset path end-to-end for free once a real bucket exists, at no extra engineering cost.
+  - Added one additive field to the progress SSE shape: `stage: 'uploading' | 'rendering'`, set on
+    `job.progress` and included in both the live `broadcast()` calls and the `GET /progress`
+    reconnect snapshot. `type`/`percent`/`frame`/`totalFrames` are byte-for-byte unchanged — a
+    consumer reading only those still works exactly as before.
+
+### Testing scope — explicitly deferred a real S3 round-trip to Phase 3
+No AWS bucket or IAM credentials exist yet for this project (`.env`'s `AWS_*` values are still empty
+placeholders from Phase 1). Rather than block Phase 2 on provisioning those, verified two things
+instead, per this session's agreed scope:
+1. `node server/services/s3Sync.test.js` — all 9 assertions pass against injected fakes (no network).
+2. Live end-to-end against the running dev server: a `renderTarget: 'lambda'` POST with real local
+   scene data (missing/invalid AWS credentials, since none are configured) aborted in ~2 seconds
+   with a clean SSE error — `{"type":"error","message":"Render aborted: failed to upload asset(s) to
+   S3: <projectId>/images/003.png (scene 003): Region is missing; <projectId>/audio/scene_003.mp3
+   (scene 003): Region is missing"}` — no crash, no hang, no CLI process ever spawned (confirmed
+   `job.process` stayed `null`). A parallel `renderTarget: 'local'` request against the same live
+   server completed normally end-to-end, confirming zero regression from the handler restructuring.
+A real successful S3 upload (correct bucket policy, IAM permissions, actual bytes landing at the
+expected key) is deferred to Phase 3, once a bucket + IAM role actually exist.
+
+### Files changed
+- `server/services/renderAssets.js` — `buildAssetKey` extracted and exported; `resolveRenderAssetUrl`
+  now composed from it.
+- `server/services/s3Sync.js` (new), `server/services/s3Sync.test.js` (new).
+- `server/routes/render.js` — `uploadQueue` collection in `resolveAsset`'s lambda branch,
+  `res.json`-before-upload restructuring, `syncAssetsToS3` wiring with SSE progress/error handling,
+  additive `stage` field on progress events (both live broadcasts and the reconnect snapshot).
+
+**Not changed:** `Documentary.jsx`, `FootageScene.jsx`, audio volume mix, `numberOfSharedAudioTags`,
+font loading, `TransitionSeries` structure, `String(scene.scene_id)` keys, `audioSpecs`/`scenes`
+count-matching, the core SSE contract (`type`/`percent`/`frame`/`totalFrames` — `stage` is additive
+only), `renderJobs` Map shape, the `/api/render` POST contract, concurrency/`--gl`/`--timeout` flags.
+Library music/ambient/stings/overlay-sounds uploads are still not wired anywhere — nothing in
+`render.js` calls `resolveAsset` for those types yet (`Documentary.jsx` doesn't render them), so
+nothing for those types ever reaches `uploadQueue`; `s3Sync.js` itself has no category-specific logic
+at all, so it's already generically ready for whenever that feature ships.
+
+### What's next (Phase 3/4, not started)
+Phase 3: provision a real S3 bucket + IAM role, decide public-read vs. presigned-URL access policy,
+verify a real end-to-end upload + local-CLI-fetches-from-S3 render. Phase 4: deploy a Remotion Lambda
+site + function, replace the `spawn('npx remotion render', ...)` call with a Lambda
+`renderMediaOnLambda` invocation when `renderTarget === 'lambda'`.

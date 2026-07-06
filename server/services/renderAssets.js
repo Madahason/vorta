@@ -1,12 +1,17 @@
 const path = require('path');
 const { getPublicUrl } = require('./s3');
 
-// resolveRenderAssetUrl — the ONE conversion point for every asset type (image, audio,
+// buildAssetKey — the ONE place the S3 key gets built for every asset type (image, audio,
 // clip, uploaded narration, and — once that feature ships — library music/ambient/
-// stings/overlay-sounds) that a Lambda render needs resolved to an S3 URL.
+// stings/overlay-sounds). Shared by resolveRenderAssetUrl (below, computes the URL a
+// render is told to fetch from) and server/services/s3Sync.js's upload step (Phase 2,
+// computes the key an asset actually gets uploaded to). Both MUST produce the identical
+// key for the identical input, or an upload could land at a different key than the URL a
+// render was told to fetch — this function existing as the single source of truth for
+// that string is what makes that impossible.
 //
 // Lambda functions can't reach localhost or local disk, so every asset a render
-// references must live in S3. This function computes the S3 URL an asset WILL have — it
+// references must live in S3. This function computes the key/URL an asset WILL have — it
 // does not upload anything and does not check the object exists (that's Phase 2's
 // uploadFile()/objectExists(), server/services/s3.js). Pure string logic: no fs, no
 // network access, so it's testable without AWS credentials — see renderAssets.test.js.
@@ -35,18 +40,23 @@ const { getPublicUrl } = require('./s3');
 //
 // Returns null if rawPath is falsy (nothing to resolve — same "not generated yet" case
 // the local resolver treats as a no-op, not a validation failure).
-function resolveRenderAssetUrl(rawPath, category, namespace) {
+function buildAssetKey(rawPath, category, namespace) {
   if (!rawPath) return null;
 
   const withoutOrigin = rawPath.replace(/^https?:\/\/[^/]+/, '');
   const withoutPrefix = withoutOrigin.replace(/^\/(projects|public)\//, '');
   const basename       = path.basename(withoutPrefix.split('?')[0]);
 
-  const key = namespace
+  return namespace
     ? `${namespace}/${category}/${basename}`
     : `library/${category}/${basename}`;
-
-  return getPublicUrl(key);
 }
 
-module.exports = { resolveRenderAssetUrl };
+// resolveRenderAssetUrl — same null-passthrough contract as buildAssetKey; see its
+// comment above for the rawPath/category/namespace parameter meanings.
+function resolveRenderAssetUrl(rawPath, category, namespace) {
+  const key = buildAssetKey(rawPath, category, namespace);
+  return key ? getPublicUrl(key) : null;
+}
+
+module.exports = { resolveRenderAssetUrl, buildAssetKey };

@@ -3,7 +3,8 @@ const path   = require('path');
 const fs     = require('fs');
 const os     = require('os');
 const { spawn } = require('child_process');
-const { resolveRenderAssetUrl } = require('../services/renderAssets');
+const { resolveRenderAssetUrl, buildAssetKey } = require('../services/renderAssets');
+const { syncAssetsToS3 } = require('../services/s3Sync');
 
 // In-memory render job store — keyed by projectId
 const renderJobs = new Map();
@@ -180,6 +181,14 @@ router.post('/', async (req, res) => {
   // instead of hanging at some non-deterministic percentage.
   const missingAssets = [];
 
+  // Phase 2: every asset resolved in lambda mode also gets queued here for
+  // syncAssetsToS3 (server/services/s3Sync.js), which runs once, after all resolution is
+  // done and validation has passed, before the render is allowed to start. `key` comes
+  // from buildAssetKey() — the exact same call resolveRenderAssetUrl makes internally —
+  // so the URL a render is told to fetch from and the key an asset gets uploaded to can
+  // never diverge. Always empty in local mode.
+  const uploadQueue = [];
+
   function resolveAsset(rawPath, category, namespace, kind, sceneId) {
     if (!rawPath) return null;
 
@@ -192,6 +201,8 @@ router.post('/', async (req, res) => {
         missingAssets.push({ scene_id: sceneId, kind, path: rawPath });
         return null;
       }
+      const key = buildAssetKey(rawPath, category, namespace);
+      uploadQueue.push({ localPath: abs, key, shared: !namespace, sceneId, kind });
       return resolveRenderAssetUrl(rawPath, category, namespace);
     }
 
@@ -415,9 +426,16 @@ router.post('/', async (req, res) => {
       .trim();
   }
 
+  // Phase 2: 'stage' is an additive field on job.progress/SSE progress events — 'uploading'
+  // while syncAssetsToS3 runs (lambda mode only, and only when there's something to
+  // upload), 'rendering' for the CLI progress this job object already tracked before
+  // Phase 2 existed. Existing consumers reading only percent/frame/totalFrames/type are
+  // unaffected; the SSE contract's core shape is unchanged.
+  const initialStage = renderTarget === 'lambda' && uploadQueue.length > 0 ? 'uploading' : 'rendering';
+
   const job = {
     process:    null,
-    progress:   { percent: 0, frame: 0, totalFrames: 0 },
+    progress:   { percent: 0, frame: 0, totalFrames: 0, stage: initialStage },
     status:     'rendering',
     outputPath,
     stderr:     '',
@@ -430,11 +448,13 @@ router.post('/', async (req, res) => {
     const lines = chunk.toString().split(/\r?\n/);
     lines.forEach(line => {
       if (parseProgress(line, job)) {
+        job.progress.stage = 'rendering';
         broadcast(job, {
           type:        'progress',
           percent:     job.progress.percent,
           frame:       job.progress.frame,
           totalFrames: job.progress.totalFrames,
+          stage:       'rendering',
         });
       }
     });
@@ -508,9 +528,63 @@ router.post('/', async (req, res) => {
     });
   }
 
-  startAttempt(concurrency, false);
-
+  // Respond immediately — same principle as the CLI spawn below already followed
+  // (fire-and-stream, never block the HTTP response on the actual work): the client is
+  // free to start GET /progress/:projectId right away and see whichever stage is
+  // actually happening (uploading, then rendering) via the SAME job object and SSE
+  // channel, instead of the response hanging until an upload that can take a while
+  // finishes.
   res.json({ started: true, projectId });
+
+  // Local mode, or lambda mode with nothing queued to upload (e.g. every referenced
+  // asset was null/not-yet-generated): go straight to rendering, exactly as before Phase 2.
+  if (renderTarget !== 'lambda' || uploadQueue.length === 0) {
+    startAttempt(concurrency, false);
+    return;
+  }
+
+  // Phase 2: lambda mode with assets to upload — sync to S3 first, awaited, before the
+  // render is allowed to start (still the local CLI in this phase; Phase 4 replaces this
+  // with the actual Lambda invocation). On any upload failure, abort exactly like the
+  // missingAssets/httpOffenders checks above: mark the job errored, broadcast SSE
+  // { type: 'error' } naming every failed asset, never spawn anything.
+  broadcast(job, { type: 'log', message: `Uploading ${uploadQueue.length} asset(s) to S3...` });
+  syncAssetsToS3(uploadQueue, {
+    onProgress: (completed, total) => {
+      const percent = Math.round((completed / total) * 100);
+      job.progress = { percent, frame: 0, totalFrames: 0, stage: 'uploading' };
+      broadcast(job, { type: 'progress', percent, frame: 0, totalFrames: 0, stage: 'uploading' });
+    },
+  }).then(({ failures, uploadedCount, skippedCount }) => {
+    if (job.cancelled) return;
+
+    if (failures.length > 0) {
+      const message = `Render aborted: failed to upload asset(s) to S3: ${
+        failures.map(f => `${f.key}${f.sceneId ? ` (scene ${f.sceneId})` : ''}: ${f.error}`).join('; ')
+      }`;
+      console.error(`[render] ${message}`);
+      job.status = 'error';
+      job.stderr = message;
+      broadcast(job, { type: 'error', message });
+      job.sseClients.forEach(c => { try { c.end(); } catch {} });
+      job.sseClients.clear();
+      return;
+    }
+
+    console.log(`[render] S3 upload complete: ${uploadedCount} uploaded, ${skippedCount} already present — starting render`);
+    broadcast(job, { type: 'log', message: 'S3 upload complete — starting render.' });
+    job.progress = { percent: 0, frame: 0, totalFrames: 0, stage: 'rendering' };
+    startAttempt(concurrency, false);
+  }).catch(err => {
+    if (job.cancelled) return;
+    const message = `Render aborted: S3 upload failed: ${err.message}`;
+    console.error(`[render] ${message}`);
+    job.status = 'error';
+    job.stderr = message;
+    broadcast(job, { type: 'error', message });
+    job.sseClients.forEach(c => { try { c.end(); } catch {} });
+    job.sseClients.clear();
+  });
 });
 
 // ── GET /progress/:projectId — SSE stream ─────────────────────────────────────
@@ -547,6 +621,7 @@ router.get('/progress/:projectId', (req, res) => {
     percent:     job.progress.percent,
     frame:       job.progress.frame,
     totalFrames: job.progress.totalFrames,
+    stage:       job.progress.stage,
   });
 
   job.sseClients.add(res);
