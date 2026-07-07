@@ -15,7 +15,7 @@ const { callClaude } = require('./claude');
 const clipStore = require('./clipStore');
 
 const LIBRARY_CLIPS_DIR  = path.resolve(__dirname, '../../library/clips');
-const REMOTION_CLIPS_DIR = path.resolve(__dirname, '../../remotion/public/clips');
+const REMOTION_CLIPS_DIR = path.resolve(__dirname, '../../remotion/localAssets/clips');
 
 [LIBRARY_CLIPS_DIR, REMOTION_CLIPS_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });

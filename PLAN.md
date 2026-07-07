@@ -4986,3 +4986,102 @@ Phase 3: provision a real S3 bucket + IAM role, decide public-read vs. presigned
 verify a real end-to-end upload + local-CLI-fetches-from-S3 render. Phase 4: deploy a Remotion Lambda
 site + function, replace the `spawn('npx remotion render', ...)` call with a Lambda
 `renderMediaOnLambda` invocation when `renderTarget === 'lambda'`.
+
+---
+
+## Session — Lambda migration: exclude asset library from the Lambda site bundle
+**Date:** 2026-07-07
+
+### Problem
+While preparing the first `remotion lambda sites create` deploy, the site bundle came out at
+~1.7GB and failed to upload. A site bundle should be a few MB — composition code, fonts, small
+static UI assets. It was never supposed to contain per-project or library media at all.
+
+### Root cause
+`remotion/public/` — the directory `@remotion/bundler`'s `bundle()` copies wholesale into every
+render bundle (confirmed by reading `bundle.js`/`copy-dir.js` back in the Phase 1 session) — is
+ALSO the exact directory the earlier local-render-crash fix (see the "single asset resolver,
+staticFile() sync" session) had been syncing every locally-rendered project's images/audio into,
+plus the entire shared clip library. Measured before touching anything:
+`remotion/public/clips/` 1.1GB (41 files), `remotion/public/images/` 509MB (73 files),
+`remotion/public/audio/` 22MB (161 files) — **~1.6GB total**, matching the failed bundle almost
+exactly. `bundle()` doesn't distinguish "local CLI render" from "Lambda site create" — whatever's
+in `remotion/public/` at bundle time goes into whichever bundle is being built, so the local-only
+sync content was riding along into the Lambda site bundle too.
+
+### Fix — relocate, don't filter
+Confirmed (by reading `@remotion/renderer`'s `options/public-dir.js` and `@remotion/lambda`'s
+`sites/create.js`) that both `remotion render` and `remotion lambda sites create` support a
+`--public-dir <path>` flag that redirects which folder gets bundled as "public," independent of
+the project's default `<root>/public`. That made relocation — not an ignore filter — the clean
+fix, per the task's own preference:
+
+- Moved `remotion/public/{clips,images,audio}/` → a new sibling directory
+  `remotion/localAssets/{clips,images,audio}/` (same-filesystem rename — no byte copying despite
+  the size). `remotion/public/` is now empty, so `remotion lambda sites create` (no flag needed,
+  since empty-by-default is the actual fix) will bundle almost nothing.
+- `server/routes/render.js`: renamed `REMOTION_PUBLIC_DIR` → `LOCAL_ASSETS_DIR` (now pointing at
+  `remotion/localAssets`); added `--public-dir <LOCAL_ASSETS_DIR>` to `buildRenderCommand()` so
+  the **local** CLI's own bundling — which is what actually makes `staticFile()` resolve
+  anything — reads from the new location instead of the now-empty `remotion/public/`. Applies
+  regardless of `renderTarget` (harmless for `lambda` mode, whose assets come from S3 URLs, not
+  `staticFile()`, and never touch this directory at all).
+- Every other local-only clip sync point got the same redirect: `server/scripts/startup.js`
+  (`ensureDirectories`, `syncClipsToRemotion`), `server/routes/library.js`
+  (`syncSingleClipToRemotion`), `server/services/stockFootage.js`, and `server/services/autoClipper.js`
+  (dead code — the whole YouTube-clip system is disabled inside a block comment — updated anyway
+  for consistency, not functional need).
+- `server/index.js`: the `/images`/`/audio` Express static routes (serving the Fine-Tune live
+  `<Player>` preview embed, established in the earlier local-render-crash-fix session) now read
+  from `remotion/localAssets/images|audio` instead of `remotion/public/images|audio`. `/clips` is
+  untouched — it already served `library/clips/` directly, never `remotion/public/clips/`.
+- `.gitignore`: replaced the three `remotion/public/{clips,images,audio}` rules with one
+  `remotion/localAssets/` rule (wholesale — the old `remotion/public/clips/.gitkeep` is gone too;
+  every sync function already `mkdirSync(recursive)`s its target on demand, so a tracked
+  `.gitkeep` isn't functionally needed at the new location).
+
+### A self-inflicted wrinkle during implementation
+Left the dev server (nodemon, auto-reload) running while editing the five files above one at a
+time. Between edits, nodemon restarted the server using **partially-updated** code more than
+once — an intermediate reload ran the not-yet-fixed `startup.js` (still pointing at
+`remotion/public/clips`) and re-synced the entire clip library right back into the old location,
+regenerating the 1.1GB directory I'd just moved away. Caught via `git status` showing
+`remotion/public/clips/*.mp4` files as untracked again after all edits were supposedly done.
+Deleted it a second time once every touch point was confirmed consistent, then let nodemon
+reload on the final, complete code and re-verified `remotion/public/` stayed empty afterward — no
+lingering effect, but worth noting for next time: batch multi-file refactors like this against a
+stopped server, or expect intermediate reloads to reintroduce exactly what's being removed.
+
+### Verified
+- `remotion/public/` size after the fix: **0 bytes** (confirmed via `du -sh` immediately after the
+  move, and again after the final server reload settled on the fully-updated code).
+- `local` mode: a real render (image + audio + a `real_footage` scene with a `selectedClips`
+  entry) completed successfully end-to-end through the new `--public-dir`-redirected local CLI
+  bundling; `ffprobe`-valid H.264 video + AAC audio output. Confirms `staticFile()` still resolves
+  clips/images/audio correctly from the relocated directory.
+- `lambda` mode: unaffected, as expected — `resolveAsset`'s lambda branch never touched
+  `REMOTION_PUBLIC_DIR`/`LOCAL_ASSETS_DIR` in the first place (S3-only resolution). Re-ran a
+  `renderTarget: 'lambda'` request and confirmed the resolved keys are still correctly
+  per-project-namespaced (`<projectId>/images/...`, `<projectId>/audio/...`); it failed only on
+  `AWS_S3_BUCKET` still being empty in `.env` (Phase 3 territory, unrelated to this fix).
+
+### Files changed
+- `server/routes/render.js` — `REMOTION_PUBLIC_DIR` → `LOCAL_ASSETS_DIR` (new path), `--public-dir`
+  flag added to `buildRenderCommand()`, updated comments.
+- `server/scripts/startup.js`, `server/routes/library.js`, `server/services/stockFootage.js`,
+  `server/services/autoClipper.js` — clip sync destination redirected to
+  `remotion/localAssets/clips`.
+- `server/index.js` — `/images`/`/audio` static routes redirected to `remotion/localAssets/`.
+- `.gitignore` — `remotion/localAssets/` replaces the three old `remotion/public/{clips,images,audio}`
+  rules.
+- Physically relocated `remotion/public/{clips,images,audio}/` → `remotion/localAssets/{clips,images,audio}/`
+  on disk (not itself a tracked change — these were already gitignored content).
+
+**Not changed:** `Documentary.jsx`, `FootageScene.jsx`, audio volume mix, `numberOfSharedAudioTags`,
+font loading (`Root.jsx` fonts stay at module level, no `localStorage` in any composition file —
+untouched either way), `TransitionSeries` structure, `String(scene.scene_id)` keys,
+`audioSpecs`/`scenes` count-matching, the Phase 1/2 S3 resolver/upload logic (`renderAssets.js`,
+`s3Sync.js`, `s3.js` — none of it references `remotion/public/` or `LOCAL_ASSETS_DIR` at all), the
+already-deployed Lambda function (this fix only concerns the site bundle, a separate deploy
+artifact). Did not run `remotion lambda sites create` — left for the user to run with
+`--region=eu-central-1`.

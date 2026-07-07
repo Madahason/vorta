@@ -11,18 +11,32 @@ const renderJobs = new Map();
 
 // ── path helpers ───────────────────────────────────────────────────────────────
 
-const PROJECT_ROOT       = path.resolve(__dirname, '../..');
-const REMOTION_PUBLIC_DIR = path.resolve(__dirname, '../../remotion/public');
+const PROJECT_ROOT     = path.resolve(__dirname, '../..');
+
+// LOCAL-ONLY sync target for local CLI rendering — NOT remotion/public/. Remotion's own
+// bundler (@remotion/bundler's bundle.js, used by both `remotion render` and
+// `remotion lambda sites create`) always copies whatever directory is configured as the
+// "public dir" into the render bundle wholesale. remotion/public/ is what
+// `lambda sites create` bundles by default, and that bundle gets uploaded to S3 as the
+// Lambda "site" — so anything synced there (per-project images/audio, the shared clip
+// library) bloated that site bundle to ~1.6GB (a site bundle should be a few MB of
+// composition code). Lambda renders don't need any of this synced locally anyway — they
+// fetch images/audio/clips from S3 via the Phase 1/2 resolver (renderAssets.js/s3Sync.js).
+// So local-only sync now targets this sibling directory instead, and buildRenderCommand()
+// below passes --public-dir pointing at it so the LOCAL CLI's own bundling (which is what
+// makes staticFile() resolve anything) still finds these files — same mechanism, just
+// redirected to a source directory that never gets bundled for Lambda.
+const LOCAL_ASSETS_DIR = path.resolve(__dirname, '../../remotion/localAssets');
 
 // ── resolveRenderAssetPath — the ONE conversion point for every asset type (image,
-// audio, clip, uploaded narration) that reaches the Remotion CLI.
+// audio, clip, uploaded narration) that reaches the Remotion CLI in local mode.
 //
 // WHY NOT HTTP URLs: passing http://localhost:PORT/... URLs made headless Chrome fetch
 // every image/audio file, frame after frame, from the same Express server that's also
 // serving the rest of the app. Under load a fetch stalls, delayRender() hangs, and the
 // CLI's --timeout kills the ENTIRE render — at a different % every run depending on
 // which fetch happened to stall. This is exactly the bug class already fixed for
-// real_footage clips (see FootageScene.jsx) by copying the file into remotion/public/
+// real_footage clips (see FootageScene.jsx) by copying the file into a public-style dir
 // and loading it through Remotion's OWN bundle server via staticFile() instead.
 //
 // WHY NOT absolute filesystem paths: already tried and rejected (see PLAN.md Session
@@ -30,14 +44,15 @@ const REMOTION_PUBLIC_DIR = path.resolve(__dirname, '../../remotion/public');
 // refuses it ("Can only download URLs starting with http:// or https://").
 //
 // So every asset type gets the same treatment as clips: copy into
-// remotion/public/<category>/ and return the BARE relative path staticFile() expects
+// LOCAL_ASSETS_DIR/<category>/ and return the BARE relative path staticFile() expects
 // (e.g. "images/proj_x__scene_001.jpg"). This must stay bare (no leading slash) because
 // only staticFile(), called from WITHIN the Remotion composition, knows the right prefix
-// to add — confirmed by reading @remotion/bundler's bundle.js: it copies remotion/public/
-// into the bundle at a "/public" mount (window.remotion_staticBase = "/public", injected
-// into the render's HTML) and staticFile() is the only thing that reads that global to
-// prepend it. A hand-built "/images/..." URL 404s during CLI render for exactly that
-// reason — it's missing the "/public" prefix Remotion actually serves from.
+// to add — confirmed by reading @remotion/bundler's bundle.js: it copies whatever
+// directory is configured as the public dir into the bundle at a "/public" mount
+// (window.remotion_staticBase = "/public", injected into the render's HTML) and
+// staticFile() is the only thing that reads that global to prepend it. A hand-built
+// "/images/..." URL 404s during CLI render for exactly that reason — it's missing the
+// "/public" prefix Remotion actually serves from.
 //
 // Because this value is bare, it is NOT written into the scene/clip object's own
 // image_path/audio_path/file field (those get read directly into plain <img>/<audio> src
@@ -61,7 +76,7 @@ function resolveRenderAssetPath(sourceAbsolutePath, category, namespace) {
 
   const baseName = path.basename(sourceAbsolutePath);
   const destName = namespace ? `${namespace}__${baseName}` : baseName;
-  const destDir  = path.join(REMOTION_PUBLIC_DIR, category);
+  const destDir  = path.join(LOCAL_ASSETS_DIR, category);
   const destPath = path.join(destDir, destName);
 
   if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
@@ -161,7 +176,7 @@ router.post('/', async (req, res) => {
   console.log('[render] selectedClips count:', Object.keys(selectedClips || {}).length);
 
   // ── Resolve every asset field through the ONE shared resolver ────────────────
-  // Every image, audio, and clip reference gets copied into remotion/public/<category>/
+  // Every image, audio, and clip reference gets copied into LOCAL_ASSETS_DIR/<category>/
   // and resolved to a bare staticFile()-ready path — never an HTTP URL (root cause of
   // the non-deterministic mid-render crashes) and never an absolute filesystem path
   // (already tried and rejected — see resolveRenderAssetPath's comment).
@@ -195,7 +210,7 @@ router.post('/', async (req, res) => {
     if (renderTarget === 'lambda') {
       // Same "does the source file actually exist" signal as local mode, but no local
       // sync copy — a Lambda render will fetch this from S3 (Phase 2 uploads it there;
-      // Phase 4 invokes Lambda), never from remotion/public/ on this machine.
+      // Phase 4 invokes Lambda), never from local disk on this machine.
       const abs = toAbsoluteSourcePath(rawPath);
       if (!abs || !fs.existsSync(abs)) {
         missingAssets.push({ scene_id: sceneId, kind, path: rawPath });
@@ -260,7 +275,7 @@ router.post('/', async (req, res) => {
   //
   // lambda mode: that self-sufficient local resolution has nothing to lean on — a Lambda
   // site's bundled public/ can't contain an arbitrary, per-render clip selection the way
-  // remotion/public/clips/ gets freshly synced before each local CLI run — so clip.file
+  // LOCAL_ASSETS_DIR/clips/ gets freshly synced before each local CLI run — so clip.file
   // MUST be overwritten with the real S3 URL here.
   let renderClips;
   if (renderTarget === 'lambda') {
@@ -420,8 +435,18 @@ router.post('/', async (req, res) => {
     : process.platform === 'linux' ? '--gl=swiftshader'
     : '';
 
+  // --public-dir : redirects which folder Remotion's own bundler copies into this render's
+  // bundle, instead of its default (remotion/public/). remotion/public/ is what
+  // `remotion lambda sites create` bundles by default too — if local rendering also synced
+  // into it, every locally-rendered project's images/audio/clips (previously ~1.6GB) would
+  // get swept into the Lambda site bundle right along with it. LOCAL_ASSETS_DIR is a sibling
+  // directory Lambda's site bundling never touches, so this flag is what keeps
+  // resolveRenderAssetPath's sync target (LOCAL_ASSETS_DIR) actually reachable via
+  // staticFile() for THIS (local CLI) render, regardless of renderTarget.
+  const publicDirFlag = `--public-dir ${q(LOCAL_ASSETS_DIR)}`;
+
   function buildRenderCommand(attemptConcurrency) {
-    return `npx remotion render src/index.jsx Documentary ${q(outputPath)} --props ${q(propsPath)} --overwrite --concurrency=${attemptConcurrency} --timeout=60000 ${glFlag} ${chromeFlag}`
+    return `npx remotion render src/index.jsx Documentary ${q(outputPath)} --props ${q(propsPath)} --overwrite --concurrency=${attemptConcurrency} --timeout=60000 ${glFlag} ${chromeFlag} ${publicDirFlag}`
       .replace(/\s+/g, ' ')
       .trim();
   }

@@ -6,7 +6,11 @@ const crypto = require('crypto');
 const clipStore = require('./clipStore');
 
 const CLIPS_DIR = path.resolve(__dirname, '../../library/clips');
-const REMOTION_CLIPS_DIR = path.resolve(__dirname, '../../remotion/public/clips');
+// remotion/localAssets/clips, NOT remotion/public/clips — the latter is what
+// `remotion lambda sites create` bundles by default; syncing the shared clip library
+// there would bloat the Lambda site bundle (see server/routes/render.js's
+// LOCAL_ASSETS_DIR comment).
+const REMOTION_CLIPS_DIR = path.resolve(__dirname, '../../remotion/localAssets/clips');
 
 // Reuse a permissive agent for dev environments with local CA cert issues
 const devAgent = new https.Agent({ rejectUnauthorized: false });

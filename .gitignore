@@ -6,6 +6,7 @@ node_modules/
 .env
 .env.local
 .env.*.local
+remotion/.env
 
 # Build output
 dist/
@@ -28,18 +29,17 @@ client/dist/
 projects/
 
 # Clip video files synced at runtime — too large for git; sync logic recreates them
-remotion/public/clips/*.mp4
-remotion/public/clips/*.webm
-remotion/public/clips/*.mov
 library/clips/*.mp4
 library/clips/*.webm
 library/clips/*.mov
 library/thumbnails/
 
-# Per-project image/audio files synced at runtime for CLI rendering (resolveRenderAssetPath
-# in server/routes/render.js) — regenerated fresh from projects/ on every render
-remotion/public/images/
-remotion/public/audio/
+# Local-only render sync target (per-project images/audio, the shared clip library) —
+# regenerated fresh from projects/ and library/clips/ on every render. Deliberately NOT
+# under remotion/public/: that's what `remotion lambda sites create` bundles by default,
+# and this content must never be part of the Lambda site bundle (Lambda renders fetch it
+# from S3 instead — see server/routes/render.js's LOCAL_ASSETS_DIR comment).
+remotion/localAssets/
 
 # Claude Code internal state
 .claude/

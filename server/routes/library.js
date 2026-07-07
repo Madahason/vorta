@@ -8,9 +8,13 @@ const execAsync = promisify(exec)
 const multer  = require('multer')
 
 const CLIPS_DIR        = path.join(__dirname, '../../library/clips')
-const REMOTION_CLIPS   = path.resolve(__dirname, '../../remotion/public/clips')
+// remotion/localAssets/clips, NOT remotion/public/clips — the latter is what
+// `remotion lambda sites create` bundles by default; syncing the shared clip library
+// there would bloat the Lambda site bundle (see server/routes/render.js's
+// LOCAL_ASSETS_DIR comment).
+const REMOTION_CLIPS   = path.resolve(__dirname, '../../remotion/localAssets/clips')
 
-// Keep remotion/public/clips/ in sync whenever a new clip lands in library/clips/
+// Keep remotion/localAssets/clips/ in sync whenever a new clip lands in library/clips/
 function syncSingleClipToRemotion(filename) {
   const src  = path.join(CLIPS_DIR, filename)
   const dest = path.join(REMOTION_CLIPS, filename)

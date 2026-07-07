@@ -12,7 +12,7 @@ function ensureDirectories() {
     'library/stings',
     'library/overlay-sounds',
     'library/sounds',
-    'remotion/public/clips',
+    'remotion/localAssets/clips',
   ]
   dirs.forEach(dir => {
     const full = path.join(ROOT, dir)
@@ -25,7 +25,11 @@ function ensureDirectories() {
 
 function syncClipsToRemotion() {
   const src  = path.join(ROOT, 'library/clips')
-  const dest = path.join(ROOT, 'remotion/public/clips')
+  // remotion/localAssets/clips, NOT remotion/public/clips — the latter is what
+  // `remotion lambda sites create` bundles by default; syncing the shared clip library
+  // there would bloat the Lambda site bundle with content Lambda renders fetch from S3
+  // instead (see server/routes/render.js's LOCAL_ASSETS_DIR comment).
+  const dest = path.join(ROOT, 'remotion/localAssets/clips')
 
   if (!fs.existsSync(src)) return
 
@@ -39,7 +43,7 @@ function syncClipsToRemotion() {
   })
 
   if (files.length > 0) {
-    console.log(`[startup] clips: ${files.length} total, ${synced} synced to remotion/public/clips`)
+    console.log(`[startup] clips: ${files.length} total, ${synced} synced to remotion/localAssets/clips`)
   }
 }
 
