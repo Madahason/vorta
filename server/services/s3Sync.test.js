@@ -1,155 +1,278 @@
 // Plain Node test — no framework wired into this repo yet. Run with:
 //   node server/services/s3Sync.test.js
 //
-// Never talks to AWS: uploadFile/objectExists are injected fakes throughout, exercising
-// syncAssetsToS3's dedup, shared-tier existence-skip, bounded concurrency, and
-// failure-collection logic entirely in-memory. Phase 3 covers a real end-to-end S3 upload
-// once a bucket + IAM credentials exist.
+// Never talks to AWS: uploadFile/getObjectSize are injected fakes throughout, exercising
+// syncAssetsToS3's dedup, size-comparison skip check, size-tiered concurrency, and
+// retry/backoff logic entirely in-memory (against real temp files on disk, since
+// fs.statSync(localPath) is not itself injectable — that's deliberate, it's the same
+// local-file-size read the real code path uses). A real end-to-end S3 upload was already
+// verified live against proj_1783321393296 in this session (45 assets landed; the
+// failures that prompted this rewrite were all transient network drops on large clips,
+// not auth/bucket/IAM — see PLAN.md).
 
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { syncAssetsToS3 } = require('./s3Sync');
-
-// Must match s3Sync.js's UPLOAD_CONCURRENCY — not exported, so re-asserted here by value.
-const UPLOAD_CONCURRENCY = 6;
-
-function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 async function run(name, fn) {
   await fn();
   console.log(`PASS: ${name}`);
 }
 
+// ── temp fixture files ──────────────────────────────────────────────────────────
+const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 's3sync-test-'));
+const SMALL_A = path.join(TMP_DIR, 'small-a.bin');
+const SMALL_B = path.join(TMP_DIR, 'small-b.bin');
+fs.writeFileSync(SMALL_A, Buffer.alloc(100, 1));
+fs.writeFileSync(SMALL_B, Buffer.alloc(200, 2));
+const SMALL_A_SIZE = fs.statSync(SMALL_A).size;
+
+// LARGE_FILE_THRESHOLD_BYTES in s3Sync.js is 50MB — not exported, so a sparse-ish file
+// just over that is created via truncate (extends the file with zero-fill; doesn't
+// require writing 50MB+ through JS) rather than hardcoding/duplicating the constant here.
+const LARGE_A = path.join(TMP_DIR, 'large-a.bin');
+const LARGE_B = path.join(TMP_DIR, 'large-b.bin');
+const LARGE_C = path.join(TMP_DIR, 'large-c.bin');
+const LARGE_SIZE = 60 * 1024 * 1024; // 60MB — over the 50MB threshold
+for (const p of [LARGE_A, LARGE_B, LARGE_C]) {
+  fs.writeFileSync(p, '');
+  fs.truncateSync(p, LARGE_SIZE);
+}
+
+// makeFakeS3Store — a realistic in-memory stand-in for "what's actually in the bucket":
+// getObjectSize reads from it, uploadFile writes to it (recording the REAL local file
+// size, exactly like a real upload would). This is what makes the pre-upload skip-check
+// and the post-upload verification behave consistently with each other in every test
+// below, instead of each test hand-rolling a fake that has to separately account for
+// both call sites.
+function makeFakeS3Store(initial = {}) {
+  const store = new Map(Object.entries(initial));
+  return {
+    store,
+    getObjectSize: async (key) => (store.has(key) ? store.get(key) : null),
+    uploadFile: async (localPath, key) => { store.set(key, fs.statSync(localPath).size); },
+  };
+}
+
+function transientErr(message = 'Your socket connection to the server was not read from or written to within the timeout period. Idle connections will be closed.') {
+  return new Error(message);
+}
+function econnreset() {
+  const err = new Error('read ECONNRESET');
+  err.code = 'ECONNRESET';
+  return err;
+}
+
 (async () => {
   // ── dedup by key ─────────────────────────────────────────────────────────────
   await run('two scenes referencing the identical key upload it only once', async () => {
-    const uploaded = [];
+    const fake = makeFakeS3Store();
+    const uploadSpy = [];
     const result = await syncAssetsToS3(
       [
-        { localPath: '/a/scene_001.mp3', key: 'proj_x/audio/scene_001.mp3', shared: false, sceneId: '001' },
-        { localPath: '/a/scene_001.mp3', key: 'proj_x/audio/scene_001.mp3', shared: false, sceneId: '005' },
+        { localPath: SMALL_A, key: 'proj_x/audio/scene_001.mp3', shared: false, sceneId: '001' },
+        { localPath: SMALL_A, key: 'proj_x/audio/scene_001.mp3', shared: false, sceneId: '005' },
       ],
       {
-        uploadFile: async (localPath, key) => { uploaded.push(key); },
-        objectExists: async () => true,
+        uploadFile: async (localPath, key) => { uploadSpy.push(key); return fake.uploadFile(localPath, key); },
+        getObjectSize: fake.getObjectSize,
       }
     );
-    assert.strictEqual(uploaded.length, 1);
+    assert.strictEqual(uploadSpy.length, 1);
     assert.strictEqual(result.totalReferenced, 1);
     assert.strictEqual(result.uploadedCount, 1);
     assert.deepStrictEqual(result.failures, []);
   });
 
-  // ── shared-tier dedup via objectExists ───────────────────────────────────────
-  await run('shared asset already in S3 is skipped, not uploaded', async () => {
-    const uploaded = [];
+  // ── size-comparison skip check (applies uniformly, shared or not) ────────────
+  await run('S3 object with matching size is skipped, not uploaded (shared)', async () => {
+    const fake = makeFakeS3Store({ 'library/clips/x.mp4': SMALL_A_SIZE });
+    const uploadSpy = [];
     const result = await syncAssetsToS3(
-      [{ localPath: '/lib/clips/x.mp4', key: 'library/clips/x.mp4', shared: true, sceneId: '001' }],
-      {
-        uploadFile: async (localPath, key) => { uploaded.push(key); },
-        objectExists: async () => true, // already exists in S3
-      }
+      [{ localPath: SMALL_A, key: 'library/clips/x.mp4', shared: true, sceneId: '001' }],
+      { uploadFile: async (...args) => { uploadSpy.push(args[1]); return fake.uploadFile(...args); }, getObjectSize: fake.getObjectSize }
     );
-    assert.strictEqual(uploaded.length, 0);
+    assert.strictEqual(uploadSpy.length, 0);
     assert.strictEqual(result.skippedCount, 1);
     assert.strictEqual(result.uploadedCount, 0);
-    assert.strictEqual(result.totalReferenced, 1);
   });
 
-  await run('shared asset NOT in S3 is uploaded', async () => {
-    const uploaded = [];
+  await run('S3 object with matching size is skipped, not uploaded (per-project) — resume behavior', async () => {
+    const fake = makeFakeS3Store({ 'proj_x/images/003.png': SMALL_A_SIZE });
+    const uploadSpy = [];
     const result = await syncAssetsToS3(
-      [{ localPath: '/lib/clips/y.mp4', key: 'library/clips/y.mp4', shared: true, sceneId: '001' }],
-      {
-        uploadFile: async (localPath, key) => { uploaded.push(key); },
-        objectExists: async () => false, // not there yet, then confirmed true post-upload below
-      }
+      [{ localPath: SMALL_A, key: 'proj_x/images/003.png', shared: false, sceneId: '003' }],
+      { uploadFile: async (...args) => { uploadSpy.push(args[1]); return fake.uploadFile(...args); }, getObjectSize: fake.getObjectSize }
     );
-    // objectExists is also used for the post-upload confirmation — a fake that always
-    // returns false would make the upload look like it silently failed. Use a stateful
-    // fake instead to distinguish "pre-upload existence check" from "post-upload confirm".
-    assert.strictEqual(uploaded.length, 1);
-    assert.strictEqual(result.failures.length, 1); // confirms post-upload check ran and caught the always-false fake
+    assert.strictEqual(uploadSpy.length, 0, 'a per-project asset already uploaded at the same size must be skipped on resume');
+    assert.strictEqual(result.skippedCount, 1);
   });
 
-  await run('shared asset upload + post-upload confirmation, stateful fake', async () => {
-    const present = new Set();
-    const uploaded = [];
+  await run('S3 object with DIFFERENT size is re-uploaded (regenerated content, same filename)', async () => {
+    const fake = makeFakeS3Store({ 'proj_x/images/003.png': SMALL_A_SIZE + 999 }); // stale object
+    const uploadSpy = [];
     const result = await syncAssetsToS3(
-      [{ localPath: '/lib/clips/z.mp4', key: 'library/clips/z.mp4', shared: true, sceneId: '001' }],
-      {
-        uploadFile: async (localPath, key) => { uploaded.push(key); present.add(key); },
-        objectExists: async (key) => present.has(key),
-      }
+      [{ localPath: SMALL_A, key: 'proj_x/images/003.png', shared: false, sceneId: '003' }],
+      { uploadFile: async (...args) => { uploadSpy.push(args[1]); return fake.uploadFile(...args); }, getObjectSize: fake.getObjectSize }
     );
-    assert.strictEqual(uploaded.length, 1);
-    assert.strictEqual(result.uploadedCount, 1);
+    assert.strictEqual(uploadSpy.length, 1, 'a changed local file must overwrite the stale S3 object, never be skipped');
     assert.strictEqual(result.skippedCount, 0);
+    assert.deepStrictEqual(result.failures, [], 'the re-upload must succeed once it lands at the correct (now-matching) size');
+  });
+
+  await run('no S3 object at all (getObjectSize null) uploads normally', async () => {
+    const fake = makeFakeS3Store();
+    const uploadSpy = [];
+    await syncAssetsToS3(
+      [{ localPath: SMALL_B, key: 'proj_x/images/004.png', shared: false, sceneId: '004' }],
+      { uploadFile: async (...args) => { uploadSpy.push(args[1]); return fake.uploadFile(...args); }, getObjectSize: fake.getObjectSize }
+    );
+    assert.strictEqual(uploadSpy.length, 1);
+  });
+
+  await run('a failed size-check (not a clean "not found") does not crash the batch — assumes upload needed', async () => {
+    const fake = makeFakeS3Store();
+    let precheckThrown = false;
+    const result = await syncAssetsToS3(
+      [{ localPath: SMALL_A, key: 'proj_x/images/005.png', shared: false, sceneId: '005' }],
+      {
+        uploadFile: fake.uploadFile,
+        getObjectSize: async (key) => {
+          if (!precheckThrown) { precheckThrown = true; throw new Error('transient HeadObject blip'); }
+          return fake.getObjectSize(key);
+        },
+      }
+    );
+    assert.deepStrictEqual(result.failures, [], 'a failed pre-check must not abort the batch, and must still attempt (and complete) the upload');
+    assert.strictEqual(result.uploadedCount, 1);
+  });
+
+  // ── retry / backoff ────────────────────────────────────────────────────────────
+  await run('transient upload failure is retried and succeeds on the 2nd attempt', async () => {
+    const fake = makeFakeS3Store();
+    let attempts = 0;
+    const retryLog = [];
+    const result = await syncAssetsToS3(
+      [{ localPath: SMALL_A, key: 'proj_x/audio/scene_002.mp3', shared: false, sceneId: '002' }],
+      {
+        uploadFile: async (...args) => {
+          attempts++;
+          if (attempts === 1) throw transientErr();
+          return fake.uploadFile(...args);
+        },
+        getObjectSize: fake.getObjectSize,
+        onRetry: (asset, attempt, maxAttempts, msg) => retryLog.push({ attempt, maxAttempts, msg }),
+      }
+    );
+    assert.strictEqual(attempts, 2);
     assert.deepStrictEqual(result.failures, []);
+    assert.strictEqual(retryLog.length, 1);
+    assert.strictEqual(retryLog[0].attempt, 1);
+    assert.strictEqual(retryLog[0].maxAttempts, 4);
   });
 
-  // ── project-tier always uploads, even if "exists" would say otherwise ────────
-  await run('per-project asset uploads unconditionally, ignoring objectExists', async () => {
-    const uploaded = [];
+  await run('transient upload failure that never recovers is retried up to the max, then fails', async () => {
+    let attempts = 0;
+    const retryLog = [];
     const result = await syncAssetsToS3(
-      [{ localPath: '/p/003.png', key: 'proj_x/images/003.png', shared: false, sceneId: '003' }],
+      [{ localPath: SMALL_A, key: 'proj_x/audio/scene_006.mp3', shared: false, sceneId: '006' }],
       {
-        uploadFile: async (localPath, key) => { uploaded.push(key); },
-        objectExists: async () => true, // would look "already there", but shared:false must not skip
+        uploadFile: async () => { attempts++; throw econnreset(); },
+        getObjectSize: async () => null,
+        onRetry: (asset, attempt) => retryLog.push(attempt),
       }
     );
-    assert.strictEqual(uploaded.length, 1, 'per-project assets must always upload/overwrite');
-    assert.strictEqual(result.uploadedCount, 1);
-    assert.strictEqual(result.skippedCount, 0);
-  });
-
-  // ── failure collection doesn't abort the rest ────────────────────────────────
-  await run('one failing upload is collected, others still complete', async () => {
-    const assets = [
-      { localPath: '/p/a.png', key: 'proj_x/images/a.png', shared: false, sceneId: 'a' },
-      { localPath: '/p/b.png', key: 'proj_x/images/b.png', shared: false, sceneId: 'b' },
-      { localPath: '/p/c.png', key: 'proj_x/images/c.png', shared: false, sceneId: 'c' },
-    ];
-    const result = await syncAssetsToS3(assets, {
-      uploadFile: async (localPath, key) => {
-        if (key.endsWith('b.png')) throw new Error('simulated network failure');
-      },
-      objectExists: async () => true,
-    });
+    assert.strictEqual(attempts, 4, 'must attempt exactly MAX_UPLOAD_ATTEMPTS times, not more');
     assert.strictEqual(result.failures.length, 1);
-    assert.strictEqual(result.failures[0].key, 'proj_x/images/b.png');
-    assert.strictEqual(result.failures[0].error, 'simulated network failure');
-    assert.strictEqual(result.uploadedCount, 2);
+    assert.strictEqual(result.failures[0].key, 'proj_x/audio/scene_006.mp3');
+    assert.deepStrictEqual(retryLog, [1, 2, 3], 'onRetry fires before each retry, not after the final failed attempt');
   });
 
-  // ── bounded concurrency ───────────────────────────────────────────────────────
-  await run(`uploads run with concurrency <= ${UPLOAD_CONCURRENCY}, and use more than 1 in parallel`, async () => {
-    let inFlight = 0;
-    let peak = 0;
-    const assets = Array.from({ length: 20 }, (_, i) => ({
-      localPath: `/p/${i}.png`, key: `proj_x/images/${i}.png`, shared: false, sceneId: String(i),
+  await run('a non-transient error (e.g. AccessDenied) fails immediately, no retry wasted', async () => {
+    let attempts = 0;
+    let retried = false;
+    const result = await syncAssetsToS3(
+      [{ localPath: SMALL_A, key: 'proj_x/audio/scene_007.mp3', shared: false, sceneId: '007' }],
+      {
+        uploadFile: async () => { attempts++; throw new Error('AccessDenied: not authorized to perform s3:PutObject'); },
+        getObjectSize: async () => null,
+        onRetry: () => { retried = true; },
+      }
+    );
+    assert.strictEqual(attempts, 1, 'non-transient errors must not be retried');
+    assert.strictEqual(retried, false);
+    assert.strictEqual(result.failures.length, 1);
+    assert.ok(/AccessDenied/.test(result.failures[0].error));
+  });
+
+  await run('a truncated upload (size mismatch right after upload) is treated as retryable', async () => {
+    let uploadCalls = 0;
+    const retryLog = [];
+    // First upload "succeeds" but lands short (simulated truncation); second upload
+    // reports the correct, matching size.
+    const sizeAfterUpload = [SMALL_A_SIZE - 1, SMALL_A_SIZE];
+    const result = await syncAssetsToS3(
+      [{ localPath: SMALL_A, key: 'proj_x/images/008.png', shared: false, sceneId: '008' }],
+      {
+        uploadFile: async () => { uploadCalls++; },
+        getObjectSize: async () => {
+          if (uploadCalls === 0) return null; // pre-check: nothing there yet
+          return sizeAfterUpload[uploadCalls - 1];
+        },
+        onRetry: (asset, attempt, maxAttempts, msg) => retryLog.push(msg),
+      }
+    );
+    assert.strictEqual(uploadCalls, 2, 'a size-mismatch must trigger a re-upload attempt, not an immediate failure');
+    assert.deepStrictEqual(result.failures, []);
+    assert.strictEqual(retryLog.length, 1);
+    assert.ok(/size mismatch/.test(retryLog[0]));
+  });
+
+  // ── size-tiered concurrency ────────────────────────────────────────────────────
+  await run('small and large assets run in separate, independently-bounded concurrency tiers', async () => {
+    const fake = makeFakeS3Store();
+    let smallInFlight = 0, peakSmall = 0;
+    let largeInFlight = 0, peakLarge = 0;
+    let bothActiveSimultaneously = false;
+
+    const smallAssets = ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8'].map(id => ({
+      localPath: SMALL_A, key: `proj_x/images/${id}.png`, shared: false, sceneId: id,
     }));
-    await syncAssetsToS3(assets, {
-      uploadFile: async () => {
-        inFlight++;
-        peak = Math.max(peak, inFlight);
-        await delay(5);
-        inFlight--;
+    const largeAssets = [LARGE_A, LARGE_B, LARGE_C].map((p, i) => ({
+      localPath: p, key: `library/clips/large-${i}.mp4`, shared: true, sceneId: `clip${i}`,
+    }));
+
+    await syncAssetsToS3([...smallAssets, ...largeAssets], {
+      uploadFile: async (localPath, key) => {
+        const isLarge = localPath !== SMALL_A;
+        if (isLarge) { largeInFlight++; peakLarge = Math.max(peakLarge, largeInFlight); }
+        else         { smallInFlight++; peakSmall = Math.max(peakSmall, smallInFlight); }
+        if (smallInFlight > 0 && largeInFlight > 0) bothActiveSimultaneously = true;
+        await new Promise(r => setTimeout(r, 15));
+        if (isLarge) largeInFlight--; else smallInFlight--;
+        return fake.uploadFile(localPath, key);
       },
-      objectExists: async () => true,
+      getObjectSize: fake.getObjectSize,
     });
-    assert.ok(peak <= UPLOAD_CONCURRENCY, `peak concurrency ${peak} exceeded limit ${UPLOAD_CONCURRENCY}`);
-    assert.ok(peak > 1, `expected uploads to overlap, but peak concurrency was only ${peak}`);
+
+    assert.ok(peakSmall <= 4, `peak small concurrency ${peakSmall} exceeded SMALL_ASSET_CONCURRENCY (4)`);
+    assert.ok(peakLarge <= 2, `peak large concurrency ${peakLarge} exceeded LARGE_ASSET_CONCURRENCY (2)`);
+    assert.ok(peakSmall > 1, `expected small uploads to overlap, peak was only ${peakSmall}`);
+    assert.ok(bothActiveSimultaneously, 'expected small and large tiers to run concurrently with each other, not sequentially');
   });
 
-  // ── onProgress fires once per attempt, with the right totals ────────────────
+  // ── onProgress ────────────────────────────────────────────────────────────────
   await run('onProgress reports (completed, total) once per upload attempt', async () => {
+    const fake = makeFakeS3Store();
     const calls = [];
-    const assets = Array.from({ length: 4 }, (_, i) => ({
-      localPath: `/p/${i}.png`, key: `proj_x/images/${i}.png`, shared: false, sceneId: String(i),
+    const assets = ['a', 'b', 'c', 'd'].map(id => ({
+      localPath: SMALL_A, key: `proj_x/images/${id}.png`, shared: false, sceneId: id,
     }));
     await syncAssetsToS3(assets, {
-      uploadFile: async () => {},
-      objectExists: async () => true,
+      uploadFile: fake.uploadFile,
+      getObjectSize: fake.getObjectSize,
       onProgress: (completed, total) => calls.push([completed, total]),
     });
     assert.strictEqual(calls.length, 4);
@@ -162,14 +285,16 @@ async function run(name, fn) {
     let called = false;
     const result = await syncAssetsToS3([], {
       uploadFile: async () => { called = true; },
-      objectExists: async () => { called = true; return true; },
+      getObjectSize: async () => { called = true; return null; },
     });
     assert.strictEqual(called, false);
     assert.deepStrictEqual(result, { failures: [], uploadedCount: 0, skippedCount: 0, totalReferenced: 0 });
   });
 
+  fs.rmSync(TMP_DIR, { recursive: true, force: true });
   console.log('\nAll s3Sync tests passed.');
 })().catch(err => {
+  fs.rmSync(TMP_DIR, { recursive: true, force: true });
   console.error(err);
   process.exit(1);
 });

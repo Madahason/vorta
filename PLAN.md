@@ -5085,3 +5085,143 @@ untouched either way), `TransitionSeries` structure, `String(scene.scene_id)` ke
 already-deployed Lambda function (this fix only concerns the site bundle, a separate deploy
 artifact). Did not run `remotion lambda sites create` — left for the user to run with
 `--region=eu-central-1`.
+
+---
+
+## Session — Phase 2 live test: credentials, bucket mismatch, then a real reliability failure
+**Date:** 2026-07-07/08
+
+### First live test — bad credentials
+With a real AWS key/bucket configured for the first time, fired a real `renderTarget: 'lambda'`
+render for `proj_1783321393296` (33 scenes, 14 images, 33 audio, 18 unique clips). It got past
+`missingAssets`/`httpOffenders` validation into `syncAssetsToS3` and failed immediately. Direct
+diagnostics against `uploadFile`/`objectExists`/`HeadBucket` (bypassing the render entirely) pinned
+the exact cause: `InvalidAccessKeyId: The AWS Access Key Id you provided does not exist in our
+records.` — not an IAM policy gap (that would be `AccessDenied`); AWS didn't recognize the
+credential at all. Also caught along the way: `.env` had `AWS_REGION=us-east-1` and an empty
+`AWS_S3_BUCKET` (both corrected before the credential issue would have even mattered), and the
+running dev server had the stale pre-edit env in memory — **nodemon doesn't watch `.env`**, so an
+`.env`-only edit never triggers a reload; forcing one requires touching a JS file nodemon does
+watch (used `touch server/index.js` throughout this whole debugging arc).
+
+### Second live test — valid key, wrong bucket
+User supplied a fresh access key. Direct `objectExists`/`HeadBucket` diagnostics: `objectExists`
+came back a clean `false` (looked like success), but a direct `uploadFile` (PutObject, which
+returns a real error body unlike HeadObject/HeadBucket) surfaced `NoSuchBucket: The specified
+bucket does not exist`. This exposed a real blind spot in `objectExists`'s 404 handling — S3
+doesn't distinguish "bucket missing" from "key missing" in a bare HeadObject 404, so
+`objectExists` was silently reporting "not found, safe to upload" for a bucket that didn't exist at
+all under this credential. `ListBuckets` against the account revealed the two buckets that actually
+exist — `remotionlambda-eucentral1-uhxvlcyjy6` and `remotionlambda-useast1-k493rbcb1g` — neither
+matching the `.env`-configured `remotionlambda-eu-central-1-vorta-assets`. The former is Remotion
+Lambda's own auto-generated bucket-naming convention and matches the `eu-central-1` deploy region;
+confirmed with the user and corrected `.env`.
+
+### Third live test — this is where it actually worked, then broke differently
+With correct credentials and bucket, `HeadBucket` and a direct `uploadFile` both succeeded. Fired
+the real render again: `s3Sync` ran, and **45 assets landed correctly in S3** (33/33 audio, 7/14
+images at that point, 2 clips) before the render errored — but this time on network reliability,
+not auth: `Your socket connection to the server was not read from or written to within the timeout
+period. Idle connections will be closed.` (plus some `read ECONNRESET`) on 17 assets — almost all
+the large `library/clips/*.mp4` files (multi-hundred-MB each) plus the last few images. Root cause:
+`UPLOAD_CONCURRENCY = 6` ran six large multipart uploads simultaneously, saturating available
+upload bandwidth badly enough that individual connections went idle long enough for S3 to close
+them. Not a credentials/IAM/bucket issue — those were fully confirmed working by this point. See
+the next session entry for the fix.
+
+### Files changed
+`.env` only (`AWS_REGION`, `AWS_S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` corrected
+across the three attempts above — no code changes in this session).
+
+---
+
+## Session — Phase 2 hardening: size-aware upload concurrency + retry/backoff for large clips
+**Date:** 2026-07-08
+
+### Fix
+- **`server/services/s3.js`** — added `getObjectSize(s3Key)` (HeadObject → byte size, or `null` if
+  absent), alongside the existing `objectExists`/`uploadFile` (both unchanged). Documented the
+  known 404 blind-spot (`isNotFoundError` — bucket-missing and key-missing both look like a bare
+  404 to `HeadObject`) inline rather than fixing it now; a real `uploadFile` (PutObject) attempt
+  still surfaces a clear `NoSuchBucket` if the bucket itself is wrong, so it hasn't caused a silent
+  failure in practice.
+- **`server/services/s3Sync.js`** — rewritten:
+  - **Size-tiered concurrency**, replacing the flat `UPLOAD_CONCURRENCY = 6`: `SMALL_ASSET_CONCURRENCY
+    = 4` for assets under `LARGE_FILE_THRESHOLD_BYTES` (50MB), `LARGE_ASSET_CONCURRENCY = 2` at or
+    above it. Both tiers run concurrently with each other via `Promise.all`, not sequentially, so a
+    large clip batch doesn't stall small-asset throughput — worst case is 4+2=6 sockets open at
+    once, same ceiling as before, but never more than 2 large multipart uploads competing for
+    bandwidth at a time.
+  - **Per-file retry with exponential backoff** (`uploadOneWithRetry`, `MAX_UPLOAD_ATTEMPTS = 4`,
+    backoff `500ms · 2^(attempt-1)` → 500ms/1s/2s), but only for errors that look transient:
+    `isTransientNetworkError` checks `err.code` (`ECONNRESET`/`ETIMEDOUT`/`EPIPE`/`ECONNABORTED`)
+    and message-matches the exact S3 idle-timeout string from the live failure above. A
+    non-transient error (`AccessDenied`, `NoSuchBucket`, ...) fails on the first attempt — retrying
+    it wouldn't help.
+  - **Universal size-comparison skip check**, replacing the old shared-only `objectExists` gate: a
+    key whose S3 size matches the local file's size is skipped, for *both* shared (clips) and
+    per-project (image/audio) assets — the latter is new. This is what makes a retry-after-partial-
+    failure resume efficiently (only the ~17 assets that didn't land last time get re-attempted, not
+    all 45 that already succeeded) while still correctly re-uploading a genuinely regenerated
+    per-project asset reusing the same filename, since it essentially never lands on the exact same
+    byte count as what it's replacing. A failed size probe *during this check* (as opposed to a
+    clean "not found") is treated as "assume it needs uploading" and logged, not thrown — a
+    transient hiccup on this cheap metadata call must not crash the whole batch before any upload
+    even starts (this exact class of unhandled-rejection risk existed in the pre-hardening code,
+    where an `objectExistsFn` throw inside the skip-check loop would have propagated and aborted the
+    entire `syncAssetsToS3` call).
+  - **A size mismatch right after upload is itself treated as retryable** — found while writing the
+    test for it: a truncated upload (network drop mid-transfer, S3 has a short/incomplete object)
+    is exactly the kind of failure retrying should fix, but the original `isTransientNetworkError`
+    only recognized externally-thrown SDK error shapes. The self-thrown size-mismatch error is now
+    explicitly marked `{ transient: true }`, which `isTransientNetworkError` also checks.
+  - `onRetry(asset, attempt, maxAttempts, errorMessage)` — new optional callback, fired before each
+    retry's backoff delay.
+- **`server/routes/render.js`** — wired `onRetry` into the existing SSE channel:
+  `broadcast(job, { type: 'log', message: 'Retrying upload: <key> (attempt X/4): <reason>' })`,
+  alongside the existing `stage: 'uploading'` progress events.
+- **`server/services/s3Sync.test.js`** — rewritten around a `makeFakeS3Store()` helper (an in-memory
+  Map standing in for "what's actually in the bucket," read by the fake `getObjectSize` and written
+  by the fake `uploadFile`) instead of ad hoc per-test fakes — the first version of this rewrite had
+  several tests whose non-stateful `getObjectSize` fakes accidentally made every simulated upload
+  look like a size-mismatch failure (the fake returned the same value for both the pre-upload skip
+  check and the post-upload verification call, which don't mean the same thing). 13 cases: key
+  dedup, skip-on-matching-size (shared and per-project), re-upload-on-mismatched-size,
+  failed-precheck-doesn't-crash-the-batch, retry-then-succeed, retry-exhausted-after-4-attempts,
+  non-transient-error-no-retry, truncated-upload-is-retryable, size-tiered concurrency (verifies
+  both the per-tier ceiling AND that the tiers actually overlap in time), `onProgress` call
+  correctness, empty-input no-op.
+
+### Verified
+- `node server/services/s3Sync.test.js` — all 13 cases pass.
+- `node server/services/renderAssets.test.js` — all 9 cases still pass (no regression).
+- **Live re-test**, same request replayed against `proj_1783321393296` (resume, not a fresh
+  upload — the 45 assets from the previous session's partial run were already in the bucket):
+  final counts confirmed by listing the bucket directly — **images 14/14, audio 33/33, clips
+  18/18** (the full unique-clip count for this project, recomputed from the request body). Upload
+  gate fully passes. `scenes.json`'s resolved `imagePaths`/`audioSpecs`/`selectedClips` confirmed
+  free of any `localhost` reference. The local CLI render itself (spawned after a successful
+  upload, per the Phase 2 design choice to validate the real S3 URLs end-to-end) was still running
+  at the time of this report — out of scope for what this session needed to confirm (S3 upload
+  only; Phase 4 doesn't exist yet).
+
+### Files changed
+- `server/services/s3.js` — added `getObjectSize`.
+- `server/services/s3Sync.js` — size-tiered concurrency, retry/backoff, universal size-comparison
+  skip check, `onRetry` callback.
+- `server/services/s3Sync.test.js` — rewritten with `makeFakeS3Store()`, 13 cases.
+- `server/routes/render.js` — `onRetry` wired into the SSE `log` channel.
+
+**Not changed:** `Documentary.jsx`, audio volume mix, `String(scene.scene_id)` keys,
+`audioSpecs`/`scenes` count-matching, the Phase 1 resolver (`renderAssets.js`/`buildAssetKey`),
+`renderTarget: 'local'` (never touches `s3Sync.js` at all), the fail-fast behavior for genuinely
+missing local assets (`missingAssets`, unchanged — a different failure class from a transient
+upload-network drop, still checked before `syncAssetsToS3` is ever called).
+
+### What's next (Phase 3/4, not started)
+Phase 3 (bucket + IAM) is now effectively done as a side effect of this live-testing arc — a real
+bucket, real credentials, and a confirmed-working upload path all exist. What's left: decide the
+bucket's public-read vs. presigned-URL access policy (not yet examined — uploads succeeded, but
+whether a Lambda render can actually *fetch* these objects back depends on this). Phase 4: deploy a
+Remotion Lambda site + function, replace the `spawn('npx remotion render', ...)` call with a Lambda
+`renderMediaOnLambda` invocation when `renderTarget === 'lambda'`.

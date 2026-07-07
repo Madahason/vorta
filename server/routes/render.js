@@ -580,6 +580,11 @@ router.post('/', async (req, res) => {
       job.progress = { percent, frame: 0, totalFrames: 0, stage: 'uploading' };
       broadcast(job, { type: 'progress', percent, frame: 0, totalFrames: 0, stage: 'uploading' });
     },
+    onRetry: (asset, attempt, maxAttempts, errorMessage) => {
+      const message = `Retrying upload: ${asset.key} (attempt ${attempt}/${maxAttempts}) after: ${errorMessage}`;
+      console.warn(`[render] ${message}`);
+      broadcast(job, { type: 'log', message });
+    },
   }).then(({ failures, uploadedCount, skippedCount }) => {
     if (job.cancelled) return;
 

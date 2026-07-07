@@ -2,6 +2,17 @@ const fs = require('fs');
 const { S3Client, HeadObjectCommand } = require('@aws-sdk/client-s3');
 const { Upload } = require('@aws-sdk/lib-storage');
 
+// Both NotFound (404 with a code) and a bare 404 with no code mean "no object at this
+// key" for HeadObject/HeadBucket alike — S3 doesn't distinguish "bucket missing" from
+// "key missing" in a HeadObject response (no body on either). objectExists()/
+// getObjectSize() below both currently treat any 404 as "not found" — a real upload
+// attempt (PutObject) still surfaces a clear NoSuchBucket error if the bucket itself is
+// wrong, so this hasn't caused a silent failure in practice, but it's a known blind spot
+// (flagged during Phase 3 credential debugging, deliberately not tightened here).
+function isNotFoundError(err) {
+  return err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404;
+}
+
 // AWS config comes from the root .env ONLY (same discipline as ANTHROPIC_API_KEY etc. in
 // server/index.js) — never hardcoded, never written to a system/user env var.
 
@@ -54,16 +65,32 @@ async function uploadFile(localPath, s3Key) {
   return upload.done();
 }
 
-// objectExists — HeadObject probe. Not called anywhere yet (Phase 2 pre-render validation
-// will use this the same way today's fs.existsSync check works locally).
+// objectExists — HeadObject probe.
 async function objectExists(s3Key) {
   try {
     await getClient().send(new HeadObjectCommand({ Bucket: process.env.AWS_S3_BUCKET, Key: s3Key }));
     return true;
   } catch (err) {
-    if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) return false;
+    if (isNotFoundError(err)) return false;
     throw err;
   }
 }
 
-module.exports = { getClient, uploadFile, getPublicUrl, objectExists };
+// getObjectSize — HeadObject probe returning the object's byte size, or null if it
+// doesn't exist. Used by s3Sync.js to distinguish "already uploaded, unchanged" (S3 size
+// matches the local file's size — safe to skip) from "key exists but content differs"
+// (e.g. a regenerated scene image reusing the same filename — must re-upload) for BOTH
+// shared (clips) and per-project (image/audio) assets, and to verify a just-completed
+// upload actually landed at the expected size rather than trusting a non-throwing
+// upload() call alone.
+async function getObjectSize(s3Key) {
+  try {
+    const res = await getClient().send(new HeadObjectCommand({ Bucket: process.env.AWS_S3_BUCKET, Key: s3Key }));
+    return res.ContentLength ?? null;
+  } catch (err) {
+    if (isNotFoundError(err)) return null;
+    throw err;
+  }
+}
+
+module.exports = { getClient, uploadFile, getPublicUrl, objectExists, getObjectSize };
