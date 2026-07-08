@@ -5365,3 +5365,97 @@ directly) to get a definitive root cause from the actual failing-chunk logs inst
 `scene_id` keys, `audioSpecs`/`scenes` matching, `Root.jsx` fonts, `renderTarget:'local'` behavior
 (regression-verified twice), the Phase 1/2/3 resolver and upload pipeline (unchanged, just now
 actually consumed by a real Lambda invocation).
+
+## Session — Globe/WebGL isolation probe (de-risking before the quota-gated retry)
+
+### Goal
+Before spending a full-project Lambda render on the still-throttled account, isolate the one
+composition-specific risk `lambdaRender.js` flagged as unverified: whether `ThreeGlobe`
+(`3d_graphic` / `globe_markers` scenes) actually renders on Lambda's Chromium (no real GPU) with
+`chromiumOptions: { gl: 'angle' }`, or falls back to an `ErrorBoundaryScene` error card.
+
+### What was done
+A standalone script (not committed — one-off diagnostic, run from the session scratchpad) invoked
+`renderMediaOnLambda` directly against the real deployed function/site with a synthetic single-scene
+`inputProps` (`shot_type: '3d_graphic'`, 3 `globe_markers`, 3s duration) at `concurrency: 1` (throttled
+well under the then-current quota) and `gl: 'angle'`.
+
+### Result
+Completed in ~25s on the first try. Downloaded a valid 1920×1080 H.264 MP4; frames extracted at
+different timestamps show the actual globe — sphere lighting, the deterministic dot cloud, lat/lng
+grid, and a marker (with halo ring) that visibly rotated between frames — not a black frame or error
+card. `gl: 'angle'` works; `swiftshader` fallback was never needed.
+
+## Session — Quota raised: full-project Lambda render at Remotion-managed concurrency
+
+### Goal
+The blocking constraint from the previous session — this AWS account's Lambda concurrent-execution
+quota capped at 10 — was raised. Retry the full `proj_1783321393296` render (33 scenes, 11634 frames)
+via `renderTarget: 'lambda'`, this time letting Remotion pick its own `framesPerLambda` chunk sizing
+(the mode it's actually tuned for, ~100 frames/chunk) instead of the `REMOTION_LAMBDA_CONCURRENCY=6`
+throttle that forced artificially large chunks and caused the previous session's chunk failures.
+
+### What was changed
+- **`server/services/lambdaRender.js`** — `getLambdaConcurrency()` now returns `undefined` when
+  `REMOTION_LAMBDA_CONCURRENCY` isn't explicitly set (previously defaulted to `6`), and the
+  `renderMediaOnLambda` call only includes the `concurrency` key at all when it's truthy — omitting it
+  entirely lets Remotion compute its own chunk sizing rather than passing `concurrency: undefined`
+  explicitly. `REMOTION_LAMBDA_CONCURRENCY` still works as an optional override if a lower quota ever
+  forces throttling again.
+- **`.env` / `.env.example`** — `REMOTION_LAMBDA_CONCURRENCY=6` commented out; default is now unset.
+
+### Live-tested and confirmed working end-to-end (real cloud render, not simulated)
+Ran the real Express render route (`POST /api/render`, `renderTarget: 'lambda'`) against
+`proj_1783321393296`'s actual on-disk `scenes.json` (canonical `scenes`/`selectedClips`/`audio`, not a
+synthetic probe) — the full pipeline this migration was built for, start to finish:
+1. **S3 upload step resumed past existing assets**: `[render] S3 upload complete: 0 uploaded, 65
+   already present — starting render` — every asset from earlier sessions' partial attempts was still
+   in S3 at the correct key, so the sync step verified and skipped all 65 rather than re-uploading.
+2. **`renderMediaOnLambda` invoked with no `concurrency` key** — confirmed via log:
+   `Invoking Lambda function ...-900sec in eu-central-1 (concurrency=default (Remotion-managed))...`
+3. **Progress streamed via the existing SSE contract, unchanged** — `/api/render/progress/:projectId`
+   reported `{percent, frame, totalFrames}` exactly as before; framesRendered climbed from 0 to
+   11634/11634 across many parallel chunks (a small fraction of the time the throttled `concurrency=6`
+   run spent stuck on its first few chunks).
+4. **MP4 produced in S3 and downloaded** to `projects/proj_1783321393296/output/final.mp4` — 256,907,168
+   bytes.
+
+**ffprobe-verified**: H.264 1920×1080 video + AAC 48kHz stereo audio, `duration=387.86s` (exactly
+11634 frames ÷ 30fps). `ffmpeg -af volumedetect`: `mean_volume: -28.1dB`, `max_volume: -5.8dB` —
+narration audibly present, not a silent track.
+
+**Visual spot-check** (frames extracted at 5 points spread across the full timeline, including one
+near the very end to cross a Lambda chunk-stitch boundary): a `ComparisonChart` motion graphic, a
+`TimelineBar` motion graphic, a `real_footage` clip, and a `QuoteCard` motion graphic all rendered
+correctly — no `ErrorBoundaryScene` error cards, no black frames, no stitching artifacts at chunk
+boundaries.
+
+**`3d_graphic`/globe scene**: `proj_1783321393296` has no `3d_graphic` scenes (its 33 scenes are 16
+`motion_graphic`, 14 `image`, 3 `real_footage`) — the WebGL/globe risk was isolated and confirmed
+separately in the probe session above, not inside this specific project's real render. No project in
+this codebase currently uses `3d_graphic` in production.
+
+**`renderTarget: 'local'` fallback**: still works, unaffected by the `lambdaRender.js` change (local
+mode never touches that file). Verified live: `remotion/localAssets/clips` had been mostly cleared
+(2 of 40 clips present) — re-triggering a render for the same project on-demand resynced assets via
+`resolveRenderAssetPath` exactly as designed (no manual resync step needed), the CLI spawned
+(`concurrency=3`, `--gl=angle`), and progressed cleanly to 1530/11634 frames (13%) before being
+cancelled intentionally (letting a CPU-bound local render of this size finish wasn't necessary to
+confirm the fallback path is intact).
+
+### The real number this migration was for
+**Wall-clock, HTTP POST to fully-downloaded MP4 on disk: ~651 seconds (~10m51s)** for a 33-scene,
+11634-frame (6m28s output), mixed motion_graphic/image/real_footage project — measured end-to-end
+across the actual S3-resume-upload → Lambda invoke → poll → download sequence, not just the Lambda
+render portion in isolation.
+
+### Assessment
+**Lambda migration is complete.** The full-project render works reliably at Remotion's own default
+chunk sizing now that the account's concurrency quota supports it — confirming the previous session's
+hypothesis that chunk failures were caused by artificially large chunks from the quota-driven
+throttle, not a bug in this repo's asset resolution, upload, or Lambda-invocation code. Both render
+targets (`local` and `lambda`) are live-tested and working. No further phases planned.
+
+### Files changed
+- `server/services/lambdaRender.js` — concurrency throttle removed (opt-in override only).
+- `.env`, `.env.example` — `REMOTION_LAMBDA_CONCURRENCY=6` commented out.

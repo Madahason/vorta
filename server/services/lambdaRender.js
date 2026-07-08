@@ -18,23 +18,24 @@ const CHROMIUM_OPTIONS = { gl: 'angle' };
 // concurrency: how many Lambda function instances this render uses (Remotion computes
 // chunk size AS totalFrames/concurrency internally — 'concurrency' and 'framesPerLambda'
 // are mutually exclusive inputs, setting both throws). Unthrottled, Remotion aims for
-// 75-150 simultaneous instances depending on render length, which hit a real "AWS
-// Concurrency limit reached (Rate Exceeded)" error during live testing — confirmed via
-// AWS Service Quotas (L-B99A9384) that this account's actual Lambda concurrent-execution
-// quota is 10, and the orchestrator invocation itself holds one of those 10 slots, so the
-// safe ceiling is ~9. Defaults to a conservative 6; override via REMOTION_LAMBDA_CONCURRENCY
-// once that account-level AWS quota has been raised, for faster, more parallel renders.
+// 75-150 simultaneous instances depending on render length via its own
+// bestFramesPerFunctionParam sizing (~100 frames/chunk) — this used to hit a real "AWS
+// Concurrency limit reached (Rate Exceeded)" error when the account's Lambda
+// concurrent-execution quota was 10 (confirmed via AWS Service Quotas, L-B99A9384), so a
+// REMOTION_LAMBDA_CONCURRENCY=6 throttle was added, forcing artificially large chunks
+// (~1300-1900 frames for an 11634-frame project) that then intermittently failed to report
+// back regardless of function timeout (240s or 900s) — see PLAN.md's "full-project render"
+// session for the full investigation.
 //
-// At concurrency=6-9, a large render's chunks (e.g. ~1300-1900 frames for an 11634-frame
-// project) are far bigger than Remotion's own default sizing (~100 frames) and can exceed
-// a Lambda function's timeout — this is why the deployed function needs a generous timeout
-// (900s here, not Remotion's 240s CLI default) as long as concurrency stays throttled this
-// low. Once REMOTION_LAMBDA_CONCURRENCY can be raised well above ~10, chunks shrink back
-// toward Remotion's own default sizing and a shorter timeout would be fine again.
-const DEFAULT_LAMBDA_CONCURRENCY = 6;
+// The account's quota has since been raised, so the throttle is gone: leaving
+// REMOTION_LAMBDA_CONCURRENCY unset (the default) now returns undefined here, and
+// omitting `concurrency` entirely from the renderMediaOnLambda call below lets Remotion
+// pick its own framesPerLambda sizing — the mode it's actually tuned for. Set
+// REMOTION_LAMBDA_CONCURRENCY only if a future need to throttle (e.g. a lower quota again)
+// comes up.
 function getLambdaConcurrency() {
   const configured = parseInt(process.env.REMOTION_LAMBDA_CONCURRENCY, 10);
-  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_LAMBDA_CONCURRENCY;
+  return Number.isFinite(configured) && configured > 0 ? configured : undefined;
 }
 
 // renderOnLambda — invokes a Remotion Lambda render, polls until done, downloads the
@@ -67,8 +68,11 @@ async function renderOnLambda({ inputProps, outPath, onProgress, onLog, shouldCo
     );
   }
 
+  // concurrency and framesPerLambda throw if both are set — only include concurrency in
+  // the call at all when explicitly configured, so the unconfigured (default) case truly
+  // omits it rather than passing `concurrency: undefined` as an explicit key.
   const concurrency = getLambdaConcurrency();
-  if (onLog) onLog(`Invoking Lambda function ${functionName} in ${region} (concurrency=${concurrency})...`);
+  if (onLog) onLog(`Invoking Lambda function ${functionName} in ${region} (concurrency=${concurrency ?? 'default (Remotion-managed)'})...`);
   const { renderId, bucketName } = await renderMediaOnLambda({
     region,
     functionName,
@@ -77,7 +81,7 @@ async function renderOnLambda({ inputProps, outPath, onProgress, onLog, shouldCo
     inputProps,
     codec: 'h264',
     chromiumOptions: CHROMIUM_OPTIONS,
-    concurrency,
+    ...(concurrency ? { concurrency } : {}),
   });
   if (onLog) onLog(`Lambda render invoked: renderId=${renderId}`);
 
