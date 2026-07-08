@@ -5225,3 +5225,143 @@ bucket's public-read vs. presigned-URL access policy (not yet examined — uploa
 whether a Lambda render can actually *fetch* these objects back depends on this). Phase 4: deploy a
 Remotion Lambda site + function, replace the `spawn('npx remotion render', ...)` call with a Lambda
 `renderMediaOnLambda` invocation when `renderTarget === 'lambda'`.
+
+## Phase 4: Lambda invocation — wired up, blocked on AWS account limits, not yet a working
+## full-project render
+
+### Goal
+Final piece of the local→Lambda migration: replace the local CLI spawn with a real
+`renderMediaOnLambda` invocation when `renderTarget === 'lambda'`, translate Lambda's progress
+polling into the existing SSE contract unchanged, download the finished MP4 back to
+`projects/<id>/output/final.mp4`, keep local mode fully intact.
+
+### What was built
+- **`server/services/lambdaRender.js`** (new) — one orchestration function, `renderOnLambda()`,
+  mirroring `s3Sync.js`'s shape: invoke `renderMediaOnLambda` → poll `getRenderProgress` on a 3s
+  interval, translating `overallProgress`/`framesRendered`/`renderMetadata.frameRange` into the
+  exact existing `{percent, frame, totalFrames}` SSE shape → on `done`, call `downloadMedia`
+  (a purpose-built `@remotion/lambda` helper, cleaner than hand-rolling an S3 `getObject` as
+  originally planned) straight to `outPath` → return `{outputPath, fileSize}`. `shouldContinue()`
+  callback checked once per poll tick — the only "cancel" `@remotion/lambda` actually supports;
+  there is no API to terminate a running Lambda invocation, only `deleteRender` (removes S3 output
+  artifacts *after* the fact). `region`/`functionName`/`serveUrl` come from
+  `AWS_REGION`/`REMOTION_FUNCTION_NAME`/`REMOTION_SERVE_URL`, `codec: 'h264'`,
+  `chromiumOptions: { gl: 'angle' }` (Lambda's Chromium has no real GPU — no project in this repo
+  has a `3d_graphic`/globe scene to verify against yet; `swiftshader` is the documented fallback if
+  one ever renders as an error card instead of a globe).
+- **`server/routes/render.js`** — added `startLambdaRender()` alongside `startAttempt()`, same
+  `job`/`broadcast`/SSE plumbing. Wired into the branch that used to call `startAttempt()` after a
+  successful `syncAssetsToS3`. Also fixed a latent Phase 2 bug: `renderTarget:'lambda'` with an
+  *empty* upload queue used to fall through to the local CLI (Phase 4's Lambda path didn't exist
+  yet when that branch was written) — now goes straight to `startLambdaRender()`. `DELETE
+  /:projectId` used to only recognize a job as cancellable via `job.process` (truthy only for
+  local-mode jobs) — a Lambda job has no local process, so it's now also recognized via
+  `job.status === 'rendering'`; cancelling sets `job.cancelled`, which `startLambdaRender`'s poll
+  loop picks up on its next ~3s tick and stops without downloading anything.
+- **`remotion/src/components/FootageScene.jsx` — real, necessary fix, not part of the original
+  plan.** `FootageScene` always reconstructed its clip `src` via `staticFile('clips/' +
+  filename)`, discarding whatever `clip.file` actually held — correct and necessary for local
+  rendering (robust to any input shape), but wrong for Lambda: `staticFile()` resolves against the
+  *deployed site's own bundled* `public/`, which is deliberately near-empty (see `LOCAL_ASSETS_DIR`
+  in `render.js`) and never contains per-project or library clips. `render.js` was already setting
+  `clip.file` to the real S3 URL for Lambda mode (Phase 2 design), but nothing consumed it. Fix: use
+  `clip.file` directly when it matches the S3 virtual-hosted-style domain shape
+  `s3.js`'s `getPublicUrl()` constructs; fall back to the existing `staticFile()` reconstruction
+  otherwise (local mode, unaffected — verified by regression test). Images and audio never had this
+  problem — `Documentary.jsx`/`ImageScene.jsx`/`NarrationAudio` all use their resolved URL directly
+  with no `staticFile()` involved.
+- **New env vars** (`.env`, `.env.example`): `REMOTION_FUNCTION_NAME`, `REMOTION_SERVE_URL` —
+  discovered via `getFunctions()`/`getSites()` against the deployed account/region rather than
+  hand-typed. `REMOTION_LAMBDA_CONCURRENCY` (default 6) — see below.
+- **`server/package.json` / `remotion/package.json`** — `@remotion/lambda` pinned to the *exact*
+  `4.0.474` (no caret) in both, matching the deployed function/site's version. Remotion Lambda is
+  strict about client/function version compatibility; `npm install` initially pulled `4.0.486` in
+  `server/` (a caret range resolving forward) which would have mismatched the deployed
+  `remotion-render-4-0-474-...` function.
+
+### The redeploy-site-on-composition-change workflow (now a real, hit-in-practice case)
+`FootageScene.jsx` is compiled into the deployed Lambda site's `bundle.js`
+(`sites/vorta/bundle.js`) — a local source fix does nothing until the site is redeployed:
+```
+cd remotion && npx remotion lambda sites create src/index.jsx --site-name=vorta
+```
+This overwrites the existing `vorta` site in place (same serve URL, no `.env` update needed).
+Confirmed the earlier bundle-size fix held: redeploy was 7MB total, only 2 files changed.
+**Any future change to a component the Lambda render path touches (FootageScene, Documentary,
+overlays, effects) needs this redeploy — local rendering never needs it, since local always runs
+against source directly, not a pre-built bundle.**
+
+### AWS account limits hit during live testing (the actual blocker)
+Three real, load-bearing findings from live-testing against the real deployed function/site,
+confirmed via API queries, not guesses:
+1. **Lambda concurrent-execution quota is 10** for this account (confirmed via
+   `@aws-sdk/client-service-quotas`'s `GetServiceQuotaCommand({ServiceCode:'lambda',
+   QuotaCode:'L-B99A9384'})` — the `lambda:GetAccountSettings` action itself is denied under the
+   Remotion IAM policy, but Service Quotas isn't). Remotion Lambda's default, unthrottled chunking
+   aims for 75-150 simultaneous invocations depending on render length (`bestFramesPerFunctionParam`
+   in `@remotion/serverless-client`) — hit a real `AWS Concurrency limit reached (Rate Exceeded)`
+   error immediately on the first live attempt. `REMOTION_LAMBDA_CONCURRENCY` (default 6) throttles
+   this; the orchestrator invocation itself holds one of the 10 slots, so ~9 is the real ceiling.
+2. **`concurrency` and `framesPerLambda` are mutually exclusive** `renderMediaOnLambda` inputs
+   (`validateFramesPerFunction` in `@remotion/serverless-client` throws if both are set) —
+   `concurrency` directly computes chunk size as `ceil(totalFrames / concurrency)`, there is no way
+   to independently control chunk count and chunk size. At `concurrency=6` on a large project
+   (33 scenes, 11634 frames), this produces 6 chunks of ~1939 frames each — far larger than
+   Remotion's own default sizing (~100 frames) — and each chunk is a single Lambda invocation
+   subject to the function's own timeout.
+3. **Deployed a second Lambda function with `--timeout=900`** (`remotion-render-4-0-474-mem3008mb-
+   disk10240mb-900sec`, AWS Lambda's absolute maximum — timeout is baked into a function's config at
+   deploy time, not reconfigurable in place) after the original `240sec` function's chunks
+   (~1939 frames) couldn't finish in time. **900s did not fix it either** — same chunks still didn't
+   report back, ruling out "just needs more time."
+
+### Live-tested and confirmed working (real cloud renders, not simulated)
+- A 1-scene, 363-frame real_footage-only probe rendered **completely** on Lambda: 100%, downloaded
+  a real 15.8MB MP4, ffprobe-verified H.264 1920x1080 + AAC, 12.1s duration matching the source
+  scene exactly. Confirms the S3 upload/skip pipeline, the `FootageScene.jsx` fix + site redeploy,
+  Lambda invocation, SSE progress translation, and `downloadMedia` download all work correctly
+  end-to-end for a render this size.
+- Local mode fully unaffected — regression-tested twice (an image-only scene, and separately a
+  real_footage scene with the FootageScene.jsx change in place) after all Phase 4 changes.
+
+### Not resolved: chunks intermittently fail to finish above roughly 400-2500 frames
+Full 33-scene project (11634 frames): 5 of 6 chunks never reported back, at both 240s and 900s
+timeouts. A second probe (scenes 018-024, 2586 frames, mixed image/real_footage/motion_graphic)
+got further (3 of 6 chunks succeeded, 79%) but still failed — critically, the failing **chunk 0 in
+that run was pure image content, zero real_footage**, which rules out real_footage decode
+specifically as the cause (the earlier hypothesis, contradicted once tested directly). Which chunk
+indices fail is inconsistent between runs. This points at Lambda-side variability (cold starts,
+transient retries, resource contention) under **artificially large chunks** — a mode Remotion
+Lambda isn't tuned/tested for (its own default targets many small ~100-frame chunks, not the
+~400-1900-frame chunks `REMOTION_LAMBDA_CONCURRENCY=6` forces on a render this size) — rather than
+a deterministic bug in this repo's code. Could not confirm the exact mechanism: `logs:
+FilterLogEvents` is denied under the Remotion IAM policy, so the CloudWatch logs Remotion's own
+error messages link to (which would show precisely where a failing chunk is stuck) were not
+directly inspectable this session.
+
+### Assessment / what's next
+Raising the AWS account's Lambda concurrency quota (Service Quotas → Lambda → "Concurrent
+executions") is likely the actual fix for reliability, not just speed — it lets
+`REMOTION_LAMBDA_CONCURRENCY` go well above 10, which shrinks chunks back toward Remotion's own
+tested default size. Decided to stop live-testing (5 real Lambda renders this session) and wait for
+that quota increase rather than keep guessing at chunk-size tuning. Once raised: retry the full
+`proj_1783321393296` render; if it completes, report the real (unthrottled) wall-clock time — the
+number this whole migration was ultimately for. If it still fails, the next step is getting
+`logs:FilterLogEvents` added to the Remotion IAM policy (or checking the CloudWatch console
+directly) to get a definitive root cause from the actual failing-chunk logs instead of inference.
+
+### Files changed
+- `server/services/lambdaRender.js` (new) — Lambda invoke/poll/download orchestration.
+- `server/routes/render.js` — `startLambdaRender()`, branch fix for lambda+empty-upload-queue,
+  `DELETE` cancel handling for Lambda jobs.
+- `remotion/src/components/FootageScene.jsx` — use `clip.file` directly when it's a real S3 URL.
+- `.env` / `.env.example` — `REMOTION_FUNCTION_NAME`, `REMOTION_SERVE_URL`,
+  `REMOTION_LAMBDA_CONCURRENCY`.
+- `server/package.json`, `remotion/package.json` — `@remotion/lambda` pinned to exact `4.0.474`.
+- Lambda site `vorta` redeployed (bundle fix). Second Lambda function deployed
+  (`...-900sec`, alongside the original `...-240sec`, both still present in the account).
+
+**Not changed:** `Documentary.jsx`, audio volume mix, `numberOfSharedAudioTags`, `TransitionSeries`,
+`scene_id` keys, `audioSpecs`/`scenes` matching, `Root.jsx` fonts, `renderTarget:'local'` behavior
+(regression-verified twice), the Phase 1/2/3 resolver and upload pipeline (unchanged, just now
+actually consumed by a real Lambda invocation).

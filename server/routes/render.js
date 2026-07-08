@@ -5,6 +5,7 @@ const os     = require('os');
 const { spawn } = require('child_process');
 const { resolveRenderAssetUrl, buildAssetKey } = require('../services/renderAssets');
 const { syncAssetsToS3 } = require('../services/s3Sync');
+const { renderOnLambda } = require('../services/lambdaRender');
 
 // In-memory render job store — keyed by projectId
 const renderJobs = new Map();
@@ -553,6 +554,48 @@ router.post('/', async (req, res) => {
     });
   }
 
+  // Phase 4 — lambda mode's render step. Same job/broadcast/SSE plumbing as
+  // startAttempt() above, so ExportPanel needs zero changes regardless of which target
+  // actually rendered. inputProps is propsData itself: the Documentary composition
+  // doesn't know or care whether it's running on Lambda or the local CLI.
+  function startLambdaRender() {
+    broadcast(job, { type: 'log', message: 'Starting Lambda render...' });
+    renderOnLambda({
+      inputProps: propsData,
+      outPath:    outputPath,
+      shouldContinue: () => !job.cancelled,
+      onProgress: ({ percent, frame, totalFrames }) => {
+        if (job.cancelled) return;
+        job.progress = { percent, frame, totalFrames, stage: 'rendering' };
+        broadcast(job, { type: 'progress', percent, frame, totalFrames, stage: 'rendering' });
+      },
+      onLog: (message) => {
+        console.log(`[render] ${message}`);
+        broadcast(job, { type: 'log', message });
+      },
+    }).then((result) => {
+      if (job.cancelled || result?.cancelled) return;
+      console.log(`[render] Lambda render done for project ${projectId}: ${result.outputPath} (${result.fileSize} bytes)`);
+      job.status = 'done';
+      broadcast(job, {
+        type:       'done',
+        outputPath: `/projects/${projectId}/output/final.mp4`,
+        fileSize:   result.fileSize,
+      });
+      job.sseClients.forEach(c => { try { c.end(); } catch {} });
+      job.sseClients.clear();
+    }).catch((err) => {
+      if (job.cancelled) return;
+      const message = `Render aborted: Lambda render failed: ${err.message}`;
+      console.error(`[render] ${message}`);
+      job.status = 'error';
+      job.stderr = message;
+      broadcast(job, { type: 'error', message });
+      job.sseClients.forEach(c => { try { c.end(); } catch {} });
+      job.sseClients.clear();
+    });
+  }
+
   // Respond immediately — same principle as the CLI spawn below already followed
   // (fire-and-stream, never block the HTTP response on the actual work): the client is
   // free to start GET /progress/:projectId right away and see whichever stage is
@@ -561,18 +604,25 @@ router.post('/', async (req, res) => {
   // finishes.
   res.json({ started: true, projectId });
 
-  // Local mode, or lambda mode with nothing queued to upload (e.g. every referenced
-  // asset was null/not-yet-generated): go straight to rendering, exactly as before Phase 2.
-  if (renderTarget !== 'lambda' || uploadQueue.length === 0) {
+  // Local mode: always the local CLI, exactly as before Phase 2/4.
+  if (renderTarget !== 'lambda') {
     startAttempt(concurrency, false);
     return;
   }
 
-  // Phase 2: lambda mode with assets to upload — sync to S3 first, awaited, before the
-  // render is allowed to start (still the local CLI in this phase; Phase 4 replaces this
-  // with the actual Lambda invocation). On any upload failure, abort exactly like the
+  // Lambda mode with nothing queued to upload (e.g. every referenced asset was already
+  // in S3, or null/not-yet-generated) — go straight to the Lambda render, no upload step
+  // needed. (Phase 2 had this case incorrectly falling through to the LOCAL CLI, since
+  // Phase 4's Lambda invocation didn't exist yet at the time — fixed here.)
+  if (uploadQueue.length === 0) {
+    startLambdaRender();
+    return;
+  }
+
+  // Lambda mode with assets to upload — sync to S3 first, awaited, before the Lambda
+  // render is allowed to start. On any upload failure, abort exactly like the
   // missingAssets/httpOffenders checks above: mark the job errored, broadcast SSE
-  // { type: 'error' } naming every failed asset, never spawn anything.
+  // { type: 'error' } naming every failed asset, never invoke Lambda.
   broadcast(job, { type: 'log', message: `Uploading ${uploadQueue.length} asset(s) to S3...` });
   syncAssetsToS3(uploadQueue, {
     onProgress: (completed, total) => {
@@ -604,7 +654,7 @@ router.post('/', async (req, res) => {
     console.log(`[render] S3 upload complete: ${uploadedCount} uploaded, ${skippedCount} already present — starting render`);
     broadcast(job, { type: 'log', message: 'S3 upload complete — starting render.' });
     job.progress = { percent: 0, frame: 0, totalFrames: 0, stage: 'rendering' };
-    startAttempt(concurrency, false);
+    startLambdaRender();
   }).catch(err => {
     if (job.cancelled) return;
     const message = `Render aborted: S3 upload failed: ${err.message}`;
@@ -663,9 +713,15 @@ router.delete('/:projectId', (req, res) => {
   const { projectId } = req.params;
   const job = renderJobs.get(projectId);
 
-  if (job?.process) {
+  // A local-mode job has a real child process to kill. A Lambda-mode job never sets
+  // job.process (there's no local process — see lambdaRender.js's comment on why no
+  // "cancel a running Lambda invocation" API exists), so it's recognized as cancellable
+  // by job.status === 'rendering' instead; setting job.cancelled here is what makes
+  // startLambdaRender()'s poll loop (checked once per ~3s tick via shouldContinue) stop
+  // on its next iteration and never download/report a result.
+  if (job?.process || job?.status === 'rendering') {
     job.cancelled = true;
-    try { job.process.kill(); } catch {}
+    if (job.process) { try { job.process.kill(); } catch {} }
     job.status = 'cancelled';
     job.sseClients.forEach(c => { try { c.end(); } catch {} });
     job.sseClients.clear();
