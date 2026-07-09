@@ -112,9 +112,14 @@ function sendSSE(res, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
+// target: job.renderTarget is merged into every broadcast event — additive (never
+// overrides a caller-supplied field) so every progress/log/done/error event during an
+// active render carries which path (lambda/local) actually ran, without touching each of
+// the dozen+ individual broadcast() call sites below.
 function broadcast(job, data) {
+  const payload = { target: job.renderTarget, ...data };
   job.sseClients.forEach(clientRes => {
-    try { sendSSE(clientRes, data); } catch {}
+    try { sendSSE(clientRes, payload); } catch {}
   });
 }
 
@@ -153,15 +158,15 @@ function parseProgress(line, job) {
 
 // ── POST / — start render ──────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
-  // renderTarget: 'local' (default, unchanged behavior — every existing caller omits this
-  // field) or 'lambda' — Phase 1 of the Remotion Lambda migration. 'lambda' switches every
-  // resolveAsset() call below from the local staticFile sync (resolveRenderAssetPath) to
-  // computing an S3 URL (resolveRenderAssetUrl) instead. The local CLI is still spawned
-  // either way in this phase — no Lambda invocation yet (that's Phase 4) — so 'lambda' is
-  // for inspecting the resulting scenes.json's asset URLs, not for producing a working
-  // local render (real_footage clips in particular won't resolve locally in this mode,
-  // since staticFile() has nothing synced to find — see the clips block below).
-  const { projectId, scenes, selectedClips, audio, renderTarget = 'local' } = req.body;
+  // renderTarget: 'lambda' (default — the Lambda migration is complete, see PLAN.md) or
+  // 'local', which is now an explicit opt-in only. A caller must pass renderTarget:'local'
+  // deliberately (offline/debug use) to get the local CLI path; every caller that omits
+  // the field, including the app's own Export button, renders on Lambda. This flip exists
+  // because a local render silently ran once when Lambda was intended, hit a cleared
+  // localAssets cache + local-disk ceiling — exactly the failure class the Lambda
+  // migration was meant to eliminate — so "no renderTarget specified" must never again
+  // mean "local".
+  const { projectId, scenes, selectedClips, audio, renderTarget = 'lambda' } = req.body;
 
   if (!projectId || !Array.isArray(scenes) || !scenes.length) {
     return res.status(400).json({ error: 'projectId and scenes array are required' });
@@ -305,13 +310,14 @@ router.post('/', async (req, res) => {
     }. Re-generate or re-select these assets before rendering.`;
     console.error(`[render] ${message}`);
     renderJobs.set(projectId, {
-      process:    null,
-      progress:   { percent: 0, frame: 0, totalFrames: 0 },
-      status:     'error',
-      outputPath: null,
-      stderr:     message,
-      sseClients: new Set(),
-      cancelled:  false,
+      process:      null,
+      progress:     { percent: 0, frame: 0, totalFrames: 0 },
+      status:       'error',
+      outputPath:   null,
+      stderr:       message,
+      sseClients:   new Set(),
+      cancelled:    false,
+      renderTarget,
     });
     return res.json({ started: true, projectId });
   }
@@ -384,13 +390,14 @@ router.post('/', async (req, res) => {
     const message = `Render aborted: asset field(s) resolved to a local/dev-server URL instead of a valid ${renderTarget === 'lambda' ? 'S3' : 'local staticFile'} path: ${httpOffenders.join('; ')}`;
     console.error(`[render] ${message}`);
     renderJobs.set(projectId, {
-      process:    null,
-      progress:   { percent: 0, frame: 0, totalFrames: 0 },
-      status:     'error',
-      outputPath: null,
-      stderr:     message,
-      sseClients: new Set(),
-      cancelled:  false,
+      process:      null,
+      progress:     { percent: 0, frame: 0, totalFrames: 0 },
+      status:       'error',
+      outputPath:   null,
+      stderr:       message,
+      sseClients:   new Set(),
+      cancelled:    false,
+      renderTarget,
     });
     return res.json({ started: true, projectId });
   }
@@ -460,13 +467,15 @@ router.post('/', async (req, res) => {
   const initialStage = renderTarget === 'lambda' && uploadQueue.length > 0 ? 'uploading' : 'rendering';
 
   const job = {
-    process:    null,
-    progress:   { percent: 0, frame: 0, totalFrames: 0, stage: initialStage },
-    status:     'rendering',
+    process:      null,
+    progress:     { percent: 0, frame: 0, totalFrames: 0, stage: initialStage },
+    status:       'rendering',
     outputPath,
-    stderr:     '',
-    sseClients: new Set(),
-    cancelled:  false,
+    stderr:       '',
+    sseClients:   new Set(),
+    cancelled:    false,
+    renderTarget, // 'lambda' or 'local' — read by broadcast() and the GET reconnect route
+                  // below so every SSE event this job emits carries which path ran.
   };
   renderJobs.set(projectId, job);
 
@@ -685,13 +694,13 @@ router.get('/progress/:projectId', (req, res) => {
   }
 
   if (job.status === 'done') {
-    sendSSE(res, { type: 'done', outputPath: `/projects/${projectId}/output/final.mp4` });
+    sendSSE(res, { type: 'done', outputPath: `/projects/${projectId}/output/final.mp4`, target: job.renderTarget });
     res.end();
     return;
   }
 
   if (job.status === 'error') {
-    sendSSE(res, { type: 'error', message: job.stderr || 'Render failed' });
+    sendSSE(res, { type: 'error', message: job.stderr || 'Render failed', target: job.renderTarget });
     res.end();
     return;
   }
@@ -702,6 +711,7 @@ router.get('/progress/:projectId', (req, res) => {
     frame:       job.progress.frame,
     totalFrames: job.progress.totalFrames,
     stage:       job.progress.stage,
+    target:      job.renderTarget,
   });
 
   job.sseClients.add(res);

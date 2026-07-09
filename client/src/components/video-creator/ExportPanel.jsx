@@ -27,6 +27,7 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
   const [outputPath, setOutputPath]   = useState(null)
   const [fileSize, setFileSize]       = useState(null)
   const [totalRenderTime, setTotalRenderTime] = useState(null)
+  const [renderTargetUsed, setRenderTargetUsed] = useState(null) // 'lambda' | 'local', from SSE event.target
 
   // ─── audio state ─────────────────────────────────────────────────────────────
   const [audio, setAudio] = useState(null) // { path, filename, size, duration? }
@@ -142,6 +143,7 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
     setOutputPath(null)
     setFileSize(null)
     setTotalRenderTime(null)
+    setRenderTargetUsed(null)
 
     startTimeRef.current = Date.now()
     clearInterval(elapsedRef.current)
@@ -170,7 +172,9 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
       const res  = await fetch(`${SERVER_URL}/api/render`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ projectId, scenes: scenesWithPaths, selectedClips, audio: audioPayload }),
+        // Explicit renderTarget: 'lambda' — the app's Export button always renders on
+        // Lambda; local is an explicit opt-in only, never reachable from this UI.
+        body:    JSON.stringify({ projectId, scenes: scenesWithPaths, selectedClips, audio: audioPayload, renderTarget: 'lambda' }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to start render')
@@ -190,6 +194,7 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
 
     es.onmessage = (e) => {
       const event = JSON.parse(e.data)
+      if (event.target) setRenderTargetUsed(event.target)
 
       if (event.type === 'progress') {
         setProgress({ percent: event.percent, frame: event.frame, totalFrames: event.totalFrames })
@@ -233,6 +238,7 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
     setRenderState('idle')
     setProgress({ percent: 0, frame: 0, totalFrames: 0 })
     setElapsed(0)
+    setRenderTargetUsed(null)
   }
 
   // ─── reset ───────────────────────────────────────────────────────────────────
@@ -246,6 +252,7 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
     setOutputPath(null)
     setFileSize(null)
     setTotalRenderTime(null)
+    setRenderTargetUsed(null)
   }
 
   // ─── UI helpers ──────────────────────────────────────────────────────────────
@@ -517,6 +524,9 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
             {estRemaining !== null && (
               <span>Est. remaining: ~{formatTime(estRemaining)}</span>
             )}
+            {renderTargetUsed && (
+              <span>{renderTargetUsed === 'lambda' ? 'Rendering via Lambda' : 'Rendering via Local'}</span>
+            )}
           </div>
         </div>
       )}
@@ -542,6 +552,11 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
             {fileSize > 0 && (
               <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.30)' }}>
                 {formatFileSize(fileSize)}
+              </span>
+            )}
+            {renderTargetUsed && (
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.30)' }}>
+                {renderTargetUsed === 'lambda' ? 'via Lambda' : 'via Local'}
               </span>
             )}
           </div>

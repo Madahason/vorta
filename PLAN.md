@@ -5459,3 +5459,73 @@ targets (`local` and `lambda`) are live-tested and working. No further phases pl
 ### Files changed
 - `server/services/lambdaRender.js` — concurrency throttle removed (opt-in override only).
 - `.env`, `.env.example` — `REMOTION_LAMBDA_CONCURRENCY=6` commented out.
+
+## Session — Lambda is now the default render target; local is explicit opt-in
+
+### Goal
+A "retry" ran with `renderTarget: 'local'` (the previous default — every caller that omitted the
+field silently got local) and hit a cleared `localAssets` cache + local-disk ceiling — exactly the
+failure class the Lambda migration exists to eliminate. Flip the default so a render is Lambda unless
+`renderTarget: 'local'` is explicitly requested, make it visible which path a given render actually
+used (Lambda costs AWS money, local doesn't), and confirm there's no silent fallback from a failed
+Lambda render to local.
+
+### What was changed
+- **`server/routes/render.js`** — `renderTarget = 'local'` → `renderTarget = 'lambda'` as the default
+  when the POST body omits the field (line ~164); comment above it rewritten to state the new
+  default and why (the local-render-on-cleared-cache incident). `job.renderTarget` is now stored on
+  every job object (the main one and both early-abort error jobs) at creation. `broadcast(job, data)`
+  merges `{ target: job.renderTarget, ...data }` into every event before fanning it out — a single
+  change that puts `target` on every `progress`/`log`/`done`/`error` event emitted during an active
+  render, additive only (no existing field touched). The three direct `sendSSE()` calls in the
+  `GET /progress/:projectId` reconnect path (done/error/progress snapshot for a job that already
+  finished or is mid-flight) got `target: job.renderTarget` added by hand since they don't go through
+  `broadcast()`.
+- **`client/src/components/video-creator/ExportPanel.jsx`** — the POST body now explicitly sends
+  `renderTarget: 'lambda'` (belt-and-suspenders alongside the server default — the app's own Export
+  button is unambiguously wired to Lambda regardless of what the server defaults to). New
+  `renderTargetUsed` state, set from `event.target` on every SSE message; reset alongside the other
+  render-state fields in `doRender`, `handleCancel`, and `handleReset`. Displayed as a small label
+  ("Rendering via Lambda"/"Rendering via Local", "via Lambda"/"via Local") next to the existing
+  Elapsed/Est. remaining row (rendering state) and next to the file size (done state), using the same
+  `rgba(255,255,255,0.30)` 11px style already used for those adjacent labels.
+- **No fallback logic added** — verified by reading `startLambdaRender()`'s `.catch` (unchanged):
+  a Lambda failure already goes straight to `job.status = 'error'` + a broadcast error, never into
+  `startAttempt()` (the local CLI spawn). The only retry that exists (`handleAttemptFailure`) is
+  local-mode-internal (retries the local CLI at halved concurrency on its own failure) and was never
+  reachable from the Lambda path — this session's live test (below) confirms that held.
+
+### Live-tested and confirmed working (real server, real requests, one real forced AWS failure)
+Ran three server instances (default port, then two on alternate ports to avoid clobbering a
+long-running process) against a minimal single-scene `3d_graphic` payload (no local asset files
+needed, so each test is cheap and fast):
+1. **POST with no `renderTarget`** → server log: `Invoking Lambda function
+   remotion-render-4-0-474-mem3008mb-disk10240mb-900sec ... (concurrency=default
+   (Remotion-managed))...` — confirms the default is genuinely Lambda now. SSE `done` event (via the
+   reconnect path, since this tiny render finished before the stream was opened):
+   `{"type":"done","outputPath":"...","target":"lambda"}`.
+2. **POST with `renderTarget: 'local'`** → server log shows the `npx remotion render ...
+   --public-dir ...localAssets` CLI spawn and a clean `Exited with code 0`. Live (non-reconnect) SSE
+   event captured mid-render: `{"type":"progress",...,"target":"local"}`; reconnect-path `done` event
+   after completion: `{"type":"done","outputPath":"...","target":"local"}`. Confirms local is still
+   fully functional as an explicit opt-in.
+3. **Forced Lambda failure** — started a third instance with `REMOTION_FUNCTION_NAME` overridden to
+   a nonexistent function name (dotenv doesn't override an already-set env var, so this cleanly beat
+   the real `.env` value) and POSTed with no `renderTarget`. Got a real AWS IAM error back through the
+   SSE stream: `{"type":"error","message":"Render aborted: Lambda render failed: User: ... is not
+   authorized to perform: lambda:InvokeFunction on resource: ...:function:nonexistent-function-xyz
+   ...","target":"lambda"}`. Server log confirms **no** `npx remotion render` / local CLI spawn line
+   appears anywhere after the failure — no silent fallback to local occurred.
+
+### Assessment
+Lambda is now the real default for every caller that doesn't explicitly ask for local — the app's own
+Export button included. Local remains fully intact and equally easy to reach on purpose
+(`renderTarget: 'local'`), and a Lambda failure surfaces as a clear SSE error with zero risk of
+silently falling back to a local render that might hit the same disk/cache problem this session
+started from. Every SSE consumer now gets an unambiguous `target` field for cost/path visibility.
+
+### Files changed
+- `server/routes/render.js` — default flip, `job.renderTarget`, `target` field on `broadcast()` and
+  the reconnect route's three `sendSSE()` calls.
+- `client/src/components/video-creator/ExportPanel.jsx` — explicit `renderTarget: 'lambda'` in the
+  POST body, `renderTargetUsed` state + display.
