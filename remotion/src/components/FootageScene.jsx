@@ -8,12 +8,20 @@ import PlaceholderScene from './PlaceholderScene';
 // <video> element — much faster than <Video>/<Html5Video> for real_footage clips, and
 // it has its own bounded delayRender (below) instead of <Video>'s unbounded
 // "Loading <Html5Video> duration" wait that used to be able to hang the whole render.
-// 15s (not the previous <Video>-era 8s): Remotion subtracts a 2s safety margin from
-// whatever is passed here, and OffthreadVideo's frame extraction goes through a
-// separate compositor process — under real machine load that hop needs more slack
-// than a simple fetch() did, or a merely-slow (not actually missing) clip can trip
-// the timeout and abort the render instead of falling back gracefully.
-const CLIP_LOAD_TIMEOUT_MS = 15000;
+//
+// 30s (raised from 15s) — a Lambda render failed on a real S3-hosted clip with
+// delayRender "...not cleared after 13000ms" (15000 minus Remotion's 2s safety margin).
+// Investigated and ruled out both a hardcoded proxy URL (the "http://localhost:.../proxy"
+// in that error is @remotion/renderer's OWN internal video-proxy mechanism —
+// window.remotion_proxyPort — used identically for every OffthreadVideo on local AND
+// Lambda; this component already passes the S3 URL straight through, see isS3Url below)
+// and a stale deployed site bundle (no changes to this file since the S3-passthrough fix,
+// and that exact clip/deployed bundle had already rendered successfully once). The
+// failure was on a large (~85MB) fragmented-MP4 real_footage clip fetched through
+// Remotion's internal proxy — evidence points to marginal/variable fetch+decode time
+// under real Lambda network conditions (not a deterministic bug), so this just gives more
+// headroom.
+const CLIP_LOAD_TIMEOUT_MS = 30000;
 
 // Derive the bare filename staticFile('clips/<filename>') expects from whatever
 // shape the clip's stored `file` field takes — a bare filename, a

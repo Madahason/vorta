@@ -5529,3 +5529,72 @@ started from. Every SSE consumer now gets an unambiguous `target` field for cost
   the reconnect route's three `sendSSE()` calls.
 - `client/src/components/video-creator/ExportPanel.jsx` — explicit `renderTarget: 'lambda'` in the
   POST body, `renderTargetUsed` state + display.
+
+## Session — real_footage Lambda timeout investigation (both hypothesized causes disproven)
+
+### Goal
+A Lambda render failed on a `real_footage` clip with `delayRender "Fetching
+http://localhost:3000/proxy?src=https://...s3.eu-central-1.amazonaws.com/library/clips/
+pixabay_282082_tractor...mp4 ... not cleared after 13000ms"`. Two causes were suspected going in: (1)
+`OffthreadVideo`'s `src` manually wrapped in a hardcoded `localhost:3000/proxy` URL instead of
+receiving the S3 URL directly, or (2) the deployed Lambda site bundle predating the S3-passthrough
+fix (stale code).
+
+### What was actually found — both hypotheses were wrong
+1. **No hardcoded proxy wrapping exists.** `remotion/src/components/FootageScene.jsx` already passes
+   the resolved S3 URL straight into `OffthreadVideo` (`src={src}`, `isS3Url(clip?.file)` check
+   unchanged since the Phase 4 fix). Grepped Remotion's own packages
+   (`node_modules/remotion/dist/.../offthread-video-source.js`,
+   `@remotion/renderer/dist/.../prepare-server.js`) and confirmed
+   `http://localhost:${window.remotion_proxyPort}/proxy?src=...` is `@remotion/renderer`'s **own
+   internal** video-proxy mechanism — used identically for every `OffthreadVideo`, on both local
+   renders and inside a single Lambda invocation (each Lambda container runs its own headless
+   Chromium *and* this internal proxy server together, so `localhost` is valid within that
+   container). There is no app-code proxy URL to remove.
+2. **The site bundle wasn't stale.** `git log -- remotion/src/components/FootageScene.jsx` shows no
+   changes since the Phase 4 S3-passthrough fix (`c331dd6`), and the *previous* session's full
+   33-scene Lambda render (using this exact deployed bundle, no redeploy in between) already rendered
+   this exact clip successfully — confirmed by re-extracting that render's scene 023 frame (the
+   tractor/highway clip) from the still-on-disk output MP4 and finding real footage, not a
+   placeholder. A stale/broken bundle could not have produced that result.
+3. **The clip itself checked out.** `objectExists`/`getObjectSize` (`server/services/s3.js`) confirmed
+   the S3 object matches the local file byte-for-byte (88,390,105 bytes). MP4 box-structure inspection
+   (a small script walking top-level boxes) showed a normal faststart layout (`moov` immediately after
+   `ftyp`) with large fragments (~38MB/37MB) — structurally comparable to another clip
+   (`pixabay_351268`, industrial) that succeeded in the very same render.
+4. **No clean deterministic differentiator found.** Given the previous session's evidence that this
+   exact clip/bundle/code already rendered successfully once, the failure is most likely a transient
+   condition (network variability fetching a large clip through Remotion's internal proxy under real
+   Lambda conditions, possibly worse now that concurrency is unthrottled and more chunks fetch clips
+   simultaneously) rather than a reproducible bug. Reported this honestly instead of overstating
+   certainty, and asked how to proceed — chose to raise the timeout as defensive headroom regardless
+   of whether the trigger was transient or marginal.
+
+### Fix applied
+- **`remotion/src/components/FootageScene.jsx`** — `CLIP_LOAD_TIMEOUT_MS` raised from `15000` to
+  `30000`, with the comment rewritten to record the actual investigation (not the original, disproven
+  hypotheses) so a future reader isn't misled into re-chasing a hardcoded-URL theory that isn't there.
+- **Lambda site redeployed** (`npx remotion lambda sites create src/index.jsx --site-name=vorta
+  --region=eu-central-1`) — required for this timeout change to actually reach Lambda, same serve URL,
+  +2 files, ~7MB bundle (consistent with a small, healthy change).
+
+### Live-tested and confirmed working
+Re-ran the full `proj_1783321393296` render (33 scenes, 11634 frames, `renderTarget: 'lambda'`,
+default/unthrottled concurrency) against the redeployed site — the same project whose scene 023 uses
+this exact tractor/highway clip. Completed end-to-end in **~567 seconds (~9m27s)** wall-clock (POST to
+downloaded MP4). `ffprobe`: H.264 1920×1080 + AAC, `duration=387.86s`, matching the expected frame
+count exactly. Extracted scene 023's frame again post-fix: real footage (the same aerial highway shot),
+no error card, no timeout.
+
+### Assessment
+No code defect was found in the S3/proxy wiring — it was already correct. The applied fix (a more
+generous `OffthreadVideo` timeout) is a reasonable hardening for large real_footage clips regardless of
+whether this specific failure was transient or marginal, and required a site redeploy to take effect,
+consistent with "any composition change needs a redeploy." If clip-load timeouts recur despite this,
+the next step would be CloudWatch log inspection (blocked earlier by IAM — `logs:FilterLogEvents`
+denied) to see the proxy's actual fetch behavior on a failing invocation, rather than guessing further
+from outside.
+
+### Files changed
+- `remotion/src/components/FootageScene.jsx` — `CLIP_LOAD_TIMEOUT_MS` 15000 → 30000, comment rewritten.
+- Lambda site `vorta` redeployed (same serve URL).
