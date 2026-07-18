@@ -6,6 +6,7 @@ import ClipLibrary from '../components/video-creator/ClipLibrary'
 import { WizardNav } from '../components/video-creator/WizardNav'
 import { useWizardState } from '../hooks/useWizardState'
 import { ScriptStep }  from './wizard/ScriptStep'
+import { DirectionStep } from './wizard/DirectionStep'
 import { ScenesStep }  from './wizard/ScenesStep'
 import { VisualsStep } from './wizard/VisualsStep'
 import { VoiceStep }   from './wizard/VoiceStep'
@@ -26,6 +27,16 @@ const LS = {
   selectedClips: 'vorta_selected_clips',
   sessionKey:    'vorta_session_key',
   finetuneSnapshot: 'vorta_finetune_snapshot',
+  direction:     'vorta_direction', // DD-2: resilience mirror of direction.json
+
+  // Retention EDL engine stage outputs (only present when VISUAL_ENGINE=retention) —
+  // held here between /api/analyze and /api/generate, mirroring how `scenes`/`metadata`
+  // already bridge those two calls, since no project directory exists until generate.js
+  // mints one.
+  edlBeats:      'vorta_edl_beats',
+  edlAnalysis:   'vorta_edl_analysis',
+  edl:           'vorta_edl',
+  edlValidation: 'vorta_edl_validation',
 }
 
 function lsRead(key) {
@@ -172,6 +183,17 @@ export default function VideoCreator() {
   const [showClipLibrary, setShowClipLibrary] = useState(false)
   const [overlayReviewOpen, setOverlayReviewOpen] = useState(false)
 
+  // Retention EDL engine stage outputs — undefined/null when the project was analyzed
+  // with the percentage engine (VISUAL_ENGINE=percentage).
+  const [edlBeats,      setEdlBeats]      = useState(() => lsRead(LS.edlBeats))
+  const [edlAnalysis,   setEdlAnalysis]   = useState(() => lsRead(LS.edlAnalysis))
+  const [edl,           setEdl]           = useState(() => lsRead(LS.edl))
+  const [edlValidation, setEdlValidation] = useState(() => lsRead(LS.edlValidation))
+
+  // DD-2: Documentary Direction — { version, updatedAt, treatment, audit } or null.
+  // The direction step is fully skippable; null just renders its empty state.
+  const [direction, setDirection] = useState(() => lsRead(LS.direction))
+
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [analyzeError, setAnalyzeError] = useState(null)
   const [isGenerating, setIsGenerating] = useState(false)
@@ -208,6 +230,11 @@ export default function VideoCreator() {
   useEffect(() => { lsWrite(LS.projectId,     projectId)     }, [projectId])
   useEffect(() => { lsWrite(LS.statuses,      sceneStatuses) }, [sceneStatuses])
   useEffect(() => { lsWrite(LS.selectedClips, selectedClips) }, [selectedClips])
+  useEffect(() => { lsWrite(LS.edlBeats,      edlBeats)      }, [edlBeats])
+  useEffect(() => { lsWrite(LS.edlAnalysis,   edlAnalysis)   }, [edlAnalysis])
+  useEffect(() => { lsWrite(LS.edl,           edl)           }, [edl])
+  useEffect(() => { lsWrite(LS.edlValidation, edlValidation) }, [edlValidation])
+  useEffect(() => { lsWrite(LS.direction,     direction)     }, [direction])
   useEffect(() => {
     const toSave = {}
     Object.entries(clipMatches).forEach(([sid, v]) => {
@@ -348,6 +375,32 @@ export default function VideoCreator() {
   // ─── SSE cleanup on unmount ───────────────────────────────────────────────
   useEffect(() => { return () => eventSourceRef.current?.close() }, [])
 
+  // ─── DD-2: direction project id + one-time hydration from direction.json ──
+  // The server projectId is only minted at the Visuals step, so direction.json is keyed by
+  // the client sessionKey (already proj_<ts>-shaped), minted here on first generate if needed.
+  const directionProjectId = sessionKey || projectId || null
+
+  const ensureDirectionProjectId = () => {
+    if (sessionKey) return sessionKey
+    if (projectId)  return projectId
+    const key = `proj_${Date.now()}`
+    setSessionKey(key)
+    lsWrite(LS.sessionKey, key)
+    return key
+  }
+
+  useEffect(() => {
+    if (!directionProjectId) return
+    fetch(`/api/director/${directionProjectId}`)
+      .then(r => r.json())
+      .then(data => {
+        // null direction is a normal state (never generated) — keep the localStorage
+        // fallback in that case rather than clobbering it.
+        if (data?.direction) setDirection(data.direction)
+      })
+      .catch(() => { /* offline — localStorage fallback already loaded */ })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Preview hint — show after generation finishes ────────────────────────
   useEffect(() => {
     if (prevGeneratingRef.current && !isGenerating && generateDone && scenes.length > 0) {
@@ -366,6 +419,7 @@ export default function VideoCreator() {
     setHasAnalyzed(false)
     setProjectId(null)
     setSessionKey(null)
+    setDirection(null)
     setSceneStatuses({})
     setGenerateDone(false)
     setGenerateError(null)
@@ -433,6 +487,10 @@ export default function VideoCreator() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Analysis failed')
       setScenes(data.scenes)
+      setEdlBeats(data.beats || null)
+      setEdlAnalysis(data.analysis || null)
+      setEdl(data.edl || null)
+      setEdlValidation(data.validation_report || null)
       setHasAnalyzed(true)
       matchClipsForScenes(data.scenes)
       // Advance wizard to Scenes step
@@ -469,7 +527,15 @@ export default function VideoCreator() {
       const res  = await fetch('/api/generate', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ scenes, projectId }),
+        body:    JSON.stringify({
+          scenes, projectId,
+          // Only present for retention-engine projects — generate.js persists these
+          // alongside scenes.json once it mints the project directory.
+          ...(edlBeats      ? { beats: edlBeats }             : {}),
+          ...(edlAnalysis   ? { analysis: edlAnalysis }        : {}),
+          ...(edl           ? { edl }                          : {}),
+          ...(edlValidation ? { validation_report: edlValidation } : {}),
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Generation failed')
@@ -515,31 +581,109 @@ export default function VideoCreator() {
   }
 
   // ─── Generate — real footage clip matching ────────────────────────────────
+  // Local-library matches (server/services/clipMatcher.js) are auto-selected; anything with
+  // zero local matches falls back to the existing Pexels/Pixabay stock-footage pipeline
+  // (server/services/stockFootage.js via POST /api/clips/auto-source) — same SSE pattern
+  // already implemented in client/src/pages/wizard/VisualsStep.jsx's handleAutoSourceClips.
+  // Every scene ends up either with a real clip or converted to an image scene, so nothing
+  // silently renders as a blank PlaceholderScene in the final export.
   const generateRealFootageMatches = async (realScenes, tick) => {
     if (!realScenes.length) return
-    await matchClipsForScenes(realScenes)
-    realScenes.forEach(() => tick())
+    const results = await matchClipsForScenes(realScenes)
+
+    const stillUnmatched = []
+    realScenes.forEach(s => {
+      const matches = results[s.scene_id]
+      if (matches && matches.length) {
+        handleSelectClip(s.scene_id, matches[0])
+        tick()
+      } else {
+        stillUnmatched.push(s)
+      }
+    })
+
+    if (!stillUnmatched.length) return
+
+    const settled = new Set()
+    const settle = (scene_id, cb) => {
+      if (settled.has(scene_id)) return
+      settled.add(scene_id)
+      cb()
+      tick()
+    }
+
+    try {
+      const response = await fetch('/api/clips/auto-source', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ scenes: stillUnmatched, projectId }),
+      })
+
+      const reader  = response.body.getReader()
+      const decoder = new TextDecoder()
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const text  = decoder.decode(value)
+        const lines = text.split('\n').filter(l => l.startsWith('data:'))
+
+        for (const line of lines) {
+          try {
+            const event = JSON.parse(line.slice(5).trim())
+
+            if (event.type === 'done' && event.clip) {
+              settle(event.scene_id, () => handleSelectClip(event.scene_id, event.clip))
+            } else if (event.type === 'fallback' || event.type === 'failed' || event.type === 'no_results') {
+              settle(event.scene_id, () => handleConvertToImage(event.scene_id))
+            } else if (event.type === 'complete') {
+              ;(event.fallbackToImage || []).forEach(scene_id => settle(scene_id, () => handleConvertToImage(scene_id)))
+            }
+          } catch {}
+        }
+      }
+    } catch (err) {
+      console.warn('[generateRealFootageMatches] stock auto-source failed:', err.message)
+    }
+
+    // Safety net — anything the SSE stream never resolved (e.g. a dropped connection)
+    // still gets converted to an image scene instead of staying an unresolved placeholder.
+    stillUnmatched.forEach(s => settle(s.scene_id, () => handleConvertToImage(s.scene_id)))
   }
 
   // ─── Unified Generate Assets ──────────────────────────────────────────────
   const handleGenerateAll = async () => {
-    const imageScenes   = scenes.filter(s => s.shot_type === 'image')
-    const motionScenes  = scenes.filter(s => s.shot_type === 'motion_graphic' && !s.motion_component)
-    const realScenes    = scenes.filter(s => s.shot_type === 'real_footage'   && !clipMatches[s.scene_id]?.matches?.length)
-    const total = imageScenes.length + motionScenes.length + realScenes.length
+    const motionScenes = scenes.filter(s => s.shot_type === 'motion_graphic' && !s.motion_component)
+    const realScenes   = scenes.filter(s => s.shot_type === 'real_footage'   && !clipMatches[s.scene_id]?.matches?.length)
 
     setIsGenerating(true)
     setGenerateError(null)
     setGenerateDone(false)
-    setGenerateProgress({ done: 0, total })
+    setGenerateProgress({ done: 0, total: motionScenes.length + realScenes.length })
 
-    const tick = () => setGenerateProgress(p => ({ ...p, done: p.done + 1 }))
+    const prepTick = () => setGenerateProgress(p => ({ ...p, done: p.done + 1 }))
 
+    // Real-footage matching must finish BEFORE the image-generation snapshot below —
+    // generateRealFootageMatches can convert a scene from real_footage to image (no local
+    // library match and no stock-footage result found). If the image-scene list were
+    // snapshotted upfront like these two, a converted scene would be excluded from the
+    // /api/generate dispatch entirely and permanently show "Image not generated yet" —
+    // nothing else ever generates an image for it afterward.
     await Promise.allSettled([
-      generateImageScenes(imageScenes, tick),
-      generateMotionGraphicsScenes(motionScenes, tick),
-      generateRealFootageMatches(realScenes, tick),
+      generateMotionGraphicsScenes(motionScenes, prepTick),
+      generateRealFootageMatches(realScenes, prepTick),
     ])
+
+    // Read the up-to-date scenes (post-conversion) without relying on the `scenes` closure,
+    // which is stale inside this already-running async function.
+    let latestScenes = scenes
+    setScenes(prev => { latestScenes = prev; return prev })
+
+    const imageScenes = latestScenes.filter(s => s.shot_type === 'image')
+    setGenerateProgress(p => ({ done: p.done, total: p.total + imageScenes.length }))
+
+    await generateImageScenes(imageScenes, () => setGenerateProgress(p => ({ ...p, done: p.done + 1 })))
 
     setIsGenerating(false)
     setGenerateDone(true)
@@ -602,7 +746,7 @@ export default function VideoCreator() {
     console.log('[MATCH DEBUG 1] auto-match triggered, scenes:', allScenes.length)
     console.log('[MATCH DEBUG 2] real_footage scenes:', realScenes.map(s => s.scene_id), 'tags sample:', realScenes[0]?.clip_search_tags)
     console.log('[CLIP DEBUG 1] matchClipsForScenes called, real scenes:', realScenes.length, 'tags sample:', realScenes[0]?.clip_search_tags)
-    if (!realScenes.length) return
+    if (!realScenes.length) return {}
 
     setClipMatches(prev => {
       const next = { ...prev }
@@ -632,6 +776,7 @@ export default function VideoCreator() {
       })
 
       console.log('[CLIP DEBUG 3] clipMatches updated for', Object.keys(data.results).length, 'scenes, first result:', JSON.stringify(Object.entries(data.results).slice(0, 1)))
+      return data.results
     } catch (err) {
       console.log('[CLIP DEBUG 2] match-all FAILED:', err?.message)
       setClipMatches(prev => {
@@ -639,6 +784,7 @@ export default function VideoCreator() {
         realScenes.forEach(s => { next[s.scene_id] = { matches: [], loading: false } })
         return next
       })
+      return {}
     }
   }
 
@@ -757,6 +903,21 @@ export default function VideoCreator() {
             resetKey={resetKey}
           />
         )
+      case 'direction': {
+        const sm = lsRead(LS.metadata) || {}
+        const { script: storedScript, ...storedMeta } = sm
+        return (
+          <DirectionStep
+            scriptText={storedScript || ''}
+            projectMetadata={storedMeta}
+            projectId={directionProjectId}
+            ensureProjectId={ensureDirectionProjectId}
+            direction={direction}
+            onDirectionChange={setDirection}
+            wizard={wizard}
+          />
+        )
+      }
       case 'scenes':
         return (
           <ScenesStep
@@ -898,8 +1059,9 @@ export default function VideoCreator() {
           </div>
         </div>
 
-        {/* Sticky mini player — visible on all steps except Script */}
-        {wizard.currentStep !== 'script' && scenes.length > 0 && (
+        {/* Sticky mini player — visible on all steps except Script and Direction
+            (Direction usually has no scenes yet) */}
+        {wizard.currentStep !== 'script' && wizard.currentStep !== 'direction' && scenes.length > 0 && (
           <div style={{
             display:        'flex',
             alignItems:     'center',

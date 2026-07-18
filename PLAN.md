@@ -5785,3 +5785,103 @@ with no direction.json behaves exactly as before.
   generate/voiceover/render code paths (see guarantee above), so re-burning Higgsfield/ElevenLabs/
   Lambda credits to re-prove untouched code was skipped deliberately.
 - Test artifacts cleaned: proj_dd1_livetest removed.
+
+---
+
+### Phase DD-2 — Direction step in the wizard ✅ COMPLETE
+
+UI layer over the DD-1 backend: generates, displays, and edits the director's treatment.
+The Direction step is SKIPPABLE, not gated — a project that never visits it flows
+Script → Scenes exactly as before. claude.js scene analysis, SceneCard, and the Higgsfield
+pipeline untouched; the server is untouched entirely this phase.
+
+**Files created:**
+- `client/src/pages/wizard/DirectionStep.jsx` — three states. A: centred empty panel with
+  explainer, "Generate Direction →" (disabled with tooltip when script is empty),
+  "Skip for now →" (skipStep + goTo('scenes')), muted skip note. B: staged loading messages at
+  0/12/25/40s via plain setTimeout (single long Claude call, no SSE). C: three collapsible
+  panels (first open by default) — Treatment (editable thesis + 5 audience-experience fields +
+  read-only act cards + pacing tag groups + 5 editable sound fields, per-section "Regenerate
+  this section" buttons that route to the full-treatment regenerate with confirm until DD-3
+  adds per-section endpoints), Style Bible (emphasised visual-signature input with char/word
+  counter, "Reset to default" → DEFAULT_STYLE_LOCK, live "Every image prompt will end with: …"
+  preview, non-blocking warnings for >20 words and 8K/ultra-detailed/masterpiece/award-winning/
+  trending, two-column grid of the 10 other style fields, editable motif cards), Continuity
+  Entities (type-badged cards with editable name/type/locked descriptor/prohibited variations,
+  delete + add entity, read-only evidence-claims list with Director Review note). Sticky footer:
+  ← Back / Regenerate Direction (inline confirm strip, not window.confirm — non-blocking and
+  automatable) / Generate Scene Direction → (marks direction complete → Scenes; DD-3 rewires to
+  treatment-aware analysis).
+- `client/src/styles/direction.css` — all vorta- prefixed (vorta-direction-*), imported in main.jsx.
+
+**Files modified:**
+- `client/src/hooks/useWizardState.js` — 7 stages: script → direction → scenes → visuals →
+  voice → finetune → export. The brief named the sixth stage "audio"; the existing id
+  'finetune' is that same stage (durations/transitions/audio mix) and renaming it would orphan
+  stored wizard progress, so the id stays. SKIPPABLE_STEPS = ['direction']; goTo and
+  isAccessible now allow forward navigation when every intervening incomplete step is
+  skippable; skipStep(stepId) advances without marking complete so the nav distinguishes done
+  from skipped. Old localStorage values load unchanged (no old value can be 'direction').
+- `client/src/components/video-creator/WizardNav.jsx` — third visual state "optional": dimmed
+  (opacity 0.6) but clickable, italic "optional" label replacing the description until the step
+  completes, then normal green ✓. Inner-track overflow-x scroll per Session 9 preserved.
+- `client/src/pages/VideoCreator.jsx` — DirectionStep wired into renderStep; LS.direction =
+  'vorta_direction' (auto-cleared by handleClearSession via lsClearAll + setDirection(null));
+  one-time GET /api/director/:id hydration on mount (null is normal → State A; localStorage
+  mirror kept as offline fallback); mini-player now hidden on direction as well as script.
+  Direction project id: the server projectId is only minted at the Visuals step, so
+  direction.json is keyed by the client sessionKey (already proj_<ts>-shaped), minted on first
+  generate via ensureDirectionProjectId. handleAnalyze is UNCHANGED (verified via git diff).
+
+**Autosave:** edits apply optimistically to local state + the vorta_direction mirror, accumulate
+into one pending deep-partial patch, and PATCH /api/director/:projectId 800ms after the last
+keystroke. Client deepMerge mirrors the server's PATCH semantics (objects recurse, arrays
+replace) so arrays (motifs/entities) always send the full array. "✓ Saved" indicator fades after
+2s. On failure the patch is re-queued under newer edits, an inline "Couldn't save — your edits
+are kept locally" error shows, and the typed value is never discarded. Pending edits flush on
+unmount so navigating away inside the debounce window can't drop typing.
+
+**Test checklist (all verified live in Chrome against the real dev servers, using the user's
+real 1721-word "we work" project — its full localStorage was stashed under __bk_* keys first
+and restored byte-for-byte afterwards):**
+- [x] WizardNav renders 7 steps; no page-level horizontal scroll (measured docScrollW ==
+  clientW at 1266/1284px viewports; 1920px exceeded the physical display — only the intended
+  .wizard-nav-scroll inner track overflows, and wider viewports strictly reduce overflow)
+- [x] Direction shows "optional" until completed; green ✓ after
+- [x] Script step → Next ("Use existing 49 scenes →") → lands on Direction
+- [x] Skip for now → Scenes; direction NOT in completed; chip still "optional"
+- [x] After skipping, navigating back to Direction and generating works
+- [x] From Script with completed=[], clicking Scenes directly in the nav works (skippable
+  direction doesn't block)
+- [x] Generate Direction disabled with explanatory tooltip when script empty
+- [x] Loading messages rotated on schedule (sampled at ~1s/14s/27s/42s)
+- [x] Treatment rendered into all three panels, first open by default
+- [x] Signature editable; 21-word input fired the word-count warning; "8K masterpiece" fired
+  the banned-term warning; both non-blocking
+- [x] Reset to default → exactly 'dark cinematic grade, shallow depth of field, documentary'
+- [x] Live preview box tracked typed signature
+- [x] 21 rapid input events → exactly 1 PATCH (fetch instrumented); "Saved" appeared then faded
+- [x] Forced PATCH rejection → inline error, typed value retained locally and in mirror;
+  re-queued patch flushed after recovery (server state verified via GET)
+- [x] Reload → treatment persisted from direction.json (thesis + signature verified)
+- [x] Add entity → named it → persisted across reload (server round-trip); delete → gone after reload
+- [x] Regenerate confirm strip: Cancel left edits intact; Confirm regenerated (updatedAt
+  changed, panels repopulated with a new signature)
+- [x] Generate Scene Direction → direction marked complete, advanced to Scenes, existing 49
+  scenes untouched (analyze not re-run — existing unchanged path)
+- [x] Clear session → direction state nulled + wizard reset to script (same key-rewrite-as-null
+  convention as the existing vorta_scenes key)
+- [x] Mini-player hidden on Script and Direction, visible again on Scenes/Visuals
+- [x] Evidence claims render read-only with the Director Review note
+- [x] All new CSS classes vorta- prefixed
+- [x] Existing project end-to-end state unaffected without visiting Direction: restored session
+  loads on Visuals with 49 scenes/49 statuses/"All visuals ready", handleAnalyze diff-verified
+  unchanged, server untouched this phase
+- [x] Client build clean; eslint clean on all touched files; zero console errors across the
+  entire browser session
+
+**Treatment generated for the real "we work" project** (proj_1784008308819, now stored in
+projects/proj_1784008308819/direction.json): visual_signature after live regenerate test:
+"bleached corporate white bleeding to sour yellow, shallow focus, fine digital grain,
+hyper-realist". 5 acts, 5 motifs, 5 continuity entities (Adam Neumann, Masayoshi Son, WeWork
+office interior, …), 22 evidence claims.

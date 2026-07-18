@@ -2,6 +2,8 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 
 export function WizardNav({ wizard, scenes = [], onPreview }) {
   const { steps, currentStep, isComplete, isAccessible, goTo } = wizard
+  // DD-2: skippable steps render as "optional" (dimmed but clickable) until completed
+  const isSkippable = wizard.isSkippable || (() => false)
   const [width, setWidth]       = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1024))
   const [canScrollL, setCanScrollL] = useState(false)
   const [canScrollR, setCanScrollR] = useState(false)
@@ -96,10 +98,11 @@ export function WizardNav({ wizard, scenes = [], onPreview }) {
         }}
       >
         {steps.map((step, index) => {
-          const isCurrent = step.id === currentStep
-          const isDone    = isComplete(step.id)
-          const isLocked  = !isAccessible(step.id)
-          const isLast    = index === steps.length - 1
+          const isCurrent  = step.id === currentStep
+          const isDone     = isComplete(step.id)
+          const isLocked   = !isAccessible(step.id)
+          const isOptional = isSkippable(step.id) && !isDone && !isCurrent
+          const isLast     = index === steps.length - 1
 
           return (
             <div key={step.id} style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
@@ -125,7 +128,7 @@ export function WizardNav({ wizard, scenes = [], onPreview }) {
                       ? 'rgba(34,197,94,0.06)'
                       : 'transparent',
                   cursor:       isLocked ? 'not-allowed' : 'pointer',
-                  opacity:      isLocked ? 0.35 : 1,
+                  opacity:      isLocked ? 0.35 : isOptional ? 0.6 : 1,
                   transition:   'all 0.15s',
                   whiteSpace:   'nowrap',
                 }}
@@ -156,7 +159,16 @@ export function WizardNav({ wizard, scenes = [], onPreview }) {
                     }}>
                       {step.label}
                     </div>
-                    {!hidDesc && (
+                    {isOptional ? (
+                      <div style={{
+                        color:         'rgba(255,255,255,0.3)',
+                        fontSize:      10,
+                        fontStyle:     'italic',
+                        letterSpacing: '0.04em',
+                      }}>
+                        optional
+                      </div>
+                    ) : !hidDesc && (
                       <div style={{
                         color:        'rgba(255,255,255,0.22)',
                         fontSize:     10,
