@@ -15,7 +15,7 @@ const COMPOSITION_TEMPLATES = {
   over_shoulder:'over-shoulder shot, subject seen from behind, facing scene',
 };
 
-const STYLE_LOCK = 'dark cinematic 4K shallow depth of field slow dolly movement documentary aesthetic muted tones';
+const { STYLE_LOCK } = require('../config/styleDefaults'); // DD-1: value unchanged, now single-sourced
 
 function hasBannedWords(prompt) {
   const lower = prompt.toLowerCase();

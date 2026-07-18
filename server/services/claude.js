@@ -2,7 +2,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { randomUUID } = require('crypto'); // overlay ids assigned at analysis time
 const { deriveChapters } = require('./frameMath'); // FT-9: chapter numbers from dip_black chapter breaks
 
-const STYLE_LOCK = 'dark cinematic 4K shallow depth of field slow dolly movement documentary aesthetic muted tones';
+const { STYLE_LOCK } = require('../config/styleDefaults'); // DD-1: value unchanged, now single-sourced
 
 const SYSTEM_PROMPT = `You are a senior documentary video producer and scene breakdown specialist. You transform scripts into precise visual scene packages for a Remotion-based AI video pipeline.
 
@@ -63,6 +63,20 @@ STOCK FOOTAGE does NOT work for:
 - "Steve Jobs on stage at Moscone" → image (specific person, use Higgsfield)
 - "The 2008 financial crash" → motion_graphic (data/stats work better)
 - "Netflix founding in 1997" → image (historical moment, use Higgsfield)
+
+REAL PRODUCTS AND BRANDS — prefer real_footage over image:
+Unlike named individuals, tangible mass-market consumer products and brand objects (a can,
+a phone, a storefront, packaging) ARE well covered by stock photo/video libraries. When the
+script shows a real, physical, recognizable product or brand object (not the company as an
+abstraction, not a named executive), assign real_footage so a genuine product photo is used
+instead of an AI approximation — AI-generated brand logos and product likenesses are
+frequently inaccurate, while real stock photography of common products is exact.
+- "A Coca-Cola can sat on the counter" → real_footage (real product photography exists)
+- "Shoppers reached for the iPhone display" → real_footage (real product photography exists)
+- "Coca-Cola's marketing strategy shifted in 2015" → image (abstract corporate action, no
+  physical product/object being shown)
+- "Tim Cook unveiled the new iPhone" → image (specific named person — use Higgsfield, not
+  real_footage, even though the product itself would otherwise qualify)
 
 MOTION_GRAPHIC scenes — assign when:
 - The script contains a specific number, percentage, or financial figure
@@ -176,6 +190,12 @@ SUBJECT GROUNDING — every prompt must:
 4. Extract 3-6 subject_anchors — specific named entities (people, companies, products, events, places, years)
 5. At least 2 anchors must appear verbatim in higgsfield_prompt
 6. Minimum 40 characters of subject-specific content before the style lock
+7. For a named individual, the name alone is not enough grounding — include distinguishing
+   physical/appearance descriptors (build, hair, characteristic clothing or setting) alongside
+   the name so the image generator has more to work with than a text label. Do not default to
+   a generic corporate-stock-photo person just because a real name was given.
+8. For a named brand or product, include its exact real-world visual identity (specific colors,
+   logo typography, packaging/product shape) rather than a generic unbranded stand-in.
 
 COMPOSITION FIELD — assign one of these to the composition field based on dramatic purpose:
 - close_up: emotional moments, a person's face, key object detail
@@ -831,7 +851,13 @@ async function callClaude(prompt, systemPrompt = '') {
 module.exports = {
   analyzeScript,
   callClaude,
+  extractJSON, // DD-1: exported for reuse — note it expects a scene ARRAY, not an object
   detectMatchCutCandidates,
   parseMatchCutResponse,
   buildMatchCutPrompt,
+  // Additive exports for server/engine/ (retention EDL pipeline) — reuses the same
+  // prompt-quality safety net as the percentage engine. Behavior of analyzeScript/
+  // postProcessScenes above is unchanged.
+  validateAndGroundPrompts,
+  buildFallbackPrompt,
 }

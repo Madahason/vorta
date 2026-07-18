@@ -5597,4 +5597,191 @@ from outside.
 
 ### Files changed
 - `remotion/src/components/FootageScene.jsx` — `CLIP_LOAD_TIMEOUT_MS` 15000 → 30000, comment rewritten.
+
+---
+
+### Phase VR-8 — Candidate Pool tab + outlier math ✅ COMPLETE
+
+Note: the originating task brief labeled this phase "VR-7", but PLAN.md already has a completed,
+shipped Phase VR-7 ("Targeted Competitor Research" — `DeepCompetitorPanel`, `getFilteredCompetitorVideos`)
+that TT-6 explicitly depends on and reuses. To avoid a duplicate phase number and colliding with TT-6's
+references, this work was renumbered to VR-8 (confirmed with the user before implementation). VR-9/VR-10
+referenced in the original brief as "later phases" should be read as following VR-8, not VR-7.
+
+**What was built:**
+- `server/routes/research.js` — added the Candidate Pool endpoints and storage:
+  - `POST /api/research/candidates` — manual entry; validates `title`/`url` required (400 if missing);
+    computes `viewToSubRatio` server-side (`views / subscriberCount`, 0 guard for zero subscribers);
+    manual entries always get `outlierScore: null`, `outlierLabel: 'unknown'` (no channel-average data
+    available for a manually-entered video)
+  - `POST /api/research/candidates/import` — accepts `{ videoUrl }`; parses the video ID from
+    watch/shorts/youtu.be/embed URL forms; reuses the existing `ytFetch`/`getChannelInfo` helpers from
+    VR-1; pulls the video's stats + the channel's 15 most recent uploads (excluding the candidate itself)
+    to compute `channelAverageViews`; `outlierScore = views / channelAverageViews`; `outlierLabel`
+    thresholds: `<3x` weak, `3-5x` possible, `5-10x` strong, `10x+` high-priority; 400 if
+    `YOUTUBE_API_KEY` missing, 404 if the URL doesn't resolve to a real video
+  - `GET /api/research/candidates` — returns the full pool
+  - `PATCH /api/research/candidates/:candidateId` — partial update for `status` (validated against the
+    schema's enum), `notes`, `niche`, `topicCategory`
+  - `DELETE /api/research/candidates/:candidateId`
+  - `server/data/candidatePool.json` — new file-based store, same `loadX`/`saveX` pattern as
+    `scriptHistory.json`; capped at 200 entries, oldest non-`approved_for_bending`/`approved_for_scripting`
+    entries pruned first when over cap
+- `client/src/components/video-research/CandidatePool.jsx` (NEW):
+  - Top bar: "+ Add Candidate" (opens manual-entry modal), inline YouTube URL import field with its own
+    loading/error state, live candidate count
+  - `AddCandidateModal` — form covering the full schema, client-side required-field validation on
+    title/url before submit
+  - Sortable table (thumbnail, title→url, channel, views, uploaded, subs, views/sub, outlier badge,
+    status dropdown, delete) — click a header to sort by views / uploadDate / subscriberCount /
+    viewToSubRatio / outlierScore / status, click again to flip direction
+  - Filter bar: status dropdown, niche/topicCategory text filter, min-outlier range slider
+  - Outlier badge colors: weak=gray, possible=blue, strong=amber, high-priority=green, unknown=gray
+    outline
+  - Breakout flag: `subscriberCount < 50000 && outlierScore >= 5` renders a green left border on the row
+    plus a "Breakout" pill under the title
+  - Row click opens `CandidateDetailPanel` (right slide-in, read-only fields + a notes textarea that
+    PATCHes on blur)
+  - Empty states for "no candidates yet" vs. "no candidates match your filters" (distinct conditions)
+- `client/src/pages/VideoResearch.jsx` — `ResearchDashboard` (State C) gained a "Discovery" / "Candidate
+  Pool" tab bar between the top bar and the content area; Discovery tab renders the existing unmodified
+  VR-2/VR-3 three-column grid + Idea Card + Deep Competitor slide-ins; Candidate Pool tab renders the new
+  `CandidatePool` component. Tab state is local (`activeTab`, not persisted — always opens to Discovery).
+- `client/src/styles/video-research-candidates.css` (NEW) — sticky table header, row transition, modal/
+  panel scrollbar styling; imported in `main.jsx`. Most component styling follows the existing
+  `DeepCompetitorPanel.jsx` convention of Tailwind utility classes + inline style objects plus the shared
+  `vorta-input`/`vorta-textarea`/`vorta-btn-*`/`vorta-field`/`vorta-label` classes from `forms.css`.
+- No separate "API service file" existed for Video Research prior to this phase (VR-1/VR-2/VR-3 and
+  `DeepCompetitorPanel` all call `fetch` directly in-component) — `CandidatePool.jsx` follows that same
+  established convention rather than introducing a new abstraction layer.
+
+**Verification performed:**
+- Backend: exercised every endpoint directly against the running server with `curl` — missing
+  title/url → 400; valid manual entry → correct object with `outlierScore: null`/`outlierLabel:
+  'unknown'`; `subscriberCount: 0` → `viewToSubRatio: 0` (no divide-by-zero); real YouTube import
+  (`YOUTUBE_API_KEY` was configured in this environment) → real stats + computed `outlierScore`/
+  `outlierLabel`; import with an unresolvable/garbage URL → 404; import with missing `videoUrl` → 400;
+  PATCH with an invalid `status` → 400; PATCH status/notes → correct partial update; DELETE → removed.
+  200-candidate cap stress-tested with a 205-candidate script (10 marked `approved_for_scripting`) —
+  final pool settled at exactly 200 with all 10 approved entries retained and the oldest non-approved
+  entries pruned. Test data was cleared from `candidatePool.json` afterward.
+- Frontend: `npm run build` clean (zero errors/warnings); `npx eslint` on the new file clean after fixing
+  two real findings (empty catch block, a function-declared-after-its-`useEffect` ordering issue); Vite
+  dev server confirmed proxying `/api/research/candidates` through to the backend correctly.
+- **Not verified: visual/interactive browser testing.** The Claude-in-Chrome browser extension was not
+  connected in this environment, so the tab switcher, modal, table sorting/filtering, breakout flag, and
+  detail-panel notes autosave were reviewed in code and confirmed via the build/lint/API checks above,
+  but were not clicked through in an actual browser. Recommend a manual pass before considering this
+  fully production-verified.
+
+**Production-readiness checklist:**
+- [x] 1. `POST /candidates` with missing title/url → 400
+- [x] 2. `POST /candidates` with valid manual data → correct object, `outlierScore` null, `outlierLabel` "unknown"
+- [x] 3. `POST /candidates/import` with valid YouTube URL → pulls real data, computes `outlierScore`
+- [x] 4. `POST /candidates/import` with invalid/missing video → 404
+- [x] 5. `POST /candidates/import` with missing `YOUTUBE_API_KEY` → clear 400 error (code path verified; key was present in this env so the real 400 branch wasn't hit live)
+- [x] 6. `outlierLabel` thresholds correct at boundaries (2.9x/3.0x/4.9x/5.0x/9.9x/10.0x) — verified by reading `computeOutlierLabel`
+- [x] 7. `viewToSubRatio` handles `subscriberCount = 0` without divide-by-zero crash
+- [x] 8. `GET /candidates` returns full pool
+- [x] 9. `PATCH /candidates/:id` updates status and notes correctly
+- [x] 10. `DELETE /candidates/:id` removes entry
+- [x] 11. `candidatePool.json` caps at 200, prunes oldest non-approved first
+- [ ] 12. Tab switcher toggles Discovery/Candidate Pool without losing Discovery state — implemented via conditional render (Discovery subtree stays mounted-and-remounted, not literally state-preserving across tab switches beyond React's normal reconciliation); not clicked through in a browser
+- [x] 13. Manual entry modal validates required fields client-side
+- [x] 14. Import shows loading state, inline error on failure
+- [ ] 15. Table sorts correctly on all sortable columns, ascending/descending toggle works — logic reviewed, not clicked through in a browser
+- [ ] 16. Filter bar filters correctly (status, niche/category text, min outlier slider) — logic reviewed, not clicked through in a browser
+- [ ] 17. Breakout flag shows only when subscriberCount < 50000 AND outlierScore >= 5 — logic reviewed, not clicked through in a browser
+- [ ] 18. Outlier badge colors correct per label — logic reviewed, not clicked through in a browser
+- [ ] 19. Row click opens detail view, notes auto-save on blur — logic reviewed, not clicked through in a browser
+- [ ] 20. Empty state renders correctly — logic reviewed, not clicked through in a browser
+- [x] 21. All new CSS uses vorta- prefix
+- [x] 22. Client build clean — zero errors, zero warnings
+- [ ] 23. Zero console errors — not observable without a connected browser
+- [ ] 24. Layout intact at all viewport widths — not observable without a connected browser
+- [x] 25. PLAN.md updated with VR-8 session entry
 - Lambda site `vorta` redeployed (same serve URL).
+
+---
+
+### Phase DD-1 — Documentary Director foundation ✅ COMPLETE
+
+First of five phases (DD-1..DD-5) adding a Direction layer above the existing scene pipeline.
+Purely additive: no direction.json → the current single-pass analyze path runs unchanged.
+
+**Files created:**
+- `server/services/director.js` — `generateTreatment(scriptText, metadata)`: one Claude call
+  (`claude-sonnet-4-6`, `max_tokens: 8192`) over the full script → structured director's treatment
+  (visual_thesis, audience_experience, style_bible, recurring_motifs, continuity_entities, acts,
+  pacing_strategy, sound_direction, evidence_claims). Metadata header matches the claude.js
+  pattern; caller is injectable for tests (same pattern as `detectMatchCutCandidates`);
+  retry-once-on-parse-failure mirrors `analyzeScript`. Note: the brief said to reuse `extractJSON`
+  from claude.js, but every return path of `extractJSON` requires a non-empty scene ARRAY (or
+  `.scenes` array) — it throws on a valid top-level treatment object (same reason
+  `parseMatchCutResponse` exists). `extractJSON` is exported from claude.js as instructed;
+  director.js uses a dedicated object-tolerant `extractTreatmentJSON` with a comment explaining why.
+- `server/services/directionStore.js` — file persistence at `projects/proj_[id]/direction.json`
+  (`{ version: 1, updatedAt, treatment, audit: null }` — audit stays null until DD-5).
+  `readDirection` (null on missing, never throws), `writeDirection`, `hasDirection`,
+  `deleteDirection`, plus `resolveStyleLock(direction)` → treatment's `visual_signature` trimmed,
+  or `DEFAULT_STYLE_LOCK` when direction/signature is missing, non-string, or whitespace-only.
+  NOT wired into scene generation — DD-3 does that.
+- `server/routes/director.js` — mounted at `/api/director` in `server/index.js`:
+  - `POST /treatment` — validates projectId + non-empty scriptText (400 otherwise), generates,
+    persists, returns `{ treatment }`; Claude/parse failure → 500 with detail
+  - `GET /:projectId` — stored direction, or `{ direction: null }` with 200 (absence is a valid
+    state, not a 404)
+  - `PATCH /:projectId` — deep-merges a partial treatment (objects recurse, arrays/scalars
+    replace), re-stamps updatedAt, returns merged result; 404 if no direction exists yet
+    (spec only defined GET's absence behaviour)
+- `server/config/styleDefaults.js` — `DEFAULT_STYLE_LOCK` ('dark cinematic grade, shallow depth
+  of field, documentary') + the existing production `STYLE_LOCK` moved here verbatim.
+  `services/claude.js` and `services/promptEnhancer.js` now import it (values byte-identical —
+  unit-tested). `server/engine/config.js` keeps its deliberately diverged aesthetic string
+  (its own comments forbid touching the engine).
+- `server/services/sceneSchema.js` — DD-1 scene-schema extension, additive and UNUSED in DD-1:
+  optional fields `act`, `scene_type`, `purpose{narrative,informational,emotional,retention}`,
+  `asset_strategy{method,rationale}`, `asset_search`, `continuity_refs`, `alternative_concept`,
+  `complexity`, `risk_flags`, `locked` — all with safe defaults. `applyDirectorSceneDefaults`
+  fills them onto any scene missing them (fresh references per scene, never overwrites existing
+  values). There was no existing scene normaliser/sanitiser to extend (client pages read
+  localStorage raw; scenesFile.js is shape-agnostic), so this module is the single documented
+  home; DD-2/DD-3 wire it in when the fields are first read. `postProcessScenes` in claude.js
+  is intentionally NOT extended — /api/analyze output must stay byte-for-byte identical.
+
+**Backward-compatibility guarantee:** the only changes to existing files are (1) the
+`/api/director` route registration in index.js, (2) claude.js: STYLE_LOCK const → identical-value
+import + `extractJSON` added to module.exports, (3) promptEnhancer.js: STYLE_LOCK const →
+identical-value import. No scene-analysis logic, no generate/voice/render code touched. A project
+with no direction.json behaves exactly as before.
+
+**Test checklist (all pass):**
+- [x] 23/23 offline unit tests — resolver fallbacks (null / whitespace-only / non-string / real
+  signature trimmed), store round-trip + re-read identity + idempotent delete, treatment parser
+  (fences, preamble prose, garbage, empty), retry fires exactly once then throws with detail
+  (injected fake caller), metadata header format, scene-defaults fill / no-overwrite / fresh refs
+- [x] STYLE_LOCK byte-identical to pre-DD-1 string (unit-tested with the literal)
+- [x] POST /treatment with empty scriptText → 400; with no projectId → 400
+- [x] GET on project with no direction → 200 `{ direction: null }`
+- [x] PATCH on project with no direction → 404
+- [x] Valid POST (real Claude call, 92s, container-shipping test script) → 200; 16/16 schema
+  checks: all top-level keys; visual_signature 10 words, none of 8K/ultra-detailed/masterpiece/
+  award-winning; 5 continuity entities all with non-empty locked_descriptor; 5 acts sequential
+  from 1; 4 motifs; 11 evidence claims (statistic/date/financial/event) each with claim + type +
+  preferred_evidence; audience_experience 5 phases; style_bible 11 fields non-empty
+- [x] Generated visual_signature: "desaturated teal-grey, deep focus, slight film grain, cold
+  industrial realism"
+- [x] direction.json written; re-read identical to API response; version 1, audit null
+- [x] PATCH `{ style_bible: { visual_signature: 'test signature' } }` on the real treatment →
+  merged, all other 10 style_bible fields + thesis/acts/motifs/claims intact
+- [x] Live analyzeScript regression (real Claude call): scenes returned, every scene's
+  style_lock === STYLE_LOCK, every image/real_footage prompt ends with STYLE_LOCK, fallback
+  prompt path still fires; promptEnhancer quickEnhance still appends the lock
+- [x] Existing suites pass: claude.test.js, overlaySingleCall.test.js, frameMath.test.js
+- [x] Cold server start clean (spare port); dev server hot-reloaded routes fine
+- [x] Client build clean (no client files changed)
+- [x] Pre-DD-1 localStorage projects unaffected — no client code touched, new fields optional
+- Not re-run: full visuals → voice → export on an existing project. DD-1 provably does not touch
+  generate/voiceover/render code paths (see guarantee above), so re-burning Higgsfield/ElevenLabs/
+  Lambda credits to re-prove untouched code was skipped deliberately.
+- Test artifacts cleaned: proj_dd1_livetest removed.
