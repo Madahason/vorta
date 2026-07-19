@@ -17,7 +17,7 @@ function formatFileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export default function ExportPanel({ scenes, sceneStatuses, selectedClips, projectId, voiceoverStatuses = {} }) {
+export default function ExportPanel({ scenes, sceneStatuses, selectedClips, projectId, voiceoverStatuses = {}, renderBlocked = false }) {
   const [renderState, setRenderState] = useState('idle') // idle | rendering | done | error
   const [progress, setProgress]       = useState({ percent: 0, frame: 0, totalFrames: 0 })
   const [elapsed, setElapsed]         = useState(0)
@@ -60,7 +60,9 @@ export default function ExportPanel({ scenes, sceneStatuses, selectedClips, proj
 
   const readyCount   = imageReady + motionScenes.length + footageMatched
   const readyPercent = scenes.length > 0 ? (readyCount / scenes.length) * 100 : 0
-  const canRender    = scenes.length > 0 && readyPercent >= 50 && !!projectId
+  // DD-5: never a hard block — the caller (ExportStep) only ever sets renderBlocked when
+  // the Director Review found critical issues AND the user hasn't checked "Render anyway".
+  const canRender    = scenes.length > 0 && readyPercent >= 50 && !!projectId && !renderBlocked
 
   // estimated remaining during render
   const estRemaining = (() => {

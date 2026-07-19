@@ -72,10 +72,25 @@ export default function SceneGrid({
   onSplitScene,
   onMergeSceneWithNext,
   onDeleteScene,
+  // DD-5: Director Review "click a scene chip" → scroll to + briefly highlight that card,
+  // opening its Direction tab when the issue lives there. `scrollTarget` is a fresh object
+  // reference per request ({ sceneId, tab }) so re-clicking the same chip retriggers it.
+  scrollTarget = null,
 }) {
 
   const updateScene = (index, patch) =>
     onScenesChange(scenes.map((s, i) => (i === index ? { ...s, ...patch } : s)))
+
+  const cardRefs = useRef(new Map())
+  const registerCardRef = (sceneId, el) => {
+    if (el) cardRefs.current.set(sceneId, el)
+    else cardRefs.current.delete(sceneId)
+  }
+  useEffect(() => {
+    if (!scrollTarget?.sceneId) return
+    const el = cardRefs.current.get(scrollTarget.sceneId)
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [scrollTarget])
 
   const imageCount   = scenes.filter(s => s.shot_type === 'image').length
   const motionCount  = scenes.filter(s => s.shot_type === 'motion_graphic').length
@@ -134,6 +149,9 @@ export default function SceneGrid({
               onSplit={onSplitScene ? (caretIndex) => onSplitScene(scene.scene_id, caretIndex) : null}
               onMergeNext={onMergeSceneWithNext ? () => onMergeSceneWithNext(scene.scene_id) : null}
               onDelete={onDeleteScene ? () => onDeleteScene(scene.scene_id) : null}
+              registerRef={el => registerCardRef(scene.scene_id, el)}
+              isScrollTarget={scrollTarget?.sceneId === scene.scene_id}
+              scrollTargetTab={scrollTarget?.tab}
             />
           )
         })}
@@ -154,6 +172,8 @@ function SceneCard({
   // DD-4
   treatment, projectId, direction, prevScene, nextScene, isLast,
   onDuplicate, onSplit, onMergeNext, onDelete,
+  // DD-5
+  registerRef, isScrollTarget, scrollTargetTab,
 }) {
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft,   setPromptDraft]   = useState(scene.higgsfield_prompt)
@@ -168,6 +188,22 @@ function SceneCard({
 
   const locked = scene.locked === true
   const showDirectionTab = hasDirectionData(scene)
+
+  // DD-5: highlight + open the relevant tab when scrolled-to from the Director Review panel.
+  // Both setState calls are deferred via setTimeout (even the "turn on" one, at 0ms) rather
+  // than called synchronously in the effect body, matching the pattern already established
+  // for DirectionStep's loading-stage rotation.
+  const [flash, setFlash] = useState(false)
+  useEffect(() => {
+    if (!isScrollTarget) return
+    const onTimer = setTimeout(() => {
+      if (scrollTargetTab === 'direction' && showDirectionTab) setActiveTab('direction')
+      setFlash(true)
+    }, 0)
+    const offTimer = setTimeout(() => setFlash(false), 1800)
+    return () => { clearTimeout(onTimer); clearTimeout(offTimer) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isScrollTarget])
 
   // DD-4: "visual_concept" per-field regenerate — the only Direction-endpoint field that
   // lives on the Visual tab, since it rewrites higgsfield_prompt + subject_anchors together.
@@ -228,7 +264,11 @@ function SceneCard({
     : 'border-white/[0.06] hover:border-white/[0.1]'
 
   return (
-    <div className={`rounded-xl border bg-white/[0.02] transition-colors relative ${borderClass}`}>
+    <div
+      ref={registerRef}
+      className={`rounded-xl border bg-white/[0.02] transition-colors relative ${borderClass}`}
+      style={flash ? { boxShadow: '0 0 0 2px rgba(59,130,246,0.6)' } : undefined}
+    >
       {locked && (
         <div className="absolute inset-0 rounded-xl pointer-events-none" style={{ background: 'rgba(251,191,36,0.03)' }} />
       )}

@@ -6209,3 +6209,166 @@ join key for `audio_path`/`image_path` server files and the Remotion `<Sequence>
 the failed-image retry button as "the card's own regenerate-image button" referenced in Step
 3, since no separate always-visible regenerate control exists for successfully-generated
 images in the pre-DD-4 UI.
+
+### Phase DD-5 — Director Review ✅ COMPLETE
+
+A pure, synchronous, zero-Claude-API-call audit of the scene plan against its treatment —
+the wizard's last checkpoint before Export. Runs entirely client-side on demand; nothing in
+`directorAudit.js` calls `fetch`, imports a service module, or awaits anything.
+
+**`client/src/utils/directorAudit.js` (new, ~430 lines):**
+- `runDirectorAudit(scenes, direction, context = {})` → `{ stats, warnings, generatedAt }`.
+  The brief specified a two-arg signature; `context` (`sourceScript`, `targetDurationMinutes`,
+  `imagePaths`, `selectedClips`) is an additive, backward-compatible third parameter — narration
+  coverage is structurally impossible to compute without the source script, so this was a
+  necessary extension rather than a casual one, following the same documented-deviation pattern
+  as DD-3/DD-4.
+- `direction === null` skips continuity and evidence checks only; coverage, repetition, and
+  production checks still run against `scenes` alone.
+- **Coverage** — normalises and concatenates all `script_excerpt` values, compares against the
+  normalised source script via a word-multiset availability walk that preserves source order
+  (so "longest uncovered run" can reconstruct real missing text); <95% coverage is critical,
+  reported as up to 5 uncovered runs with 80-char context windows. Duplicated narration and
+  >15% duration-vs-target mismatch also live here.
+- **Repetition** — 4+ consecutive identical shot_type, 3+ consecutive identical scene_type, 3+
+  consecutive identical motion (excluding `static`), >30% scene-type concentration, 6+ run
+  visual monotony, 5+ run transition monotony (info-only), and identical-anchor-set prompt
+  similarity (info-only) via two matching strategies: `termsPresent` (majority-overlap, for
+  motif/claim matching) and `containsAnyTerm` (any-single-match, added after a test caught
+  majority-overlap giving false negatives against the 6-term reconstruction-label vocabulary,
+  where any one match is meaningful).
+- **Continuity** — orphaned continuity refs, descriptor-missing (ported verbatim from
+  `server/services/continuityEnforcement.js`'s `significantWords`/`descriptorPresent` so the
+  client check agrees with DD-3's live server-side enforcement), unused entities (info), motif
+  absence under 2 scenes (info), and act-gap detection (zero scenes assigned to a defined act).
+- **Evidence** — evidence claims carried only by `ai_image` shot type (warning), uncovered
+  evidence claims (warning), and unlabelled `misleading_reconstruction` risk flags (critical —
+  cleared once a reconstruction-label overlay is present, verified live).
+- **Production** — missing prompt (critical), empty excerpt (critical), missing motion-graphic
+  data, missing asset search (info), >25% advanced-complexity concentration, licensing exposure,
+  text-rendering risk (info), long scenes >15s, micro scenes <2s (info), and unresolved
+  `real_footage` scenes.
+- Every warning: `{ id, severity, category, title, detail, sceneIds, action }`. Sorted critical
+  → warning → info within category grouping.
+- Stats block: totals, duration stats (avg/shortest/longest), target-duration delta, shot-type
+  and scene-type distributions, act balance, locked count, images-generated count — all
+  computed once and reused by both the panel's summary grid and the export gate.
+
+**`DirectorReviewPanel.jsx` (new) + `SceneGrid.jsx` scroll-to-scene:**
+- Collapsed bar: `"Director Review — N critical, N warnings, N notes"` (zero-count segments
+  omitted — verified live: a run with 0 criticals correctly renders `"9 warnings, 12 notes"`,
+  not `"0 critical, 9 warnings, 12 notes"`), coloured by the highest severity present, or a
+  green "No issues found" when clean.
+- Expanded: stats grid, warnings grouped by category and sorted critical-first, each row
+  showing a severity dot, title, affected-scene count, and an expand caret revealing detail
+  text plus scene-id chips. Clicking a chip calls back up to `ScenesStep.jsx`'s
+  `handleScrollToScene`, which sets a `{ sceneId, tab, ts }` object consumed by `SceneGrid`'s
+  new `scrollTarget` prop — `SceneGrid` maintains a `Map` of card refs
+  (`registerCardRef`/`cardRefs`) and an effect that calls `scrollIntoView({ behavior: 'smooth',
+  block: 'center' })` on the target card; each `SceneCard` gets `isScrollTarget` /
+  `scrollTargetTab` and briefly flashes a blue ring, opening its Direction tab first when the
+  issue lives there. Both the "flash on" and "flash off" `setState` calls are deferred via
+  `setTimeout` (0ms and 1800ms) rather than called synchronously in the effect body — required
+  by the `react-hooks/set-state-in-effect` purity rule even for the immediate one.
+- Two independent filter toggles: Critical only, Hide info — verified live, both singly and
+  combined.
+- Review only runs manually ("Re-run Review" button), never on every scene edit. A "Scene plan
+  changed since last review" indicator compares the stored report's `sceneCountAtReview`
+  against the live scene count.
+- Persisted to `direction.json` under the `audit` key DD-1 reserved, via the existing PATCH
+  `/api/director/:projectId` route — extended (not replaced) to destructure
+  `{ audit, ...treatmentPatch }` and handle audit-as-wholesale-replace independently from the
+  pre-existing treatment deep-merge. Verified live via direct PATCH round-trips that a
+  treatment-only request leaves `audit` untouched and an audit-only request leaves `treatment`
+  byte-identical.
+
+**Export-step gate (`ExportStep.jsx` + `ExportPanel.jsx`):**
+- Reads `direction?.audit` — never a hard block. If criticals exist: a red notice with the
+  critical count, a "← Review in Scenes" button (`wizard.goTo('scenes')`), and a "Render
+  anyway" checkbox; `ExportPanel`'s existing `canRender` gains a single `&& !renderBlocked`
+  term where `renderBlocked = hasCriticals && !renderAnyway`. Zero criticals → a green
+  one-line confirmation. No audit run yet → a muted informational line, never forcing a run.
+- **Live-verified end-to-end against the real WeWork project** (`proj_1784008308819`, 49
+  scenes) by PATCHing a synthetic 2-critical audit directly to the server (bypassing the
+  client to avoid the mount-time re-fetch racing a client-only edit) and hard-reloading:
+  "Render MP4" correctly went from enabled → disabled with the exact critical count shown;
+  checking "Render anyway" flipped it back to enabled, unchecking flipped it back to disabled;
+  "← Review in Scenes" correctly navigated back to the Scenes step. The synthetic data was
+  then removed by PATCHing the real captured report back, restoring the export gate to its
+  genuine "no critical issues" state and the panel to its genuine 9-warning/12-note summary.
+
+**Test results:**
+- [x] 28/28 offline unit tests: every check category and boundary threshold from the
+  checklist (95% coverage cliff, 15% duration-mismatch cliff, 4/3/3-consecutive repetition
+  thresholds, 30% scene-type concentration boundary at 31%/29%, 6-run visual monotony, 5-run
+  transition monotony, identical-anchor prompt similarity, orphaned continuity ref, descriptor
+  agreement with DD-3, unused entity, motif-under-2 absence, act gap, evidence-carried-by-
+  ai_image, uncovered claim, unlabelled misleading_reconstruction critical + clears with a
+  label, missing asset search, 25% advanced-complexity boundary, long/micro scene, unresolved
+  real_footage), plus zero-network-call verification (no `fetch` reference anywhere in the
+  module source), critical-first sort order, and a 60-scene performance run under 200ms.
+- [x] Client build clean; zero new lint errors in any DD-5-touched file (all 17 pre-existing
+  errors surfaced by `eslint` live on lines untouched by any DD-1→DD-5 diff — confirmed by
+  reading each flagged line against `git diff` for the touched files).
+- [x] Live in Chrome against the real WeWork project: panel collapse/expand, correct
+  zero-count-segment-omitted summary formatting, stats grid, category grouping with
+  critical-first sort, both filter toggles independently and combined, scroll-to-scene +
+  flash + auto-open-Direction-tab, changed-since-review indicator, manual-only re-run,
+  PATCH persistence surviving a hard reload, zero console errors on reload, and the full
+  export-gate blocking/unblocking cycle described above — all confirmed working.
+- User's real 49-scene WeWork session was used directly for all live testing (no stash/restore
+  needed for this phase beyond the synthetic-audit inject/restore cycle, which only ever
+  touched the server-side `audit` key and was fully reverted to the genuine report before
+  finishing).
+
+**Known deviation from the brief:** the `context` third parameter on `runDirectorAudit`,
+documented above — required for coverage checking to be possible at all, and additive/
+backward-compatible with the brief's stated two-arg call shape.
+
+### Documentary Director (DD-1 → DD-5) ✅ FEATURE COMPLETE
+
+All five phases of the Documentary Director are done: the wizard's Script → Direction →
+Scenes → Visuals → Voice → Fine-Tune → Export pipeline now has a full 7th interstitial stage
+(Direction, between Script and Scenes) plus a director-facing quality gate (Review, folded
+into the Scenes step) immediately before Export.
+
+- **DD-1** laid the foundation: the `direction.json` persistence shape (with the `audit` key
+  reserved from the start), the `/api/director` route family, and the Claude-driven treatment
+  generator (visual thesis, style bible, recurring motifs, continuity entities, acts, pacing,
+  sound direction, evidence claims).
+- **DD-2** added the Direction step itself to the wizard — treatment review/edit UI sitting
+  between Script and Scenes.
+- **DD-3** made scene analysis treatment-aware: `/api/analyze` now accepts an optional
+  treatment and, when present, classifies every scene against it (act, scene_type, purpose,
+  asset strategy, continuity refs, risk flags) while enforcing descriptor agreement
+  server-side via `continuityEnforcement.js`.
+- **DD-4** built the Scene Inspector: a Direction tab on every scene card surfacing all of
+  DD-3's fields for review and editing, scene locking with a re-analysis preservation
+  guarantee (`mergeAnalysisPreservingLocks`), per-field regeneration, and structural scene
+  actions (duplicate/split/merge/delete).
+- **DD-5** closed the loop: a zero-API-call Director Review audit of the finished scene plan
+  against its treatment, surfaced in the Scenes step and gating (softly — always overridable)
+  the Export step.
+
+**Dual-path architecture, preserved end to end:** every DD stage checks for the presence of
+direction/treatment data before rendering anything DD-related, and degrades to exactly the
+pre-DD experience when it's absent. A script analyzed without ever visiting Direction produces
+scenes with no `scene_type`/`purpose`/`asset_strategy` fields; `hasDirectionData(scene)`
+returns false for every one of them; the Direction tab bar never renders on any card; and
+`runDirectorAudit` receives `direction === null`, silently skipping continuity and evidence
+checks while still running coverage/repetition/production checks against the scenes alone.
+Nothing added by DD-1→DD-5 is a required step — Direction and Review are both fully optional
+detours the pipeline works correctly without.
+
+**Backward-compatibility guarantee:** confirmed at every phase boundary, not just once at the
+end — DD-2 verified a no-direction script analyzes and renders identically to pre-DD-1; DD-3
+verified `/api/analyze` without a treatment produces byte-identical output to the pre-DD-3
+version; DD-4 verified a pre-DD-3 scene's card renders with zero tab bar; DD-5 verified
+`direction === null` doesn't throw and produces a coverage/repetition/production-only audit.
+
+**The treatment → scenes → audit flow:** a treatment (DD-1/DD-2) shapes scene analysis
+(DD-3), which is reviewed and refined scene-by-scene with locking protection (DD-4), which is
+finally cross-checked in aggregate against the treatment that shaped it (DD-5) — giving the
+user a single point, right before committing to a render, to catch narration gaps, visual
+repetition, continuity drift, unsupported evidence claims, and production-readiness problems,
+while always leaving the final call in their hands via "Render anyway."

@@ -109,20 +109,26 @@ router.get('/:projectId', (req, res) => {
   res.json({ direction });
 });
 
-// PATCH /api/director/:projectId — body is a partial treatment object
+// PATCH /api/director/:projectId — body is a partial treatment object, OR
+// { audit: {...} } to write a DD-5 director-review report into the audit slot DD-1
+// reserved. audit is a wholesale replace (a fresh report each run, not something that
+// makes sense to deep-merge) and is independent of any treatment fields in the same body —
+// an audit-only PATCH (just { audit }) leaves treatment completely untouched.
 router.patch('/:projectId', (req, res) => {
   const existing = readDirection(req.params.projectId);
   if (!existing) {
     return res.status(404).json({ error: 'No direction exists for this project — generate a treatment first' });
   }
-  const patch = req.body;
-  if (!isPlainObject(patch)) {
+  const body = req.body;
+  if (!isPlainObject(body)) {
     return res.status(400).json({ error: 'PATCH body must be a partial treatment object' });
   }
+  const { audit, ...treatmentPatch } = body;
 
-  const merged = deepMerge(existing.treatment || {}, patch);
-  const stored = writeDirection(req.params.projectId, { treatment: merged, audit: existing.audit ?? null });
-  res.json({ treatment: stored.treatment, updatedAt: stored.updatedAt });
+  const merged = deepMerge(existing.treatment || {}, treatmentPatch);
+  const nextAudit = audit !== undefined ? audit : (existing.audit ?? null);
+  const stored = writeDirection(req.params.projectId, { treatment: merged, audit: nextAudit });
+  res.json({ treatment: stored.treatment, audit: stored.audit, updatedAt: stored.updatedAt });
 });
 
 module.exports = router;

@@ -1,6 +1,11 @@
 import { useState } from 'react'
 import { Lock, Unlock } from 'lucide-react'
 import SceneGrid from '../../components/video-creator/SceneGrid'
+import { DirectorReviewPanel } from '../../components/video-creator/DirectorReviewPanel'
+
+function lsReadMetadata() {
+  try { return JSON.parse(localStorage.getItem('vorta_script_metadata')) || {} } catch { return {} }
+}
 
 export function ScenesStep({
   scenes, onScenesChange, sceneStatuses, onRetry,
@@ -11,6 +16,8 @@ export function ScenesStep({
   // DD-4
   treatment, projectId, direction,
   onDuplicateScene, onSplitScene, onMergeSceneWithNext, onDeleteScene,
+  // DD-5
+  onDirectionChange, imagePaths,
   wizard,
 }) {
   const lockedCount = scenes.filter(s => s.locked).length
@@ -18,6 +25,13 @@ export function ScenesStep({
   const handleUnlockAll = () => onScenesChange(scenes.map(s => ({ ...s, locked: false })))
   const [isEnhancing,       setIsEnhancing]       = useState(false)
   const [warningsExpanded,  setWarningsExpanded]  = useState(false)
+  const [scrollTarget,      setScrollTarget]      = useState(null)
+
+  const scriptMeta = lsReadMetadata()
+  const targetDurationMinutes = typeof scriptMeta.targetDuration === 'number' ? scriptMeta.targetDuration : undefined
+  const sourceScript = scriptMeta.script || ''
+
+  const handleScrollToScene = (sceneId, tab) => setScrollTarget({ sceneId, tab, ts: Date.now() })
   const [stockSearchScene,  setStockSearchScene]  = useState(null)
   const [stockQuery,        setStockQuery]        = useState('')
   const [stockResults,      setStockResults]      = useState([])
@@ -170,6 +184,18 @@ export function ScenesStep({
         </div>
       </div>
 
+      <DirectorReviewPanel
+        scenes={scenes}
+        direction={direction}
+        projectId={projectId}
+        onDirectionChange={onDirectionChange}
+        sourceScript={sourceScript}
+        targetDurationMinutes={targetDurationMinutes}
+        imagePaths={imagePaths}
+        selectedClips={selectedClips}
+        onScrollToScene={handleScrollToScene}
+      />
+
       <SceneGrid
         scenes={scenes}
         onScenesChange={onScenesChange}
@@ -190,6 +216,7 @@ export function ScenesStep({
         treatment={treatment}
         projectId={projectId}
         direction={direction}
+        scrollTarget={scrollTarget}
         onDuplicateScene={onDuplicateScene}
         onSplitScene={onSplitScene}
         onMergeSceneWithNext={onMergeSceneWithNext}

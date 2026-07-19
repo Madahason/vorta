@@ -1018,6 +1018,8 @@ export default function VideoCreator() {
             onSplitScene={handleSplitScene}
             onMergeSceneWithNext={handleMergeSceneWithNext}
             onDeleteScene={handleDeleteScene}
+            onDirectionChange={setDirection}
+            imagePaths={imagePaths}
             wizard={wizard}
           />
         )
@@ -1084,7 +1086,7 @@ export default function VideoCreator() {
             imagePaths={imagePaths}
             globalSettings={globalSettings}
             voiceoverStatuses={voiceoverStatuses}
-
+            direction={direction}
             projectId={projectId}
             wizard={wizard}
           />
