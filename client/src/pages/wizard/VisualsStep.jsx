@@ -18,6 +18,7 @@ export function VisualsStep({
   onPreviewScene, voiceoverStatuses, onOpenVoiceover,
   overlaysVisible, onAcceptSceneOverlays, onRejectSceneOverlays,
   projectId,
+  generateSkipped = 0,
   wizard,
 }) {
   const [clipProgress, setClipProgress]   = useState({})
@@ -130,6 +131,12 @@ export function VisualsStep({
           {!allDone && !isGenerating && imageCount > 0 && (
             <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: 13 }}>
               {doneCount} / {imageCount} images generated
+            </span>
+          )}
+          {/* DD-4: batch skip report */}
+          {!isGenerating && generateSkipped > 0 && (
+            <span style={{ color: 'rgba(251,191,36,0.75)', fontSize: 13 }}>
+              {doneCount} generated, {generateSkipped} skipped (locked)
             </span>
           )}
         </div>

@@ -14,6 +14,9 @@ import { FineTuneStep } from './wizard/FineTuneStep'
 import { ExportStep }  from './wizard/ExportStep'
 import { PreviewPlayer } from '../components/video-creator/PreviewPlayer'
 import { OverlayReviewModal } from '../components/video-creator/OverlayReviewModal'
+import {
+  mergeAnalysisPreservingLocks, duplicateScene, splitScene, mergeSceneWithNext, deleteScene,
+} from '../utils/sceneDirection'
 
 const SERVER_URL = 'http://localhost:3001'
 
@@ -169,6 +172,8 @@ export default function VideoCreator() {
 
   // Generate progress — { done, total }
   const [generateProgress, setGenerateProgress] = useState({ done: 0, total: 0 })
+  // DD-4: locked scenes skipped by the last "Generate All" batch run
+  const [generateSkipped, setGenerateSkipped] = useState(0)
 
   // Selected clips — { [scene_id]: clip_object }
   const [selectedClips, setSelectedClips] = useState(() => {
@@ -477,7 +482,14 @@ export default function VideoCreator() {
   const handleAnalyze = async ({ script, metadata }) => {
     setIsAnalyzing(true)
     setAnalyzeError(null)
-    setSceneStatuses({})
+    // DD-4: locked scenes survive re-analysis wholesale — keep their sceneStatuses (e.g.
+    // an already-generated image) rather than wiping status for every scene_id.
+    const lockedIdsBeforeAnalyze = new Set(scenes.filter(s => s.locked).map(s => s.scene_id))
+    setSceneStatuses(prev => {
+      const preserved = {}
+      lockedIdsBeforeAnalyze.forEach(id => { if (prev[id]) preserved[id] = prev[id] })
+      return preserved
+    })
     setProjectId(null)
     setGenerateDone(false)
     try {
@@ -491,14 +503,20 @@ export default function VideoCreator() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Analysis failed')
-      setScenes(data.scenes)
+
+      // DD-4: the single most important behaviour in this phase — for every scene the
+      // user locked, keep the OLD object wholesale and discard the new analysis result
+      // for that scene_id, so locked scenes are byte-identical after re-analysis.
+      const mergedScenes = mergeAnalysisPreservingLocks(scenes, data.scenes)
+
+      setScenes(mergedScenes)
       setDirectionWarnings(data.warnings || [])
       setEdlBeats(data.beats || null)
       setEdlAnalysis(data.analysis || null)
       setEdl(data.edl || null)
       setEdlValidation(data.validation_report || null)
       setHasAnalyzed(true)
-      matchClipsForScenes(data.scenes)
+      matchClipsForScenes(mergedScenes)
       // Advance wizard to Scenes step
       wizard.markComplete('script')
       wizard.goNext()
@@ -509,7 +527,7 @@ export default function VideoCreator() {
         setSessionKey(key)
         lsWrite(LS.sessionKey, key)
       }
-      saveProjectToList(key, metadata.title, data.scenes, {}, {}, {}, null)
+      saveProjectToList(key, metadata.title, mergedScenes, {}, {}, {}, null)
     } catch (err) {
       setAnalyzeError(err.message)
     } finally {
@@ -659,14 +677,20 @@ export default function VideoCreator() {
   }
 
   // ─── Unified Generate Assets ──────────────────────────────────────────────
+  // DD-4: batch generation skips locked scenes entirely — surfaced afterward as
+  // "N generated, M skipped (locked)" in VisualsStep.
   const handleGenerateAll = async () => {
-    const motionScenes = scenes.filter(s => s.shot_type === 'motion_graphic' && !s.motion_component)
-    const realScenes   = scenes.filter(s => s.shot_type === 'real_footage'   && !clipMatches[s.scene_id]?.matches?.length)
+    const allMotionScenes = scenes.filter(s => s.shot_type === 'motion_graphic' && !s.motion_component)
+    const allRealScenes   = scenes.filter(s => s.shot_type === 'real_footage'   && !clipMatches[s.scene_id]?.matches?.length)
+    const motionScenes = allMotionScenes.filter(s => !s.locked)
+    const realScenes   = allRealScenes.filter(s => !s.locked)
+    const skippedSoFar = (allMotionScenes.length - motionScenes.length) + (allRealScenes.length - realScenes.length)
 
     setIsGenerating(true)
     setGenerateError(null)
     setGenerateDone(false)
     setGenerateProgress({ done: 0, total: motionScenes.length + realScenes.length })
+    setGenerateSkipped(skippedSoFar)
 
     const prepTick = () => setGenerateProgress(p => ({ ...p, done: p.done + 1 }))
 
@@ -686,7 +710,9 @@ export default function VideoCreator() {
     let latestScenes = scenes
     setScenes(prev => { latestScenes = prev; return prev })
 
-    const imageScenes = latestScenes.filter(s => s.shot_type === 'image')
+    const allImageScenes = latestScenes.filter(s => s.shot_type === 'image')
+    const imageScenes    = allImageScenes.filter(s => !s.locked)
+    setGenerateSkipped(prev => prev + (allImageScenes.length - imageScenes.length))
     setGenerateProgress(p => ({ done: p.done, total: p.total + imageScenes.length }))
 
     await generateImageScenes(imageScenes, () => setGenerateProgress(p => ({ ...p, done: p.done + 1 })))
@@ -839,6 +865,41 @@ export default function VideoCreator() {
     setSelectedClips(prev => { const n = { ...prev }; delete n[scene_id]; return n })
   }
 
+  // ─── DD-4: scene actions (duplicate / split / merge / delete) ────────────
+  // scene_id values are never renumbered — see sceneDirection.js nextSceneId. sceneStatuses
+  // is a separate map keyed by scene_id (image_path/status from Higgsfield generation) so
+  // any scene_id whose content or media was just cleared must have its stale status wiped
+  // too, or the card would keep showing an old image against new script_excerpt.
+  const handleDuplicateScene = (sceneId) => {
+    setScenes(prevScenes => duplicateScene(prevScenes, sceneId))
+  }
+
+  const handleSplitScene = (sceneId, caretIndex) => {
+    const result = splitScene(scenes, sceneId, caretIndex)
+    if (result === scenes) return // refused (would produce an empty half)
+    setScenes(result)
+    setSceneStatuses(prev => { const n = { ...prev }; delete n[sceneId]; return n })
+  }
+
+  const handleMergeSceneWithNext = (sceneId) => {
+    const idx = scenes.findIndex(s => s.scene_id === sceneId)
+    if (idx === -1 || idx === scenes.length - 1) return
+    const nextId  = scenes[idx + 1].scene_id
+    const result  = mergeSceneWithNext(scenes, sceneId)
+    if (result === scenes) return // refused (either scene locked)
+    setScenes(result)
+    setSceneStatuses(prev => { const n = { ...prev }; delete n[sceneId]; delete n[nextId]; return n })
+    setClipMatches(prev => { const n = { ...prev }; delete n[nextId]; return n })
+    setSelectedClips(prev => { const n = { ...prev }; delete n[nextId]; return n })
+  }
+
+  const handleDeleteScene = (sceneId) => {
+    setScenes(prevScenes => deleteScene(prevScenes, sceneId))
+    setSceneStatuses(prev => { const n = { ...prev }; delete n[sceneId]; return n })
+    setClipMatches(prev => { const n = { ...prev }; delete n[sceneId]; return n })
+    setSelectedClips(prev => { const n = { ...prev }; delete n[sceneId]; return n })
+  }
+
   // ─── Voiceover — open panel + focus scene ────────────────────────────────
   const handleOpenVoiceover = (scene) => {
     setVoiceoverPanelOpen(true)
@@ -950,6 +1011,13 @@ export default function VideoCreator() {
             onOpenVoiceover={handleOpenVoiceover}
             directionWarnings={directionWarnings}
             onDismissDirectionWarnings={() => setDirectionWarnings([])}
+            treatment={direction?.treatment}
+            projectId={directionProjectId}
+            direction={direction}
+            onDuplicateScene={handleDuplicateScene}
+            onSplitScene={handleSplitScene}
+            onMergeSceneWithNext={handleMergeSceneWithNext}
+            onDeleteScene={handleDeleteScene}
             wizard={wizard}
           />
         )
@@ -979,6 +1047,7 @@ export default function VideoCreator() {
             onAcceptSceneOverlays={overlaysVisible ? handleAcceptSceneOverlays : null}
             onRejectSceneOverlays={overlaysVisible ? handleRejectSceneOverlays : null}
             projectId={projectId}
+            generateSkipped={generateSkipped}
             wizard={wizard}
           />
         )

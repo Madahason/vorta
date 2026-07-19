@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Lock, Unlock } from 'lucide-react'
 import SceneGrid from '../../components/video-creator/SceneGrid'
 
 export function ScenesStep({
@@ -7,8 +8,14 @@ export function ScenesStep({
   clipMatches, selectedClips, onSelectClip, onConvertToImage, onManualMatch, onOpenLibrary,
   onPreviewScene, voiceoverStatuses, onOpenVoiceover,
   directionWarnings = [], onDismissDirectionWarnings,
+  // DD-4
+  treatment, projectId, direction,
+  onDuplicateScene, onSplitScene, onMergeSceneWithNext, onDeleteScene,
   wizard,
 }) {
+  const lockedCount = scenes.filter(s => s.locked).length
+  const handleLockAll   = () => onScenesChange(scenes.map(s => ({ ...s, locked: true })))
+  const handleUnlockAll = () => onScenesChange(scenes.map(s => ({ ...s, locked: false })))
   const [isEnhancing,       setIsEnhancing]       = useState(false)
   const [warningsExpanded,  setWarningsExpanded]  = useState(false)
   const [stockSearchScene,  setStockSearchScene]  = useState(null)
@@ -131,6 +138,22 @@ export function ScenesStep({
         <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
           <button onClick={() => wizard.goBack()} className="vorta-btn vorta-btn-ghost">← Back</button>
           <button
+            onClick={handleLockAll}
+            disabled={lockedCount === scenes.length}
+            className="vorta-btn vorta-btn-ghost"
+            title="Lock every scene against edits and batch regeneration"
+          >
+            <Lock size={12} /> Lock all
+          </button>
+          <button
+            onClick={handleUnlockAll}
+            disabled={lockedCount === 0}
+            className="vorta-btn vorta-btn-ghost"
+            title="Unlock every scene"
+          >
+            <Unlock size={12} /> Unlock all
+          </button>
+          <button
             onClick={handleEnhancePrompts}
             disabled={isEnhancing}
             className="vorta-btn vorta-btn-secondary"
@@ -164,6 +187,13 @@ export function ScenesStep({
         voiceoverStatuses={voiceoverStatuses}
         onOpenVoiceover={onOpenVoiceover}
         onOpenStockSearch={handleOpenStockSearch}
+        treatment={treatment}
+        projectId={projectId}
+        direction={direction}
+        onDuplicateScene={onDuplicateScene}
+        onSplitScene={onSplitScene}
+        onMergeSceneWithNext={onMergeSceneWithNext}
+        onDeleteScene={onDeleteScene}
       />
 
       {/* Stock footage search modal */}

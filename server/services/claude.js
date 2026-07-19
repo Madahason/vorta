@@ -1206,4 +1206,8 @@ module.exports = {
   // postProcessScenes above is unchanged.
   validateAndGroundPrompts,
   buildFallbackPrompt,
+  // DD-4: reused by the per-field scene regeneration endpoint so scene_type→shot_type
+  // stays derived from one place.
+  SCENE_TYPES,
+  sceneTypeToShotType,
 }

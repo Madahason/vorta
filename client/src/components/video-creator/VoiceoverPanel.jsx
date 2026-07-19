@@ -83,6 +83,8 @@ export default function VoiceoverPanel({
   const [settings,        setSettings]        = useState({ stability: 0.71, similarityBoost: 0.75, style: 0.0, speed: 1.0 })
   const [generating,      setGenerating]      = useState(false)
   const [genProgress,     setGenProgress]     = useState({ current: 0, total: 0, startTime: null })
+  // DD-4: last batch's locked-scene skip count, surfaced as "N generated, M skipped (locked)"
+  const [lastSkippedLocked, setLastSkippedLocked] = useState(0)
   const [sceneStatuses,   setSceneStatuses]   = useState({})
   const [previewLoading,  setPreviewLoading]  = useState({})
   const [playingSceneId,  setPlayingSceneId]  = useState(null)
@@ -182,10 +184,16 @@ export default function VoiceoverPanel({
     return Math.max(0, (genProgress.total - genProgress.current) / rate)
   })()
 
+  // DD-4: batch generation must skip locked scenes — realScenes itself stays "all real
+  // scenes" for stats (mood counts, totals) since those are informational, not generation.
   const newToGenerate = realScenes.filter(s => {
     const st = sceneStatuses[s.scene_id]
-    return !s.audio_path && st?.status !== 'done'
+    return !s.audio_path && st?.status !== 'done' && !s.locked
   })
+  const newToGenerateLockedSkipped = realScenes.filter(s => {
+    const st = sceneStatuses[s.scene_id]
+    return !s.audio_path && st?.status !== 'done' && s.locked
+  }).length
 
   const canGenerate = !!selectedVoiceId && !!projectId && !generating && elStatus?.connected !== false
 
@@ -283,13 +291,17 @@ export default function VoiceoverPanel({
     if (!selectedVoiceId || !projectId) return
 
     let toGenerate
+    let skippedLocked = 0
     if (scenesToProcess) {
       toGenerate = scenesToProcess
     } else if (mode === 'full') {
-      toGenerate = realScenes
+      toGenerate     = realScenes.filter(s => !s.locked)
+      skippedLocked  = realScenes.length - toGenerate.length
     } else {
-      toGenerate = newToGenerate
+      toGenerate    = newToGenerate
+      skippedLocked = newToGenerateLockedSkipped
     }
+    setLastSkippedLocked(skippedLocked)
     if (!toGenerate.length) return
 
     setGenerating(true)
@@ -713,6 +725,13 @@ export default function VoiceoverPanel({
                 )}
               </div>
 
+              {/* DD-4: batch skip report — "N generated, M skipped (locked)" */}
+              {!generating && lastSkippedLocked > 0 && (
+                <div style={{ marginBottom: 12, fontSize: 11.5, color: 'rgba(251,191,36,0.75)' }}>
+                  {genProgress.current} generated, {lastSkippedLocked} skipped (locked)
+                </div>
+              )}
+
               {/* Progress bar */}
               {generating && genProgress.total > 0 && (
                 <div style={{ marginBottom: 12 }}>
@@ -827,15 +846,15 @@ export default function VoiceoverPanel({
                             </button>
                             <button
                               onClick={() => handleGenerate('scene', [scene])}
-                              disabled={generating}
+                              disabled={generating || scene.locked}
                               style={{
                                 padding: '3px 6px', borderRadius: 4, flexShrink: 0,
                                 background: 'none', border: '1px solid rgba(255,255,255,0.08)',
-                                color: generating ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.30)',
-                                cursor: generating ? 'not-allowed' : 'pointer',
+                                color: (generating || scene.locked) ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.30)',
+                                cursor: (generating || scene.locked) ? 'not-allowed' : 'pointer',
                                 display: 'flex', alignItems: 'center',
                               }}
-                              title="Regenerate audio for this scene"
+                              title={scene.locked ? 'Unlock to regenerate' : 'Regenerate audio for this scene'}
                             >
                               <RefreshCw size={9} />
                             </button>
@@ -845,13 +864,14 @@ export default function VoiceoverPanel({
                         {!isGenerating && !hasAudio && (
                           <button
                             onClick={() => handleGenerate('scene', [scene])}
-                            disabled={!canGenerate}
+                            disabled={!canGenerate || scene.locked}
+                            title={scene.locked ? 'Unlock to generate' : undefined}
                             style={{
                               padding: '3px 10px', borderRadius: 4, flexShrink: 0, fontSize: 10,
-                              background: canGenerate ? 'rgba(124,58,237,0.15)' : 'rgba(255,255,255,0.03)',
-                              border: `1px solid ${canGenerate ? 'rgba(124,58,237,0.25)' : 'rgba(255,255,255,0.06)'}`,
-                              color: canGenerate ? 'rgba(124,58,237,0.90)' : 'rgba(255,255,255,0.20)',
-                              cursor: canGenerate ? 'pointer' : 'not-allowed',
+                              background: (canGenerate && !scene.locked) ? 'rgba(124,58,237,0.15)' : 'rgba(255,255,255,0.03)',
+                              border: `1px solid ${(canGenerate && !scene.locked) ? 'rgba(124,58,237,0.25)' : 'rgba(255,255,255,0.06)'}`,
+                              color: (canGenerate && !scene.locked) ? 'rgba(124,58,237,0.90)' : 'rgba(255,255,255,0.20)',
+                              cursor: (canGenerate && !scene.locked) ? 'pointer' : 'not-allowed',
                             }}
                           >
                             Generate

@@ -3,13 +3,18 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Loader2, RefreshCw, CheckCircle, XCircle,
   ChevronDown, ChevronUp, Copy, Code2, Eye, ImageIcon, Film,
-  X, Mic,
+  X, Mic, Lock, Unlock, MoreVertical, Trash2, Scissors, GitMerge, Files,
+  CheckCircle2,
 } from 'lucide-react'
 import { buildPreviewHTML } from '../../utils/buildPreviewHTML'
 import { GradeSelector } from '../ui/GradeSelector'
 import { MotionSelector } from '../ui/MotionSelector'
 import { CompositionSelector } from '../ui/CompositionSelector'
 import { InfoTip } from '../ui/Tooltip'
+import { DirectionTab } from './DirectionTab'
+import { hasDirectionData, pushFieldHistory } from '../../utils/sceneDirection'
+
+const SERVER_URL = 'http://localhost:3001'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -58,6 +63,15 @@ export default function SceneGrid({
   overlaysVisible = false,
   onAcceptSceneOverlays,
   onRejectSceneOverlays,
+  // DD-4: Direction tab data + scene-array-level actions (structural — operate on the
+  // whole scenes array, so they're implemented one level up and just invoked here)
+  treatment = null,
+  projectId = null,
+  direction = null,
+  onDuplicateScene,
+  onSplitScene,
+  onMergeSceneWithNext,
+  onDeleteScene,
 }) {
 
   const updateScene = (index, patch) =>
@@ -110,6 +124,16 @@ export default function SceneGrid({
               overlaysVisible={overlaysVisible}
               onAcceptSceneOverlays={onAcceptSceneOverlays ? () => onAcceptSceneOverlays(scene.scene_id) : null}
               onRejectSceneOverlays={onRejectSceneOverlays ? () => onRejectSceneOverlays(scene.scene_id) : null}
+              treatment={treatment}
+              projectId={projectId}
+              direction={direction}
+              prevScene={scenes[i - 1] || null}
+              nextScene={scenes[i + 1] || null}
+              isLast={i === scenes.length - 1}
+              onDuplicate={onDuplicateScene ? () => onDuplicateScene(scene.scene_id) : null}
+              onSplit={onSplitScene ? (caretIndex) => onSplitScene(scene.scene_id, caretIndex) : null}
+              onMergeNext={onMergeSceneWithNext ? () => onMergeSceneWithNext(scene.scene_id) : null}
+              onDelete={onDeleteScene ? () => onDeleteScene(scene.scene_id) : null}
             />
           )
         })}
@@ -127,11 +151,54 @@ function SceneCard({
   clipMatch, selectedClip, onSelectClip, onConvertToImage, onManualMatch, onOpenLibrary, onOpenStockSearch, onPreview,
   voiceoverStatus, onOpenVoiceover,
   overlaysVisible, onAcceptSceneOverlays, onRejectSceneOverlays,
+  // DD-4
+  treatment, projectId, direction, prevScene, nextScene, isLast,
+  onDuplicate, onSplit, onMergeNext, onDelete,
 }) {
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft,   setPromptDraft]   = useState(scene.higgsfield_prompt)
   const [codeExpanded,  setCodeExpanded]  = useState(false)
   const [copied,        setCopied]        = useState(false)
+
+  // DD-4: per-card tab state — never persisted across reloads (fresh on every mount)
+  const [activeTab, setActiveTab] = useState('visual')
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [splitModalOpen, setSplitModalOpen] = useState(false)
+
+  const locked = scene.locked === true
+  const showDirectionTab = hasDirectionData(scene)
+
+  // DD-4: "visual_concept" per-field regenerate — the only Direction-endpoint field that
+  // lives on the Visual tab, since it rewrites higgsfield_prompt + subject_anchors together.
+  const [regeneratingConcept, setRegeneratingConcept] = useState(false)
+  const [conceptError, setConceptError] = useState(null)
+  const regenerateVisualConcept = async () => {
+    if (locked || regeneratingConcept) return
+    setRegeneratingConcept(true)
+    setConceptError(null)
+    try {
+      const res = await fetch(`${SERVER_URL}/api/director/scene/regenerate`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          projectId, scene, field: 'visual_concept', direction,
+          neighbors: { prev: prevScene?.script_excerpt || null, next: nextScene?.script_excerpt || null },
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || data.error || `Regeneration failed (${res.status})`)
+      let history = scene.field_history || {}
+      Object.keys(data.patch || {}).forEach(f => {
+        history = { ...history, [f]: pushFieldHistory({ field_history: history }, f, scene[f])[f] }
+      })
+      onChange({ ...data.patch, field_history: history })
+    } catch (err) {
+      setConceptError(err.message)
+    } finally {
+      setRegeneratingConcept(false)
+    }
+  }
 
   const savePrompt   = () => { onChange({ higgsfield_prompt: promptDraft }); setEditingPrompt(false) }
   const cancelPrompt = () => { setPromptDraft(scene.higgsfield_prompt); setEditingPrompt(false) }
@@ -152,14 +219,19 @@ function SceneCard({
   const motionFailed   = motionStatus?.status === 'failed'
   const hasComponent   = !!scene.motion_component
 
-  const borderClass = isGenerating
+  const borderClass = locked
+    ? 'border-amber-400/40'
+    : isGenerating
     ? 'border-blue-500/40'
     : isDone    ? 'border-green-500/30'
     : isFailed  ? 'border-red-500/30'
     : 'border-white/[0.06] hover:border-white/[0.1]'
 
   return (
-    <div className={`rounded-xl border bg-white/[0.02] transition-colors ${borderClass}`}>
+    <div className={`rounded-xl border bg-white/[0.02] transition-colors relative ${borderClass}`}>
+      {locked && (
+        <div className="absolute inset-0 rounded-xl pointer-events-none" style={{ background: 'rgba(251,191,36,0.03)' }} />
+      )}
       <div className="p-4">
 
         {/* ── Header ── */}
@@ -173,6 +245,9 @@ function SceneCard({
             {isGenerating && <Loader2 size={12} className="animate-spin text-blue-400" />}
             {isDone       && <CheckCircle size={13} className="text-green-400" />}
             {isFailed     && <XCircle size={13} className="text-red-400" />}
+            {scene.asset_found && (
+              <span title="Asset found"><CheckCircle2 size={13} className="text-green-400" /></span>
+            )}
 
             {/* Voiceover mic — opens VoiceoverPanel focused on this scene */}
             {onOpenVoiceover && (
@@ -214,15 +289,101 @@ function SceneCard({
                 const t = e.target.value
                 onChange({ shot_type: t, real_footage_flag: t === 'real_footage' })
               }}
-              disabled={isGenerating}
+              disabled={isGenerating || locked}
               className={`text-[11px] px-2 py-1 rounded-md border font-medium bg-transparent cursor-pointer focus:outline-none disabled:opacity-50 ${TYPE_STYLES[scene.shot_type]}`}
             >
               {SHOT_TYPES.map(t => (
                 <option key={t} value={t} className="bg-[#1a1a1a] text-white">{TYPE_LABEL[t]}</option>
               ))}
             </select>
+
+            {/* DD-4: lock toggle — stays clickable even when the card is locked */}
+            <button
+              onClick={() => onChange({ locked: !locked })}
+              className="p-1 transition-colors"
+              style={{ color: locked ? 'rgba(251,191,36,0.85)' : 'rgba(255,255,255,0.2)' }}
+              title={locked ? 'Unlock scene' : 'Lock scene'}
+            >
+              {locked ? <Lock size={13} /> : <Unlock size={13} />}
+            </button>
+
+            {/* DD-4: overflow menu — Duplicate / Split / Merge with next / Delete */}
+            <div className="relative">
+              <button
+                onClick={() => setMenuOpen(v => !v)}
+                className="p-1 text-white/20 hover:text-white/55 transition-colors"
+                title="Scene actions"
+              >
+                <MoreVertical size={13} />
+              </button>
+              {menuOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+                  <div
+                    className="absolute right-0 mt-1 rounded-lg border border-white/10 bg-[#161616] shadow-xl z-20 overflow-hidden"
+                    style={{ minWidth: 168 }}
+                  >
+                    <button
+                      onClick={() => { setMenuOpen(false); onDuplicate?.() }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-[11px] text-white/60 hover:bg-white/[0.06] transition-colors"
+                    >
+                      <Files size={12} /> Duplicate
+                    </button>
+                    <button
+                      onClick={() => { setMenuOpen(false); setSplitModalOpen(true) }}
+                      disabled={locked}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-[11px] text-white/60 hover:bg-white/[0.06] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <Scissors size={12} /> Split
+                    </button>
+                    <button
+                      onClick={() => { setMenuOpen(false); onMergeNext?.() }}
+                      disabled={isLast || locked}
+                      title={isLast ? 'Last scene — nothing to merge with' : locked ? 'Unlock to merge' : undefined}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-[11px] text-white/60 hover:bg-white/[0.06] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <GitMerge size={12} /> Merge with next
+                    </button>
+                    <button
+                      onClick={() => { setMenuOpen(false); setConfirmDelete(true) }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-[11px] text-red-400/70 hover:bg-red-500/[0.08] transition-colors"
+                    >
+                      <Trash2 size={12} /> Delete
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
+
+        {/* DD-4: delete confirmation */}
+        {confirmDelete && (
+          <div className="ml-10 mb-3 flex items-center gap-3 rounded-lg border border-red-500/25 bg-red-500/[0.06] px-3 py-2">
+            <span className="flex-1 text-[11px] text-red-300/80">Delete this scene? This cannot be undone.</span>
+            <button
+              onClick={() => { setConfirmDelete(false); onDelete?.() }}
+              className="text-[11px] px-2.5 py-1 bg-red-500/15 hover:bg-red-500/25 border border-red-500/25 rounded text-red-300 transition-colors"
+            >
+              Delete
+            </button>
+            <button
+              onClick={() => setConfirmDelete(false)}
+              className="text-[11px] px-2.5 py-1 text-white/40 hover:text-white/70 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {/* DD-4: split modal */}
+        {splitModalOpen && (
+          <SplitModal
+            scene={scene}
+            onCancel={() => setSplitModalOpen(false)}
+            onConfirm={(caretIndex) => { setSplitModalOpen(false); onSplit?.(caretIndex) }}
+          />
+        )}
 
         {/* ── Metadata ── */}
         <div className="flex items-center gap-3 mb-3 ml-10 text-[11px] text-white/25">
@@ -234,8 +395,53 @@ function SceneCard({
           )}
         </div>
 
-        {/* ── Content ── */}
-        <div className="ml-10 space-y-2">
+        {/* ── DD-4: Visual / Direction tabs — hidden entirely when the scene has no
+             direction data, so a pre-DD-3 scene renders with no tab bar at all ── */}
+        {showDirectionTab && (
+          <div className="ml-10 flex items-center gap-1 mb-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+            {['visual', 'direction'].map(tab => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className="text-[11px] px-3 py-1.5 capitalize transition-colors"
+                style={{
+                  color: activeTab === tab ? 'white' : 'rgba(255,255,255,0.35)',
+                  borderBottom: activeTab === tab ? '2px solid #3b82f6' : '2px solid transparent',
+                  background: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: activeTab === tab ? 600 : 400,
+                }}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {showDirectionTab && activeTab === 'direction' && (
+          <div className="ml-10" style={{ padding: '4px 0 8px' }}>
+            <DirectionTab
+              scene={scene}
+              onChange={onChange}
+              locked={locked}
+              treatment={treatment}
+              projectId={projectId}
+              direction={direction}
+              prevScene={prevScene}
+              nextScene={nextScene}
+            />
+          </div>
+        )}
+
+        {/* ── Content (Visual tab) — unaltered from pre-DD-4, just gated behind the tab
+             when a Direction tab exists. Read-only as a whole when the scene is locked,
+             except the retry button below which needs its own tooltip text. ── */}
+        <div
+          className="ml-10 space-y-2"
+          style={{
+            display: showDirectionTab && activeTab !== 'visual' ? 'none' : 'block',
+            pointerEvents: locked ? 'none' : 'auto',
+            opacity: locked ? 0.6 : 1,
+          }}
+        >
 
           {/* ════ MOTION GRAPHIC ════════════════════════════════════════════════ */}
           {scene.shot_type === 'motion_graphic' && (
@@ -364,14 +570,31 @@ function SceneCard({
                   </div>
                 </div>
               ) : (
-                <button
-                  onClick={() => { setPromptDraft(scene.higgsfield_prompt); setEditingPrompt(true) }}
-                  disabled={isGenerating}
-                  className="w-full text-left text-[11px] text-white/35 bg-white/[0.02] hover:bg-white/[0.05] disabled:cursor-default rounded-lg px-3 py-2 font-mono leading-relaxed transition-colors border border-transparent hover:border-white/[0.06]"
-                  title="Click to edit prompt"
-                >
-                  {scene.higgsfield_prompt || <span className="text-white/15 italic">No prompt generated</span>}
-                </button>
+                <div className="flex items-start gap-2">
+                  <button
+                    onClick={() => { setPromptDraft(scene.higgsfield_prompt); setEditingPrompt(true) }}
+                    disabled={isGenerating}
+                    className="flex-1 text-left text-[11px] text-white/35 bg-white/[0.02] hover:bg-white/[0.05] disabled:cursor-default rounded-lg px-3 py-2 font-mono leading-relaxed transition-colors border border-transparent hover:border-white/[0.06]"
+                    title="Click to edit prompt"
+                  >
+                    {scene.higgsfield_prompt || <span className="text-white/15 italic">No prompt generated</span>}
+                  </button>
+                  {/* DD-4: per-field regenerate — rewrites higgsfield_prompt + subject_anchors */}
+                  {showDirectionTab && (
+                    <button
+                      onClick={regenerateVisualConcept}
+                      disabled={locked || regeneratingConcept}
+                      title={locked ? 'Unlock to regenerate' : 'Regenerate visual concept (prompt + subject anchors)'}
+                      style={{ pointerEvents: 'auto' }}
+                      className="shrink-0 mt-1 flex items-center justify-center w-6 h-6 rounded-md bg-white/[0.05] border border-white/[0.12] text-white/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <RefreshCw size={11} className={regeneratingConcept ? 'animate-spin' : undefined} />
+                    </button>
+                  )}
+                </div>
+              )}
+              {conceptError && (
+                <p className="text-[10.5px] text-red-400/70 mt-1">{conceptError}</p>
               )}
             </>
           )}
@@ -458,7 +681,10 @@ function SceneCard({
               {onRetry && (
                 <button
                   onClick={() => onRetry(scene.scene_id, scene.higgsfield_prompt)}
-                  className="flex items-center gap-1 text-[11px] px-2.5 py-1 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded text-red-400 transition-colors shrink-0"
+                  disabled={locked}
+                  title={locked ? 'Unlock to regenerate' : undefined}
+                  style={{ pointerEvents: 'auto' }}
+                  className="flex items-center gap-1 text-[11px] px-2.5 py-1 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded text-red-400 transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <RefreshCw size={10} /> Retry
                 </button>
@@ -651,6 +877,87 @@ function ClipMatchSection({ scene, clipMatch, selectedClip, onSelectClip, onConv
         </div>
       )}
 
+    </div>
+  )
+}
+
+// ─── DD-4: SplitModal ─────────────────────────────────────────────────────────
+// A small modal for picking a caret position inside script_excerpt. Clicking anywhere in
+// the text sets the split point; the two resulting halves are previewed live below.
+
+function SplitModal({ scene, onCancel, onConfirm }) {
+  const text = scene.script_excerpt || ''
+  const [caret, setCaret] = useState(Math.floor(text.length / 2))
+  const textRef = useRef(null)
+
+  const pickCaretFromClick = (e) => {
+    const el = textRef.current
+    if (!el) return
+    // Approximate: walk character offsets via a temporary range using the click x/y.
+    const range = document.caretRangeFromPoint
+      ? document.caretRangeFromPoint(e.clientX, e.clientY)
+      : null
+    if (range && el.contains(range.startContainer)) {
+      // Compute the offset of range.startContainer within the full text node
+      let offset = range.startOffset
+      let node = el.firstChild
+      let total = 0
+      while (node && node !== range.startContainer) {
+        total += node.textContent?.length || 0
+        node = node.nextSibling
+      }
+      setCaret(Math.max(1, Math.min(total + offset, text.length - 1)))
+    }
+  }
+
+  const left  = text.slice(0, caret).trim()
+  const right = text.slice(caret).trim()
+  const invalid = !left || !right
+
+  return (
+    <div
+      onClick={e => { if (e.target === e.currentTarget) onCancel() }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-6"
+      style={{ background: 'rgba(0,0,0,0.75)' }}
+    >
+      <div className="w-full rounded-xl border border-white/10 bg-[#141414] p-5" style={{ maxWidth: 560 }}>
+        <div className="text-sm font-semibold text-white mb-1">Split scene {scene.scene_id}</div>
+        <p className="text-[11px] text-white/40 mb-3">Click inside the text to choose where it splits.</p>
+
+        <div
+          ref={textRef}
+          onClick={pickCaretFromClick}
+          className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-3 text-[13px] leading-relaxed text-white/80 cursor-text select-none"
+        >
+          {text.slice(0, caret)}
+          <span style={{ display: 'inline-block', width: 2, height: 16, background: '#3b82f6', verticalAlign: 'middle', margin: '0 1px' }} />
+          {text.slice(caret)}
+        </div>
+
+        <div className="mt-3 flex gap-3 text-[11px]">
+          <div className="flex-1 rounded-lg border border-white/[0.08] bg-white/[0.02] p-2.5">
+            <div className="text-white/25 uppercase tracking-wider mb-1" style={{ fontSize: 9.5 }}>Scene A</div>
+            <div className="text-white/60">{left || <em className="text-red-400/60">empty</em>}</div>
+          </div>
+          <div className="flex-1 rounded-lg border border-white/[0.08] bg-white/[0.02] p-2.5">
+            <div className="text-white/25 uppercase tracking-wider mb-1" style={{ fontSize: 9.5 }}>Scene B</div>
+            <div className="text-white/60">{right || <em className="text-red-400/60">empty</em>}</div>
+          </div>
+        </div>
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button onClick={onCancel} className="text-[12px] px-3 py-1.5 text-white/40 hover:text-white/70 transition-colors">
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirm(caret)}
+            disabled={invalid}
+            className="text-[12px] px-4 py-1.5 bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/25 rounded-lg text-blue-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Split
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

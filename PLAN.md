@@ -6008,3 +6008,202 @@ being invented independently. Two code paths coexist permanently.
 - Voice step requires a selected voice (vorta_selected_voice); with none selected, Generate
   All is silently disabled — cosmetic UX gap, pre-existing.
 - proj_dd3_livetest cleaned up; the two e2e projects kept (they hold the deliverable MP4s).
+
+---
+
+### Phase DD-4 — Scene Inspector ✅ COMPLETE
+
+Surfaces the DD-3 direction fields for review/editing, adds scene locking, per-field
+regeneration, version history, and structural scene actions (duplicate/split/merge/delete).
+SceneCard extended, not replaced — every pre-existing control still works unchanged.
+
+**Tab architecture:**
+- `components/video-creator/SceneGrid.jsx` — the expanded card's existing content (motion
+  graphic / real footage / prompt / cinematic selectors / generated image — all untouched)
+  is now the "Visual" tab body. A "Direction" tab is added but the whole tab BAR is hidden
+  entirely — not just the Direction tab — when `hasDirectionData(scene)` is false
+  (`scene.scene_type || scene.purpose?.narrative || scene.asset_strategy?.method`), so a
+  pre-DD-3 scene renders byte-identical to before. Tab state (`activeTab`) is local
+  `useState`, resets to 'visual' on every mount — never persisted, per spec.
+- `components/video-creator/DirectionTab.jsx` (new) — Purpose (retention badge coloured by
+  the brief's warm/blue/amber/muted grouping), Classification (act, editable scene_type
+  dropdown that re-derives shot_type client-side via `sceneTypeToShotType` and updates the
+  badge immediately, complexity badge green/amber/red), Asset Strategy (editable method
+  dropdown + rationale), Asset Search (definition list, copy-to-clipboard on query, "Mark
+  asset as found" → `scene.asset_found`, collapsed-card green check), Continuity (chips
+  resolving entity names from the treatment, locked descriptor as a hover tooltip via the
+  existing `Tooltip` component, amber warning line for a ref pointing at a since-deleted
+  entity id), Alternative Concept (swap-to-alternative with an inline confirm strip, then
+  triggers an `image_prompt` regeneration), Risk Flags (red chips, humanised labels), and a
+  Director Note textarea (`scene.director_note` — local only, never sent to Claude).
+- `client/src/utils/sceneDirection.js` (new) — every pure-logic piece shared between
+  SceneCard and VideoCreator: the SCENE_TYPES/ASSET_METHODS/RETENTION_VALUES/RISK_FLAGS
+  enums and colour maps (client mirror of the server enums), `sceneTypeToShotType`,
+  `hasDirectionData`, `nextSceneId`, `pushFieldHistory`, `mergeAnalysisPreservingLocks`, and
+  the four scene actions (`duplicateScene`, `splitScene`, `mergeSceneWithNext`,
+  `deleteScene`). Kept framework-agnostic and fully unit-testable without a DOM.
+
+**Lock semantics + the re-analysis preservation rule (the single most important behaviour):**
+- Collapsed-card header gains a lock/unlock icon (stays clickable when locked, per spec) and
+  the card gets an amber border + a subtle amber overlay tint when locked.
+- Read-only enforcement uses two techniques depending on the control: the three `<select>`s
+  and the Director Note `<textarea>` get an explicit `disabled` attribute (verified live:
+  `selectsDisabled: [true,true,true]`); the rest of the Visual tab body (prompt editor,
+  GradeSelector/MotionSelector/CompositionSelector, letterbox toggle, real-footage clip
+  controls) is wrapped in a container with `pointerEvents: locked ? 'none' : 'auto'` +
+  dimmed opacity, so nothing inside needed its own disabled wiring. The one exception is the
+  failed-image retry button, deliberately pulled OUTSIDE that pointer-events wrapper with
+  its own `disabled` + "Unlock to regenerate" title, so the tooltip stays hoverable even
+  though the button is inert. Split/Merge are greyed out in the overflow menu while locked;
+  Duplicate and Delete stay available (locking protects content, not scene-list membership).
+- `services/sceneDirection.js`'s `mergeAnalysisPreservingLocks(oldScenes, newScenes)`: for
+  every scene the user locked, the OLD object is kept wholesale and the new analysis result
+  for that scene_id is discarded — matched by scene_id, with a fallback splice-back-in at
+  the original relative index if a locked scene's id doesn't happen to reappear in the fresh
+  array (so a locked scene can never be silently dropped even if the new analysis produces a
+  different scene count). `VideoCreator.jsx`'s `handleAnalyze` calls this on every
+  `/api/analyze` response and also preserves `sceneStatuses` entries for locked scene_ids
+  (so an already-generated image doesn't visually disappear from a locked card).
+- **Live-verified with a real treatment-aware Claude call** (not just the unit suite):
+  locked scenes 001/004/007 carried a non-schema `_testMarker` field only present on the
+  pre-analysis objects; after a full ~3-minute re-analysis, all three scenes still carried
+  their exact `_testMarker` and `locked: true`, while unlocked scenes had genuinely fresh
+  content (scene 002 changed from `image` to `motion_graphic` classification). This proves
+  object-identity preservation, not just field-level luck.
+- Batch operations skip locked scenes and report the skip count. `VideoCreator.jsx`'s
+  `handleGenerateAll` filters motion/real-footage/image scene lists through `!s.locked`
+  before dispatch and accumulates a `generateSkipped` count, shown on the Visuals step as
+  "N generated, M skipped (locked)" — **live-verified with real Higgsfield generation**:
+  locking 3 of 8 scenes and running Generate All produced exactly "5 generated, 3 skipped
+  (locked)". `VoiceoverPanel.jsx`'s `newToGenerate`/full-regenerate paths got the same
+  `!s.locked` filter plus a matching skip-count message; individual per-scene voiceover
+  Generate/Regenerate buttons also respect `scene.locked` for consistency (not explicitly
+  required by the test list, low-risk addition). "Lock all" / "Unlock all" added to the
+  Scenes step toolbar next to the existing Back/Enhance-prompts/Continue buttons.
+
+**Per-field regeneration contract:**
+- `POST /api/director/scene/regenerate` — registered in `routes/director.js` BEFORE the
+  existing `/:projectId/regenerate` param route (that route would otherwise treat the
+  literal segment "scene" as `:projectId` and swallow every request). Body
+  `{ projectId, scene, field, direction, neighbors }`; `field` ∈ visual_concept,
+  image_prompt, purpose, asset_strategy, alternative_concept, scene_type, all. `scene.locked
+  === true` → 409 with a clear message before any Claude call is made.
+- `services/director.js`'s `regenerateSceneField` — one scoped Claude call per field, with a
+  `FIELD_SPECS` table defining exactly which response keys are allowlisted per field (e.g.
+  `visual_concept` → only `higgsfield_prompt`/`subject_anchors`). This allowlist is enforced
+  structurally, not by trusting the model: **live-verified** by asking the model to also
+  return `script_excerpt: "HACKED", scene_id: "999", duration_seconds: 999, audio_path:
+  "/hacked.mp3", locked: true` alongside a valid `visual_concept` response — the returned
+  patch contained only `higgsfield_prompt` and `subject_anchors`, nothing else, because
+  those are the only keys ever read off the parsed response for that field. `scene_type`
+  additionally re-derives `shot_type`/`real_footage_flag` server-side via the same
+  `sceneTypeToShotType` exported from `services/claude.js` (single source of truth shared
+  with DD-3's own analysis path); an invalid enum value is dropped silently rather than
+  retried, mirroring DD-3's `sanitizeDirectorFields` philosophy.
+- System prompt restates the DD-3 rules for a single-scene scope: never repeat the visual
+  signature (it's appended automatically), reproduce continuity-entity locked descriptors
+  verbatim when `continuity_refs` is non-empty, never touch script_excerpt/scene_id/
+  duration_seconds/audio_path, never invent archive URLs/quotations/documents.
+  **Live-verified** against the real WeWork treatment: regenerating `visual_concept` for a
+  scene referencing `ent_neumann` produced a prompt with 6/6 of the locked descriptor's
+  significant words present, and the visual signature did not appear anywhere in the
+  returned prompt.
+- UI: a small circular-arrow button per regenerable field (Purpose, Classification/
+  scene_type, Asset Strategy, Alternative Concept — each in `DirectionTab.jsx`) plus one on
+  the Visual tab's prompt editor for `visual_concept` (`SceneGrid.jsx`, since it also updates
+  subject_anchors). Each button has its own `regenerating[field]` boolean — spinners and
+  errors are per-field, not card-wide. Failure leaves the existing field value untouched and
+  shows an inline error string.
+
+**Version history:** `pushFieldHistory(scene, field, previousValue)` appends `{ value, at }`
+capped to the last 3 entries via `slice(-3)`, stored in `scene.field_history[field]` (and
+therefore localStorage — no new backend storage, per spec). Every regeneration path and the
+alternative-concept swap push the OLD value before applying the new one. `FieldHistory` (in
+`DirectionTab.jsx`) renders "Previous versions (N)" as an expandable list with a Restore
+button per entry; restoring itself pushes the just-replaced current value back into history,
+so a restore is always reversible — verified in the unit suite by restoring twice in
+sequence and checking both directions land correctly.
+
+**Scene id stability rule:** `nextSceneId(scenes)` is `max(existing numeric ids) + 1`,
+zero-padded to 3 digits — never a renumber of the existing array, because scene_id is the
+join key for `audio_path`/`image_path` server files and the Remotion `<Sequence>` key in
+`compositions/Documentary.jsx`. Duplicate/Split/Merge/Delete all preserve this:
+- **Duplicate** — new id inserted directly after the source; clone gets `audio_path`,
+  `audio_duration`, `image_path`, `field_history`, `asset_found` reset and `locked: false`
+  regardless of the source's lock state.
+- **Split** — a caret-position modal (`SceneGrid.jsx`'s `SplitModal`, click-to-position over
+  the live `script_excerpt` text) divides the text at that character offset; duration splits
+  proportionally by WORD count (not character count) on each side; the first half keeps the
+  original scene_id, the second half gets a freshly minted one; both inherit
+  act/scene_type/purpose/style_lock from the source; both have audio/image cleared. Refuses
+  (returns the same array reference, unchanged) if either resulting half is empty after
+  trimming — verified for both the character-clamp case and the more subtle
+  leading-whitespace case.
+- **Merge with next** — concatenates `script_excerpt` with a single space, sums
+  `duration_seconds`, keeps the FIRST scene's classification fields (act, scene_type, mood,
+  etc.), unions `continuity_refs` and `risk_flags`, clears audio/image on the merged result.
+  Disabled (no-op, same array reference returned) on the last scene or when either scene is
+  locked.
+- **Delete** — confirm dialog inline on the card (not a native `confirm()` — non-blocking,
+  automatable), then removes the scene and its `sceneStatuses`/`clipMatches`/`selectedClips`
+  entries so no stale state lingers under an id that no longer exists.
+- All four actions call the existing `setScenes` → the pre-existing
+  `useEffect(() => lsWrite(LS.scenes, scenes), [scenes])` persistence path fires
+  automatically; no new persistence code needed.
+- Regression guard: `VideoPlayer.jsx` and `compositions/Documentary.jsx` already deduplicate
+  by scene_id independently (pre-DD-4 code, confirmed by reading both files before starting)
+  — DD-4's only obligation was guaranteeing uniqueness, which `nextSceneId` does structurally.
+
+**Test results:**
+- [x] 25/25 offline unit tests: field-allowlist enforcement for all 7 regenerable fields
+  (including the malicious-response test above), scene_type validity + shot_type
+  re-derivation + silent-drop-on-invalid, retry-once-then-throw, nextSceneId, duplicate
+  (unique id, audio/image cleared, unlocked, original untouched), split (proportional
+  duration verified to exact word-count math, refuses-empty-half via two different trigger
+  paths), merge (text/duration/refs/flags, disabled-on-last, disabled-on-locked-either-side),
+  delete, **TEST 18 (locked scenes byte-identical after mergeAnalysisPreservingLocks) plus a
+  splice-back-in variant proving a locked scene survives even when its id doesn't reappear
+  in the new analysis**, field-history cap-at-3 with the real push-old-before-apply-new
+  usage pattern, restore-is-reversible, hasDirectionData, sceneTypeToShotType parity with
+  the server's 20-type mapping
+- [x] Existing suites unaffected (claude.test.js, overlaySingleCall, higgsfieldRegenerate);
+  client build clean; only pre-existing lint issues remain in touched files (confirmed via
+  `git stash` diff — none introduced by DD-4)
+- [x] Live in Chrome (real dev servers, real Claude/Higgsfield/ElevenLabs calls, real
+  treatment data from two different projects): no-direction scene renders with zero tab bar
+  (byte-identical collapsed/expanded appearance); direction scene shows Visual (default) +
+  Direction tabs; all Direction sections render with correct live data including a real
+  amber "moderate" complexity badge and a blue "orientation" retention badge (confirming the
+  brief's colour-grouping table); scene_type dropdown → shot_type badge updates
+  instantaneously client-side; copy-to-clipboard verified via an instrumented
+  `navigator.clipboard.writeText` interception (real write dialog otherwise froze the CDP
+  channel); "Mark asset as found" persisted to localStorage and produced the collapsed-card
+  green check; continuity chips resolved real entity names with locked-descriptor tooltips;
+  lock toggle produced the amber border/tint and disabled all three selects + the note
+  textarea, and rendered the Visual tab body inert via pointer-events; overflow menu showed
+  Split/Merge greyed out while locked; **Test 18 reproduced live end-to-end with a genuine
+  ~3-minute treatment-aware analysis call**; **"5 generated, 3 skipped (locked)" reproduced
+  live with genuine Higgsfield generation**; Duplicate/Split/Merge/Delete each exercised live
+  through real UI clicks (menu → action → confirm where applicable) with scene_id
+  arithmetic, text splitting, and duration math all verified against `localStorage.vorta_scenes`
+  after each step; a subsequent live regeneration call against the real WeWork treatment
+  confirmed the 409-locked path, the field-allowlist, and locked-descriptor reproduction all
+  hold against production data, not just fixtures
+- [~] Full end-to-end render after a split and a merge: driven up through Visuals (new/
+  changed scenes regenerated correctly — the split motion_graphic scene correctly excluded
+  itself from the image-generation count) and Voice (5/8 pre-existing narrations preserved,
+  exactly the 3 scenes touched by split/merge correctly flagged as needing regeneration) and
+  the render was started via Lambda from Export; the render's completion was not waited out
+  before this report, at the user's explicit instruction to stop pursuing further self-tests
+  and proceed to write-up. Everything upstream of the render call (scene counts, id
+  uniqueness, audio-clearing precision, wizard step progression) was confirmed correct at
+  every stage, which is what actually exercises the split/merge → render regression path;
+  the render call itself is unchanged DD-3-era code with no DD-4 involvement.
+- User's real 49-scene WeWork session was stashed under `__bk_*` localStorage keys before
+  all browser testing and fully restored afterward (verified byte-for-byte: same session
+  key, same scene count, zero leftover backup keys, zero console errors post-restore).
+
+**Known deviation from the brief:** none structural — the one interpretive call was treating
+the failed-image retry button as "the card's own regenerate-image button" referenced in Step
+3, since no separate always-visible regenerate control exists for successfully-generated
+images in the pre-DD-4 UI.

@@ -7,7 +7,10 @@
 const express = require('express');
 const router  = express.Router();
 
-const { generateTreatment, regenerateTreatmentSection, TREATMENT_SECTIONS } = require('../services/director');
+const {
+  generateTreatment, regenerateTreatmentSection, TREATMENT_SECTIONS,
+  regenerateSceneField, SCENE_FIELDS,
+} = require('../services/director');
 const { readDirection, writeDirection } = require('../services/directionStore');
 
 function isPlainObject(v) {
@@ -43,6 +46,32 @@ router.post('/treatment', async (req, res) => {
   } catch (err) {
     console.error('[director] treatment generation failed:', err.message);
     res.status(500).json({ error: 'Treatment generation failed', detail: err.message });
+  }
+});
+
+// POST /api/director/scene/regenerate — DD-4 per-field scene regeneration.
+// Registered BEFORE /:projectId/regenerate: that param route would otherwise treat the
+// literal segment "scene" as :projectId and swallow this request.
+// Body { projectId, scene, field, direction, neighbors }.
+router.post('/scene/regenerate', async (req, res) => {
+  const { scene, field, direction, neighbors } = req.body || {};
+
+  if (!SCENE_FIELDS.includes(field)) {
+    return res.status(400).json({ error: `field must be one of: ${SCENE_FIELDS.join(', ')}` });
+  }
+  if (!scene || typeof scene !== 'object') {
+    return res.status(400).json({ error: 'scene object is required' });
+  }
+  if (scene.locked === true) {
+    return res.status(409).json({ error: 'Scene is locked — unlock it before regenerating this field.' });
+  }
+
+  try {
+    const patch = await regenerateSceneField(scene, field, direction, neighbors || {});
+    res.json({ patch });
+  } catch (err) {
+    console.error(`[director] scene field regeneration failed (${field}):`, err.message);
+    res.status(500).json({ error: 'Scene field regeneration failed', detail: err.message });
   }
 });
 
