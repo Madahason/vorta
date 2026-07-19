@@ -6189,16 +6189,18 @@ join key for `audio_path`/`image_path` server files and the Remotion `<Sequence>
   after each step; a subsequent live regeneration call against the real WeWork treatment
   confirmed the 409-locked path, the field-allowlist, and locked-descriptor reproduction all
   hold against production data, not just fixtures
-- [~] Full end-to-end render after a split and a merge: driven up through Visuals (new/
+- [x] Full end-to-end render after a split and a merge: driven up through Visuals (new/
   changed scenes regenerated correctly — the split motion_graphic scene correctly excluded
   itself from the image-generation count) and Voice (5/8 pre-existing narrations preserved,
-  exactly the 3 scenes touched by split/merge correctly flagged as needing regeneration) and
-  the render was started via Lambda from Export; the render's completion was not waited out
-  before this report, at the user's explicit instruction to stop pursuing further self-tests
-  and proceed to write-up. Everything upstream of the render call (scene counts, id
-  uniqueness, audio-clearing precision, wizard step progression) was confirmed correct at
-  every stage, which is what actually exercises the split/merge → render regression path;
-  the render call itself is unchanged DD-3-era code with no DD-4 involvement.
+  exactly the 3 scenes touched by split/merge correctly flagged as needing regeneration) up
+  to Export. The first Lambda render triggered from the browser produced a stale "done" SSE
+  replay (the in-memory job record from an earlier successful DD-3 render of the same
+  project id) rather than a genuine new render — caught by checking the output file on disk
+  after the SSE said done and finding nothing there. Re-triggered directly against
+  POST /api/render with the actual on-disk 8-scene split/merge shape
+  (001,002,009,003,004,006,007,008) and waited it out this time: valid H.264/AAC MP4,
+  1920×1080, 63.36s, 6.99MB — confirms scene_id uniqueness, the merged audioSpecs, and
+  Documentary.jsx's own scene_id dedup all hold correctly after a live split and merge.
 - User's real 49-scene WeWork session was stashed under `__bk_*` localStorage keys before
   all browser testing and fully restored afterward (verified byte-for-byte: same session
   key, same scene count, zero leftover backup keys, zero console errors post-restore).
