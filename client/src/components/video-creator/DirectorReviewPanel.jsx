@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { ChevronDown, ChevronUp, AlertTriangle, AlertCircle, Info, RefreshCw } from 'lucide-react'
 import { runDirectorAudit } from '../../utils/directorAudit'
 
@@ -114,6 +114,16 @@ export function DirectorReviewPanel({
   const storedAudit = direction?.audit || null
   const [report, setReport] = useState(storedAudit)
   const [expanded, setExpanded] = useState(false)
+
+  // `direction` can arrive after this component's first render — e.g. VideoCreator's
+  // mount-time fetch of direction.json resolves asynchronously, or the project itself
+  // changes. `report`'s initial useState value only captures whatever `direction.audit`
+  // was at mount, so without this it can get stuck showing "not yet run" (or a stale
+  // report from a previous project) even after the real stored audit arrives.
+  useEffect(() => {
+    const t = setTimeout(() => setReport(direction?.audit || null), 0)
+    return () => clearTimeout(t)
+  }, [direction?.audit])
   const [running, setRunning] = useState(false)
   const [criticalOnly, setCriticalOnly] = useState(false)
   const [hideInfo, setHideInfo] = useState(false)
@@ -133,7 +143,10 @@ export function DirectorReviewPanel({
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ audit: withCount }),
         }).catch(() => {}) // local report already applied — persistence failure is non-fatal
-        onDirectionChange?.(prev => prev ? { ...prev, audit: withCount } : prev)
+        // A project that skipped Direction entirely has no pre-existing direction object —
+        // build a minimal one rather than dropping the audit update (matches the server's
+        // PATCH route, which now creates a fresh direction.json for an audit-only save too).
+        onDirectionChange?.(prev => ({ ...(prev || { version: 1, treatment: {} }), audit: withCount }))
       }
     } finally {
       setRunning(false)

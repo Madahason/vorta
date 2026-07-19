@@ -17,6 +17,7 @@ const LS_KEYS = {
   clipMatches:   'vorta_clip_matches',
   selectedClips: 'vorta_selected_clips',
   sessionKey:    'vorta_session_key',
+  direction:     'vorta_direction',
 }
 
 function restoreProject(key) {
@@ -30,6 +31,11 @@ function restoreProject(key) {
     if (snapshot.projectId)     localStorage.setItem(LS_KEYS.projectId,     JSON.stringify(snapshot.projectId))
     if (snapshot.metadata)      localStorage.setItem(LS_KEYS.metadata,      JSON.stringify(snapshot.metadata))
     localStorage.setItem(LS_KEYS.sessionKey, JSON.stringify(key))
+    // direction.json isn't part of the snapshot — it's always re-fetched fresh from the
+    // server for the restored project's sessionKey. Clear any stale value from whatever
+    // project was open before, so its treatment/audit can't leak into this one while the
+    // fresh fetch is in flight (or if the restored project never had a direction at all).
+    localStorage.removeItem(LS_KEYS.direction)
     return true
   } catch {
     return false

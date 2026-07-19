@@ -116,17 +116,23 @@ router.get('/:projectId', (req, res) => {
 // an audit-only PATCH (just { audit }) leaves treatment completely untouched.
 router.patch('/:projectId', (req, res) => {
   const existing = readDirection(req.params.projectId);
-  if (!existing) {
-    return res.status(404).json({ error: 'No direction exists for this project — generate a treatment first' });
-  }
   const body = req.body;
   if (!isPlainObject(body)) {
     return res.status(400).json({ error: 'PATCH body must be a partial treatment object' });
   }
   const { audit, ...treatmentPatch } = body;
+  const hasTreatmentPatch = Object.keys(treatmentPatch).length > 0;
 
-  const merged = deepMerge(existing.treatment || {}, treatmentPatch);
-  const nextAudit = audit !== undefined ? audit : (existing.audit ?? null);
+  // Editing treatment fields still requires an existing treatment to merge into. An
+  // audit-only PATCH doesn't — DD-5's Director Review runs (and must persist) for
+  // projects that skipped Direction entirely, which never had a direction.json to begin
+  // with, so this creates a fresh minimal record for them instead of 404ing.
+  if (!existing && hasTreatmentPatch) {
+    return res.status(404).json({ error: 'No direction exists for this project — generate a treatment first' });
+  }
+
+  const merged = deepMerge(existing?.treatment || {}, treatmentPatch);
+  const nextAudit = audit !== undefined ? audit : (existing?.audit ?? null);
   const stored = writeDirection(req.params.projectId, { treatment: merged, audit: nextAudit });
   res.json({ treatment: stored.treatment, audit: stored.audit, updatedAt: stored.updatedAt });
 });

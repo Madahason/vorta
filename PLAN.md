@@ -6372,3 +6372,85 @@ finally cross-checked in aggregate against the treatment that shaped it (DD-5) �
 user a single point, right before committing to a render, to catch narration gaps, visual
 repetition, continuity drift, unsupported evidence claims, and production-readiness problems,
 while always leaving the final call in their hands via "Render anyway."
+
+### DD-5 post-merge regression pass — 3 real bugs found and fixed
+
+The user's pre-merge regression checklist (pre-DD project rendering unchanged, a
+skip-Direction project rendering successfully, a full-Direction project rendering
+successfully, Lambda confirmed) surfaced three genuine bugs in the Director Review
+persistence path — none were caught by the 28 offline unit tests, since all three are
+project-switching / async-timing issues that only manifest against a live server and a
+browser session carrying state across projects.
+
+- **Stale `direction` (and its `audit`) leaking across project switches.** `App.jsx`'s
+  `restoreProject()`/`clearSession()` never included `vorta_direction` in the keys they
+  manage — direction.json was always meant to be re-fetched fresh per project from the
+  server, but the fetch effect deliberately no-ops on a null response ("keep the
+  localStorage fallback"), so opening a different project left the PREVIOUS project's
+  treatment and audit sitting in state. Live-reproduced: opening "The Box Control Run" (a
+  project that never had a treatment) right after the WeWork session showed WeWork's exact
+  "Director Review found no critical issues" checkmark and timestamp on a completely
+  unrelated project — cosmetically on the Scenes/Export step, but genuinely misleading about
+  render safety if the stale audit had contained criticals instead. Fixed by adding
+  `direction: 'vorta_direction'` to `App.jsx`'s `LS_KEYS` and explicitly clearing it in
+  `restoreProject()` before the new session's sessionKey is set, letting the fresh per-project
+  fetch populate it correctly instead of inheriting whatever the last project left behind.
+- **Audit-only PATCH 404ing when no treatment exists yet.** `PATCH /api/director/:projectId`
+  unconditionally 404'd when `readDirection()` returned null — correct for a treatment-edit
+  PATCH (DD-2's inline-edit use case genuinely needs an existing treatment to merge into),
+  wrong for DD-5's audit-only PATCH on a project that skipped Direction entirely, since that
+  project never had a direction.json to 404 against in the first place. The failure was
+  silent end-to-end: `DirectorReviewPanel`'s PATCH call only `.catch()`s network-level
+  rejections (fetch doesn't reject on a 404), so the review appeared to run successfully in
+  the UI but never persisted — confirmed live by running a review on a no-direction project,
+  seeing it render correctly in the panel, then finding "not yet run" again after a reload.
+  Fixed by only 404ing when the PATCH body actually contains treatment fields; an audit-only
+  body now creates a fresh minimal direction record (`treatment: {}`) instead.
+- **`DirectorReviewPanel`'s `report` state never resyncing after mount.** `report` was a
+  `useState(direction?.audit)` — captures the value once, at first render, with no effect
+  keeping it in sync with later changes to the `direction` prop. Since `VideoCreator`'s
+  direction.json fetch is itself async (fires in a mount effect, resolves after the first
+  paint), this meant `DirectorReviewPanel` could permanently show "not yet run" (or a stale
+  report belonging to whatever `direction` looked like at the exact instant of mount) even
+  once the correct, fully-loaded audit was sitting one render away — reproduced live even
+  after fixing the two bugs above, since the async-arrival timing issue is independent of
+  them. Fixed with a `useEffect` that resyncs `report` from `direction?.audit` whenever the
+  latter changes (deferred via `setTimeout(fn, 0)` per this codebase's established purity-rule
+  pattern for effect-body `setState`). A companion fix in the same file: `runReview()`'s
+  `onDirectionChange?.(prev => prev ? {...prev, audit} : prev)` silently dropped the audit
+  update when `prev` was null (no pre-existing direction) — changed to build a minimal
+  direction shell (`{ version: 1, treatment: {} }`) instead of no-op'ing, so a no-direction
+  project's local/localStorage state gets the audit too, not just the server.
+
+**Regression results (per the user's checklist, using existing already-populated projects
+rather than freshly-generated ones — approved in-session, since DD-5 touches none of the
+script-analysis/treatment-generation/image-gen/voice-gen layers those would exercise):**
+- [x] **(a) Pre-DD / no-direction project, end-to-end, rendered successfully.** "The Box
+  Control Run" (8 scenes, zero `scene_type`/`purpose` fields, never had a direction.json) —
+  Scenes step correctly showed "Director Review — not yet run" (not a leaked stale audit,
+  post-fix), ran a review live (1 warning, direction=null correctly skipped
+  continuity/evidence), confirmed it persisted and survived a reload, Export step correctly
+  showed "no critical issues," rendered via Lambda: valid H.264/AAC 1920×1080, 63.3s,
+  48.6MB, zero console errors throughout.
+- [x] **(b) Skip-Direction project, rendered successfully.** Same project as (a) satisfies
+  this — a project that never touched the Direction step at all.
+- [x] **(c) Full-Direction project, rendered successfully.** "Split Merge Render Test" (8
+  scenes, real DD-3 treatment/continuity data from earlier DD-4 testing) — review surfaced 2
+  genuine criticals (continuity/evidence checks running for real this time, not synthetic),
+  Export step correctly blocked with the exact critical count, "Render anyway" correctly
+  unblocked it, rendered via Lambda: valid H.264/AAC 1920×1080, 63.4s, 49.2MB.
+- [x] **(d) Lambda confirmed working.** Both (a) and (c) rendered via Lambda (the default
+  render target as of the Lambda-migration phases), both producing valid, fresh, correctly-
+  sized output files (verified by timestamp and `ffprobe`, not just the UI's "done" state —
+  guards against the stale-SSE-replay issue DD-4 previously discovered).
+- [x] Client build clean; `App.jsx` and `DirectorReviewPanel.jsx` pass lint with zero errors
+  after the purity-rule fix; server route syntax-checked; 28/28 offline unit tests still pass
+  (unaffected — these bugs were all live-only, cross-project/async-timing issues).
+- User's real 49-scene WeWork session was stashed under `__bk_*` localStorage keys before
+  this regression pass and fully restored afterward (verified: 49 scenes, zero leftover
+  backup keys, zero console errors, all wizard steps still showing complete).
+
+**Files touched beyond the original DD-5 commit:** `client/src/App.jsx` (project-switch
+direction clearing), `client/src/components/video-creator/DirectorReviewPanel.jsx` (resync
+effect + no-direction-safe update), `server/routes/director.js` (audit-only PATCH no longer
+requires a pre-existing treatment).
