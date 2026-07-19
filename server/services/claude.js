@@ -396,7 +396,9 @@ function buildFallbackPrompt(scene) {
 // 1. Must contain at least one subject anchor word
 // 2. Must not start with a comma (empty subject prefix)
 // 3. Must have at least 30 chars of subject-specific content (before style lock)
-function validateAndGroundPrompts(scenes) {
+// styleLock defaults to the production STYLE_LOCK so the no-direction path is byte-for-byte
+// unchanged; the DD-3 treatment path passes the treatment's visual signature instead.
+function validateAndGroundPrompts(scenes, styleLock = STYLE_LOCK) {
   return scenes.map(scene => {
     if (scene.shot_type !== 'image' && scene.shot_type !== 'real_footage') return scene
     if (!scene.higgsfield_prompt) return scene
@@ -409,9 +411,9 @@ function validateAndGroundPrompts(scenes) {
       prompt = buildFallbackPrompt(scene)
     }
 
-    // Strip any style lock that was already appended (we re-append in analyzeScript)
-    if (prompt.includes(STYLE_LOCK)) {
-      prompt = prompt.replace(`, ${STYLE_LOCK}`, '').replace(STYLE_LOCK, '').trim()
+    // Strip any style lock that was already appended (re-appended in postProcessScenes)
+    if (prompt.includes(styleLock)) {
+      prompt = prompt.replace(`, ${styleLock}`, '').replace(styleLock, '').trim()
     }
 
     // Enforce minimum subject-specific content length
@@ -535,18 +537,20 @@ function narratedDuration(scriptExcerpt) {
 
 // ─── Post-process: apply style lock, IDs, defaults ──────────────────────────
 
-function postProcessScenes(scenes, defaults = {}) {
+// styleLock defaults to STYLE_LOCK so analyzeScript's output is byte-for-byte unchanged;
+// analyzeScriptWithDirection passes the treatment's visual signature (DD-3).
+function postProcessScenes(scenes, defaults = {}, styleLock = STYLE_LOCK) {
   const style = defaults.style || {};
-  const processed = validateAndGroundPrompts(scenes).map((scene, i) => {
+  const processed = validateAndGroundPrompts(scenes, styleLock).map((scene, i) => {
     const subjectPrompt = (scene.higgsfield_prompt || '').trim();
 
     let finalPrompt = '';
     if (scene.shot_type === 'image' || scene.shot_type === 'real_footage') {
       if (subjectPrompt && subjectPrompt.length >= 10) {
-        finalPrompt = `${subjectPrompt}, ${STYLE_LOCK}`;
+        finalPrompt = `${subjectPrompt}, ${styleLock}`;
       } else {
         const fallback = buildFallbackPrompt({ ...scene, scene_id: String(i + 1).padStart(3, '0') });
-        finalPrompt = `${fallback}, ${STYLE_LOCK}`;
+        finalPrompt = `${fallback}, ${styleLock}`;
       }
     }
 
@@ -572,7 +576,7 @@ function postProcessScenes(scenes, defaults = {}) {
     return {
       ...scene,
       scene_id:          String(i + 1).padStart(3, '0'),
-      style_lock:        STYLE_LOCK,
+      style_lock:        styleLock,
       subject_anchors:   scene.subject_anchors  || [],
       composition:       scene.composition      || 'medium',
       motion:            scene.shot_type === 'image'
@@ -836,6 +840,347 @@ async function analyzeScript({ script, metadata, defaults = {} }) {
   return postProcessScenes(scenes, defaults);
 }
 
+// ─── DD-3: treatment-aware analysis ─────────────────────────────────────────
+// A second, parallel analysis path used when a project has an approved director's
+// treatment (direction.json). analyzeScript above is NOT modified — it remains the
+// permanent fallback and the only path for projects without direction.
+
+const { applyDirectorSceneDefaults } = require('./sceneSchema');
+
+const SCENE_TYPES = [
+  'cinematic_establishing', 'character_introduction', 'cinematic_reconstruction',
+  'archival_footage', 'archival_photograph', 'headline_sequence',
+  'primary_document', 'map_animation', 'timeline', 'data_visualisation',
+  'process_diagram', 'comparison_graphic', 'environmental_broll',
+  'kinetic_typography', 'symbolic_image', 'reveal_payoff', 'pattern_interrupt',
+  'transitional', 'breathing_scene', 'closing_image',
+];
+
+// scene_type → shot_type. shot_type remains the authoritative field for the pipeline.
+const MOTION_GRAPHIC_SCENE_TYPES = new Set([
+  'data_visualisation', 'timeline', 'map_animation', 'process_diagram',
+  'comparison_graphic', 'kinetic_typography',
+]);
+
+function sceneTypeToShotType(sceneType) {
+  if (!SCENE_TYPES.includes(sceneType)) return null;
+  if (MOTION_GRAPHIC_SCENE_TYPES.has(sceneType)) return 'motion_graphic';
+  if (sceneType === 'archival_footage') return 'real_footage';
+  return 'image';
+}
+
+const RETENTION_VALUES = [
+  'curiosity', 'orientation', 'proof', 'escalation', 'contrast', 'surprise',
+  'emotional_connection', 'pattern_interrupt', 'explanation', 'payoff',
+  'breathing_room', 'transition',
+];
+
+const ASSET_METHODS = [
+  'ai_image', 'motion_graphic', 'stock_footage', 'archival_footage',
+  'primary_document', 'photograph', 'screenshot', 'hybrid',
+];
+
+const RISK_FLAGS = [
+  'historical_accuracy', 'generation_inconsistency', 'requires_licensed_footage',
+  'requires_reliable_data', 'misleading_reconstruction', 'difficult_text_rendering',
+  'character_continuity', 'copyright_sensitive', 'high_compositing_complexity',
+];
+
+const COMPLEXITY_VALUES = ['simple', 'moderate', 'advanced'];
+
+// Treatment context block prepended to the existing system prompt (which stays intact —
+// all cinematographic/composition/lighting/overlay rules continue to apply unweakened).
+function buildDirectionContext(direction) {
+  const t  = direction.treatment || {};
+  const sb = t.style_bible || {};
+
+  const acts = (t.acts || []).map(a =>
+    `Act ${a.act_number} — ${a.title} — ${a.purpose} — opens "${a.opening_line}" — closes "${a.closing_line}"`
+  ).join('\n');
+
+  const entities = (t.continuity_entities || []).map(e =>
+    `${e.id} | ${e.name} | ${e.type} | ${e.locked_descriptor} | ${e.prohibited_variations || ''}`
+  ).join('\n');
+
+  const motifs = (t.recurring_motifs || []).map(m =>
+    `${m.id} | ${m.name} | ${m.description} | ${m.reinforces || ''}`
+  ).join('\n');
+
+  const claims = (t.evidence_claims || []).map(c =>
+    `${c.id} | ${c.claim} | ${c.type} | ${c.preferred_evidence || ''}`
+  ).join('\n');
+
+  return `You are directing scenes for a documentary that already has an approved
+DIRECTOR'S TREATMENT. You are not inventing the look of this film — that
+decision is already made. Your job is to execute it scene by scene.
+
+VISUAL THESIS:
+${t.visual_thesis || ''}
+
+VISUAL SIGNATURE (appended to every image prompt automatically — do NOT
+repeat it inside your prompts):
+${sb.visual_signature || ''}
+
+STYLE BIBLE:
+Colour: ${sb.colour_direction || ''}
+Lighting: ${sb.lighting_approach || ''}
+Realism: ${sb.realism_level || ''}
+Archival treatment: ${sb.archival_treatment || ''}
+Transition language: ${sb.transition_language || ''}
+
+ACTS:
+${acts}
+
+CONTINUITY ENTITIES — these people, places, and objects recur. When a scene
+features one, you MUST reproduce its locked descriptor verbatim inside the
+image prompt, and add its id to continuity_refs. Never re-describe them in
+your own words.
+${entities || '(none)'}
+
+RECURRING MOTIFS:
+${motifs || '(none)'}
+Deploy motifs deliberately at act boundaries, escalations, and callbacks.
+Do not force a motif into every scene.
+
+EVIDENCE CLAIMS — these carry the argument. A scene covering one of these
+should prefer authentic evidence over an AI-generated image. Set
+asset_strategy.method accordingly and provide asset_search.
+${claims || '(none)'}
+
+`;
+}
+
+// New rules appended after the existing system prompt for the treatment-aware path.
+const DIRECTION_RULES = `
+
+ACT ASSIGNMENT:
+Every scene gets an act number. Determine it by matching the scene's
+narration against each act's opening and closing lines.
+
+SCENE TYPE — choose exactly one:
+${SCENE_TYPES.join(', ')}
+
+Choose by storytelling function, not by variety. Map scene_type to the
+existing shot_type field:
+- data_visualisation, timeline, map_animation, process_diagram,
+  comparison_graphic, kinetic_typography → motion_graphic
+- archival_footage → real_footage
+- everything else → image
+
+shot_type remains the authoritative field for the generation pipeline.
+
+ASSET STRATEGY:
+Set asset_strategy.method to one of:
+${ASSET_METHODS.join(', ')}
+Give a one-sentence rationale explaining why this method beats the
+alternatives for this specific moment.
+
+When the scene covers an evidence claim and real material would be stronger
+than an AI image, populate asset_search with:
+{ "query": "", "person": "", "organisation": "", "location": "", "date_range": "", "event": "", "source_category": "", "quality_note": "" }
+Never invent an archive URL, a quotation, or a specific document that you
+cannot verify exists. Describe what to look for, not what you claim exists.
+Set asset_search to null when the scene needs no real-material search.
+
+CONTINUITY REFS:
+Array of continuity entity ids appearing in this scene. Empty array if none.
+
+PURPOSE:
+Four short strings — narrative, informational, emotional, retention.
+retention must be one of: ${RETENTION_VALUES.join(', ')}
+
+ALTERNATIVE CONCEPT:
+One practical alternative using a DIFFERENT production method. Not a minor
+variation. { "method": "", "description": "" }
+
+COMPLEXITY: simple | moderate | advanced
+
+RISK FLAGS — array, only when genuinely applicable:
+${RISK_FLAGS.join(', ')}
+
+EVIDENCE-BACKED SCENES — MANDATORY:
+When a scene's narration contains one of the EVIDENCE CLAIMS above (a statistic,
+dated event, financial figure, or quotation) and authentic material plausibly
+exists, asset_strategy.method MUST be a real-material method — archival_footage,
+photograph, primary_document, screenshot, or stock_footage — NOT ai_image.
+The one exception: pure numeric data where a chart communicates better stays
+motion_graphic. Populate asset_search for every real-material scene.
+
+RECONSTRUCTION LABELLING:
+If an AI-generated scene depicts a real historical event and a viewer could
+mistake it for authentic footage, add "misleading_reconstruction" to
+risk_flags. A later stage will apply an on-screen label.
+
+DO NOT repeat the visual signature inside image prompts. It is appended
+automatically. Repeating it wastes tokens and doubles the instruction.
+
+ADDITIONAL COMPACT LIMITS for the new fields (same truncation rules apply):
+- asset_strategy.rationale: one sentence, maximum 20 words
+- purpose fields: maximum 8 words each
+- alternative_concept.description: maximum 20 words
+- asset_search fields: short phrases, never full sentences`;
+
+// Post-analysis sanitiser for the DD fields. Pure JS, deterministic — guarantees the
+// self-test invariants even when Claude drifts from the enum lists.
+function sanitizeDirectorFields(scenes, direction) {
+  const actCount   = (direction.treatment?.acts || []).length || 1;
+  const entityIds  = new Set((direction.treatment?.continuity_entities || []).map(e => e.id));
+
+  return scenes.map(scene => {
+    const s = applyDirectorSceneDefaults(scene);
+
+    // act: integer clamped to [1, actCount]
+    const act = parseInt(s.act, 10);
+    s.act = Number.isFinite(act) ? Math.min(Math.max(act, 1), actCount) : 1;
+
+    // scene_type drives shot_type when valid; an invalid/missing scene_type falls back to
+    // a shot_type-derived generic so every scene still carries a value from the allowed
+    // list (the shot_type Claude assigned stands — pipeline field stays authoritative)
+    const mapped = sceneTypeToShotType(s.scene_type);
+    if (mapped) {
+      s.shot_type = mapped;
+    } else {
+      s.scene_type = s.shot_type === 'motion_graphic' ? 'data_visualisation'
+        : s.shot_type === 'real_footage' ? 'archival_footage'
+        : 'symbolic_image';
+    }
+    if (!['image', 'motion_graphic', 'real_footage', '3d_graphic'].includes(s.shot_type)) {
+      s.shot_type = 'image';
+    }
+    s.real_footage_flag = s.shot_type === 'real_footage';
+
+    // purpose: four strings, retention constrained to the enum
+    const p = (s.purpose && typeof s.purpose === 'object') ? s.purpose : {};
+    s.purpose = {
+      narrative:     String(p.narrative || ''),
+      informational: String(p.informational || ''),
+      emotional:     String(p.emotional || ''),
+      retention:     RETENTION_VALUES.includes(p.retention) ? p.retention : 'explanation',
+    };
+
+    // asset_strategy: valid method or inferred from shot_type
+    const as = (s.asset_strategy && typeof s.asset_strategy === 'object') ? s.asset_strategy : {};
+    s.asset_strategy = {
+      method: ASSET_METHODS.includes(as.method)
+        ? as.method
+        : (s.shot_type === 'motion_graphic' ? 'motion_graphic'
+          : s.shot_type === 'real_footage' ? 'stock_footage' : 'ai_image'),
+      rationale: String(as.rationale || ''),
+    };
+
+    // asset_search: object or null — never a bare string
+    if (!s.asset_search || typeof s.asset_search !== 'object') s.asset_search = null;
+
+    // continuity_refs: only ids that exist in the treatment
+    s.continuity_refs = Array.isArray(s.continuity_refs)
+      ? s.continuity_refs.filter(id => entityIds.has(id))
+      : [];
+
+    // alternative_concept must use a DIFFERENT method — drop it if it doesn't
+    const alt = s.alternative_concept;
+    s.alternative_concept = (alt && typeof alt === 'object' &&
+        ASSET_METHODS.includes(alt.method) && alt.method !== s.asset_strategy.method)
+      ? { method: alt.method, description: String(alt.description || '') }
+      : null;
+
+    s.complexity = COMPLEXITY_VALUES.includes(s.complexity) ? s.complexity : 'moderate';
+    s.risk_flags = Array.isArray(s.risk_flags) ? s.risk_flags.filter(f => RISK_FLAGS.includes(f)) : [];
+    s.locked = false; // locking is a user action (DD-4) — analysis never locks
+
+    return s;
+  });
+}
+
+async function attemptAnalysisWithDirection(script, metadata, direction, defaults, retryNote = '') {
+  const client = new Anthropic();
+
+  const wordCount = script.trim().split(/\s+/).length;
+  const td        = metadata.targetDuration;
+
+  let targetScenes, coverageInstruction;
+  if (td && td !== 'full') {
+    const targetWords = Math.min(wordCount, Math.round(td * WORDS_PER_MIN));
+    targetScenes      = Math.min(100, Math.max(8, Math.ceil(targetWords / 20)));
+    const pct         = Math.round((targetWords / wordCount) * 100);
+    coverageInstruction = targetWords >= wordCount
+      ? `Cover EVERY sentence — the full script fits within the ${td}-minute target.`
+      : `Select and cover the most important ~${targetWords} words (${pct}% of script) to produce a ${td}-minute video. ` +
+        `Prioritise key narrative beats, turning points, data moments, and memorable lines. ` +
+        `TARGET: ${targetScenes} scenes of 12–22 words each.`;
+  } else {
+    targetScenes        = Math.min(100, Math.max(8, Math.ceil(wordCount / 20)));
+    coverageInstruction = `Cover EVERY sentence — do not skip any part of the script. TARGET: ${targetScenes} scenes (~20 words each, 8–10 seconds per scene).`;
+  }
+
+  // DD fields add ~140 tokens per scene on top of the base ~180
+  const maxTokens = Math.min(64000, Math.max(16000, targetScenes * 320));
+
+  console.log(`[claude] direction-aware: ${wordCount} words | target ${td ?? 'full'} | ${targetScenes} scenes | max_tokens ${maxTokens}`);
+
+  const overlayTemplates = defaults.overlayTemplates || {};
+  const templateContext = `USER DEFAULT OVERLAY TEMPLATES (use these exact template names in every overlay you emit):
+- lower_third template: ${overlayTemplates.lower_third || 'minimal_line'}
+- date_stamp template: ${overlayTemplates.date_stamp || 'minimal_pill'}
+- kinetic_text template: ${overlayTemplates.kinetic_text || 'center_impact'}
+- stat_callout template: ${overlayTemplates.stat_callout || 'big_number'}
+- chapter_title template: ${overlayTemplates.chapter_title || 'minimal_chapter'}
+- background_overlay template: ${overlayTemplates.background_overlay || 'gradient_bottom'}`;
+
+  const userMessage = `VIDEO TITLE: ${metadata.title || 'Untitled'}
+NICHE: ${metadata.niche || 'General'}
+STYLE PRESET: ${metadata.stylePreset || 'Dark Cinematic'}
+NARRATOR TONE: ${metadata.narratorTone || 'Authoritative'}
+
+${templateContext}
+
+ENTITIES ALREADY INTRODUCED: [] (nothing yet — track named people/companies across scenes for lower_third dedup)
+
+SCRIPT (${wordCount} words):
+${script}
+
+${coverageInstruction}
+Generate overlays and set match_cut_candidate inline for every scene as instructed — do not omit these fields.
+For every scene also emit: act, scene_type, purpose, asset_strategy, asset_search, continuity_refs, alternative_concept, complexity, risk_flags.
+Keep all field values compact (see COMPACT JSON RULES).${retryNote}`;
+
+  const message = await client.messages.create({
+    model:      'claude-sonnet-4-6',
+    max_tokens: maxTokens,
+    system:     buildDirectionContext(direction) + SYSTEM_PROMPT + DIRECTION_RULES,
+    messages:   [{ role: 'user', content: userMessage }],
+  });
+
+  const raw = message.content[0]?.text || '';
+  console.log('[claude] direction-aware stop_reason:', message.stop_reason);
+  const scenes = extractJSON(raw);
+  console.log(`[claude] direction-aware returning ${scenes.length} scenes`);
+  return scenes;
+}
+
+// Public treatment-aware analysis. Retry-once mirrors analyzeScript's pattern; a second
+// failure THROWS — the analyze route catches it and falls back to the standard path
+// (degraded result beats a dead pipeline).
+async function analyzeScriptWithDirection({ script, metadata, defaults = {}, direction }) {
+  const { resolveStyleLock } = require('./directionStore'); // lazy — avoids require cycle
+  const styleLock = resolveStyleLock(direction);
+
+  let scenes;
+  try {
+    scenes = await attemptAnalysisWithDirection(script, metadata, direction, defaults);
+  } catch (err) {
+    console.warn('[claude] direction-aware analysis failed:', err.message);
+    console.warn('[claude] retrying direction-aware analysis once...');
+    scenes = await attemptAnalysisWithDirection(script, metadata, direction, defaults,
+      '\n\nREMINDER: Return ONLY the raw JSON array of scene objects. No markdown fences, no preamble.');
+  }
+
+  // Sanitise FIRST: sanitizeDirectorFields can remap shot_type from scene_type, and
+  // postProcessScenes builds prompts/motion/grade/letterbox off shot_type — running it
+  // second would leave e.g. a motion_graphic→image remap with an empty prompt.
+  const sanitized = sanitizeDirectorFields(scenes, direction);
+  return postProcessScenes(sanitized, defaults, styleLock);
+}
+
 // Generic Claude call for use by other services (e.g. clipIntelligence)
 async function callClaude(prompt, systemPrompt = '') {
   const client = new Anthropic()
@@ -850,6 +1195,7 @@ async function callClaude(prompt, systemPrompt = '') {
 
 module.exports = {
   analyzeScript,
+  analyzeScriptWithDirection, // DD-3: treatment-aware path; analyzeScript stays the fallback
   callClaude,
   extractJSON, // DD-1: exported for reuse — note it expects a scene ARRAY, not an object
   detectMatchCutCandidates,

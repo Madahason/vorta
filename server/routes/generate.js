@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const path = require('path');
 const fs = require('fs');
-const { generateImage } = require('../services/higgsfield');
+const { generateImage } = require('../services/visualProvider');
 const { enhancePrompt, enhanceAllPrompts } = require('../services/promptEnhancer');
 const { downloadImage } = require('../services/imageDownload');
 
@@ -51,7 +51,7 @@ async function processScene(projectId, scene, assetsDir) {
 // ─── POST /api/generate — start generation ─────────────────────────────────
 
 router.post('/', async (req, res) => {
-  const { scenes, projectId: reqProjectId } = req.body;
+  const { scenes, projectId: reqProjectId, beats, analysis, edl, validation_report } = req.body;
 
   if (!Array.isArray(scenes) || !scenes.length) {
     return res.status(400).json({ error: 'scenes array is required' });
@@ -63,12 +63,23 @@ router.post('/', async (req, res) => {
   }
 
   const projectId = reqProjectId || `proj_${Date.now()}`;
-  const assetsDir = path.join(__dirname, '../../projects', projectId, 'assets');
+  const projectDir = path.join(__dirname, '../../projects', projectId);
+  const assetsDir = path.join(projectDir, 'assets');
   fs.mkdirSync(assetsDir, { recursive: true });
 
   // Save scenes.json for the project
-  const scenesPath = path.join(__dirname, '../../projects', projectId, 'scenes.json');
+  const scenesPath = path.join(projectDir, 'scenes.json');
   fs.writeFileSync(scenesPath, JSON.stringify(scenes, null, 2));
+
+  // Retention-engine stage outputs (beats/analysis/edl/validation_report) — only present
+  // when VISUAL_ENGINE=retention produced this project. Persisted for the future
+  // retention-graph feedback loop (see PLAN.md). Additive only — percentage-engine
+  // projects simply don't have these files.
+  const stageOutputs = { 'beats.json': beats, 'analysis.json': analysis, 'edl.json': edl, 'validation_report.json': validation_report };
+  for (const [filename, data] of Object.entries(stageOutputs)) {
+    if (data === undefined) continue;
+    fs.writeFileSync(path.join(projectDir, filename), JSON.stringify(data, null, 2));
+  }
 
   // Initialise progress for every scene
   const progress = {};
@@ -135,7 +146,9 @@ router.get('/progress/:projectId', (req, res) => {
 // ─── POST /api/generate/retry — retry a single failed scene ────────────────
 
 router.post('/retry', async (req, res) => {
-  const { projectId, scene_id, higgsfield_prompt } = req.body;
+  // style_lock is optional (DD-3): retried scenes from direction projects pass their
+  // treatment signature through so promptEnhancer never re-appends the default constant.
+  const { projectId, scene_id, higgsfield_prompt, style_lock } = req.body;
 
   if (!projectId || !scene_id || !higgsfield_prompt) {
     return res.status(400).json({ error: 'projectId, scene_id, and higgsfield_prompt are required' });
@@ -157,7 +170,7 @@ router.post('/retry', async (req, res) => {
   res.json({ ok: true });
 
   ;(async () => {
-    await processScene(projectId, { scene_id, higgsfield_prompt }, assetsDir);
+    await processScene(projectId, { scene_id, higgsfield_prompt, ...(style_lock ? { style_lock } : {}) }, assetsDir);
     // Mark done only if all image scenes in this project are resolved
     const allResolved = Object.values(entry.progress)
       .filter(p => p.shot_type === 'image')

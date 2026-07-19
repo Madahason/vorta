@@ -40,6 +40,16 @@ function hasStyleLock(prompt) {
   return prompt.includes('cinematic') && prompt.includes('documentary');
 }
 
+// DD-3: the lock to append is the scene's own style_lock (the treatment's visual
+// signature on direction projects), falling back to the production constant for
+// pre-direction scenes — identical behaviour for them, since their style_lock IS
+// that constant.
+function sceneStyleLock(scene) {
+  return (typeof scene?.style_lock === 'string' && scene.style_lock.trim())
+    ? scene.style_lock.trim()
+    : STYLE_LOCK;
+}
+
 function extractYear(text) {
   const match = (text || '').match(/\b(19[0-9]{2}|20[0-2][0-9])\b/);
   return match ? parseInt(match[1]) : null;
@@ -72,9 +82,10 @@ function quickEnhance(prompt, scene) {
     enhanced = `${enhanced}, ${lighting}`;
   }
 
-  // Ensure style lock at end
-  if (!hasStyleLock(enhanced)) {
-    enhanced = `${enhanced}, ${STYLE_LOCK}`;
+  // Ensure the scene's style lock at end (skip when already present in any form)
+  const lock = sceneStyleLock(scene);
+  if (!enhanced.includes(lock) && !hasStyleLock(enhanced)) {
+    enhanced = `${enhanced}, ${lock}`;
   }
 
   return enhanced.replace(/\s+/g, ' ').replace(/,\s*,/g, ',').trim();
@@ -100,7 +111,7 @@ Rewrite this prompt to be cinematographically specific. Requirements:
 4. Include one specific atmospheric physical detail (dust, rain, steam, papers, etc.)
 5. Keep all subject-specific details from the original
 6. Remove any banned generic words (businessman, corporate, modern, technology, professional, success, digital)
-7. End with: "${STYLE_LOCK}"
+7. End with: "${sceneStyleLock(scene)}"
 8. Maximum 70 words total
 
 Return ONLY the rewritten prompt. No explanation.`;
@@ -116,17 +127,67 @@ Return ONLY the rewritten prompt. No explanation.`;
   }
 }
 
+// DD-3: enhancement for scenes carrying a treatment signature. The signature tail is
+// stripped first and re-appended untouched at the end — signatures may legitimately
+// contain words on the banned list (e.g. "corporate" in a WeWork signature), and the
+// banned-word scrub must never mangle the lock itself. Weakness checks run on the body
+// only. Deterministic (no Claude call) — treatment prompts were already produced under
+// the full cinematographic system prompt.
+function enhanceTreatmentPrompt(scene, lock) {
+  const prompt = scene?.higgsfield_prompt || '';
+  if (!prompt) return prompt;
+
+  // Split off the lock tail (wherever it sits, normally the very end)
+  let body = prompt;
+  const tail = `, ${lock}`;
+  if (body.endsWith(tail)) body = body.slice(0, -tail.length);
+  else if (body.endsWith(lock)) body = body.slice(0, -lock.length).replace(/,\s*$/, '');
+  else if (body.includes(lock)) body = body.replace(tail, '').replace(lock, '');
+
+  const banned            = hasBannedWords(body);
+  const missingComposition = !hasCompositionLanguage(body);
+  const missingLighting    = !hasLightingLanguage(body);
+
+  if (!banned.length && !missingComposition && !missingLighting && prompt.endsWith(lock)) {
+    return prompt; // already good — untouched
+  }
+
+  banned.forEach(word => { body = body.replace(new RegExp(word, 'gi'), ''); });
+  if (missingComposition) {
+    const compText = COMPOSITION_TEMPLATES[scene?.composition] || COMPOSITION_TEMPLATES.medium;
+    body = `${compText}, ${body}`;
+  }
+  if (missingLighting) {
+    const year = extractYear(scene?.script_excerpt);
+    const lighting = year && year < 2000
+      ? 'harsh fluorescent office lighting'
+      : year && year < 2010
+        ? 'cold blue monitor light casting shadows'
+        : 'directional overhead spotlight';
+    body = `${body}, ${lighting}`;
+  }
+
+  return `${body}, ${lock}`.replace(/\s+/g, ' ').replace(/,\s*,/g, ',').trim();
+}
+
 // Main entry point — called per scene before Higgsfield generation
 async function enhancePrompt(scene, useClaudeForWeak = true) {
   const prompt = scene?.higgsfield_prompt || '';
   if (!prompt) return prompt;
+
+  // DD-3: scenes with a treatment signature take the lock-aware path; everything below
+  // this gate is the pre-DD-3 code, byte-for-byte, for pre-direction scenes.
+  const lock = sceneStyleLock(scene);
+  if (lock !== STYLE_LOCK) {
+    return enhanceTreatmentPrompt(scene, lock);
+  }
 
   const banned            = hasBannedWords(prompt);
   const missingComposition = !hasCompositionLanguage(prompt);
   const missingLighting    = !hasLightingLanguage(prompt);
   const isWeak             = banned.length > 0 || missingComposition || missingLighting;
 
-  if (!isWeak && hasStyleLock(prompt)) {
+  if (!isWeak && (hasStyleLock(prompt) || prompt.includes(sceneStyleLock(scene)))) {
     return prompt; // already good — skip all enhancement
   }
 

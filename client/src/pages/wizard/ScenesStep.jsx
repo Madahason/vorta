@@ -6,9 +6,11 @@ export function ScenesStep({
   motionStatuses, onBuildComponent,
   clipMatches, selectedClips, onSelectClip, onConvertToImage, onManualMatch, onOpenLibrary,
   onPreviewScene, voiceoverStatuses, onOpenVoiceover,
+  directionWarnings = [], onDismissDirectionWarnings,
   wizard,
 }) {
   const [isEnhancing,       setIsEnhancing]       = useState(false)
+  const [warningsExpanded,  setWarningsExpanded]  = useState(false)
   const [stockSearchScene,  setStockSearchScene]  = useState(null)
   const [stockQuery,        setStockQuery]        = useState('')
   const [stockResults,      setStockResults]      = useState([])
@@ -85,6 +87,40 @@ export function ScenesStep({
 
   return (
     <div style={{ padding: '24px' }}>
+      {/* DD-3: continuity-enforcement warnings from treatment-aware analysis */}
+      {directionWarnings.length > 0 && (
+        <div style={{
+          marginBottom: 16, padding: '10px 16px',
+          background: 'rgba(245,158,11,0.07)', border: '1px solid rgba(245,158,11,0.3)',
+          borderRadius: 8,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <button
+              onClick={() => setWarningsExpanded(v => !v)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(252,211,77,0.9)', fontSize: 13, padding: 0, fontFamily: 'inherit' }}
+            >
+              {warningsExpanded ? '▾' : '▸'} ⚠ {directionWarnings.length} continuity fix{directionWarnings.length !== 1 ? 'es' : ''} applied during analysis
+            </button>
+            <button
+              onClick={onDismissDirectionWarnings}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.35)', fontSize: 12, fontFamily: 'inherit' }}
+            >
+              Dismiss
+            </button>
+          </div>
+          {warningsExpanded && (
+            <ul style={{ margin: '8px 0 0', paddingLeft: 20, color: 'rgba(255,255,255,0.55)', fontSize: 12, lineHeight: 1.7 }}>
+              {directionWarnings.map((w, i) => (
+                <li key={i}>
+                  Scene {w.scene_id}: locked descriptor for <code style={{ color: 'rgba(252,211,77,0.85)' }}>{w.entity_id}</code>{' '}
+                  was missing from the image prompt{w.auto_fixed ? ' — appended automatically' : ''}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
         <div>
           <h2 style={{ color: 'white', fontSize: 22, fontWeight: 700, margin: 0 }}>Scene Breakdown</h2>

@@ -7,7 +7,7 @@
 const express = require('express');
 const router  = express.Router();
 
-const { generateTreatment } = require('../services/director');
+const { generateTreatment, regenerateTreatmentSection, TREATMENT_SECTIONS } = require('../services/director');
 const { readDirection, writeDirection } = require('../services/directionStore');
 
 function isPlainObject(v) {
@@ -43,6 +43,34 @@ router.post('/treatment', async (req, res) => {
   } catch (err) {
     console.error('[director] treatment generation failed:', err.message);
     res.status(500).json({ error: 'Treatment generation failed', detail: err.message });
+  }
+});
+
+// POST /api/director/:projectId/regenerate — DD-3 per-section regeneration.
+// Body { section, scriptText, metadata }. One scoped Claude call, merged into the stored
+// treatment via the same deep-merge semantics as PATCH.
+router.post('/:projectId/regenerate', async (req, res) => {
+  const { section, scriptText, metadata } = req.body || {};
+
+  if (!TREATMENT_SECTIONS.includes(section)) {
+    return res.status(400).json({ error: `section must be one of: ${TREATMENT_SECTIONS.join(', ')}` });
+  }
+  if (typeof scriptText !== 'string' || scriptText.trim().length === 0) {
+    return res.status(400).json({ error: 'scriptText must be a non-empty string' });
+  }
+  const existing = readDirection(req.params.projectId);
+  if (!existing?.treatment) {
+    return res.status(404).json({ error: 'No direction exists for this project — generate a treatment first' });
+  }
+
+  try {
+    const value = await regenerateTreatmentSection(scriptText, metadata || {}, existing.treatment, section);
+    const merged = deepMerge(existing.treatment, { [section]: value });
+    const stored = writeDirection(req.params.projectId, { treatment: merged, audit: existing.audit ?? null });
+    res.json({ treatment: stored.treatment, updatedAt: stored.updatedAt, section });
+  } catch (err) {
+    console.error(`[director] section regeneration failed (${section}):`, err.message);
+    res.status(500).json({ error: 'Section regeneration failed', detail: err.message });
   }
 });
 

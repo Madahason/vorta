@@ -73,7 +73,7 @@ function Panel({ title, subtitle, open, onToggle, children }) {
   )
 }
 
-function SectionTitle({ children, onRegenerate }) {
+function SectionTitle({ children, onRegenerate, busy, disabled }) {
   return (
     <div className="vorta-direction-section-title">
       <span>{children}</span>
@@ -81,9 +81,11 @@ function SectionTitle({ children, onRegenerate }) {
         <button
           className="vorta-btn vorta-btn-ghost vorta-btn-sm"
           onClick={onRegenerate}
-          title="Regenerate this section (DD-3 adds per-section regeneration; for now this regenerates the full treatment)"
+          disabled={busy || disabled}
+          title="Regenerate only this section — one scoped Claude call, other sections untouched"
         >
-          <RefreshCw size={10} /> Regenerate this section
+          <RefreshCw size={10} style={busy ? { animation: 'spin 1s linear infinite' } : undefined} />
+          {busy ? 'Regenerating…' : 'Regenerate this section'}
         </button>
       )}
     </div>
@@ -97,6 +99,9 @@ export function DirectionStep({
   ensureProjectId,
   direction,
   onDirectionChange,
+  onAnalyze,      // DD-3: runs the treatment-aware scene analysis
+  isAnalyzing,    // DD-3: loading state shared with the Script step's analyze
+  analyzeError,   // DD-3: surfaced next to the footer when analysis fails
   wizard,
 }) {
   const treatment = direction?.treatment || null
@@ -111,8 +116,12 @@ export function DirectionStep({
   const [savedFading, setSavedFading] = useState(false)
 
   const [openPanels, setOpenPanels] = useState([true, false, false])
-  // null | 'full' | a section label — which regenerate action is awaiting confirmation
+  // 'full' | null — only the FULL regenerate needs confirmation (DD-3: per-section
+  // regeneration is cheap and reversible, so sections fire immediately)
   const [confirmRegen, setConfirmRegen] = useState(null)
+  // DD-3: which section is currently regenerating (null when none)
+  const [regeneratingSection, setRegeneratingSection] = useState(null)
+  const [sectionError, setSectionError] = useState(null)
 
   const pendingPatchRef = useRef({})
   const debounceRef     = useRef(null)
@@ -212,6 +221,29 @@ export function DirectionStep({
       setGenError(err.message)
     } finally {
       setIsGenerating(false)
+    }
+  }
+
+  // ── DD-3: per-section regeneration — one scoped Claude call, no confirm ──
+  const handleSectionRegenerate = async (section) => {
+    if (regeneratingSection || !projectId) return
+    setRegeneratingSection(section)
+    setSectionError(null)
+    try {
+      const res = await fetch(`/api/director/${projectId}/regenerate`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ section, scriptText, metadata: projectMetadata || {} }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || data.error || 'Section regeneration failed')
+      onDirectionChange(prev => prev
+        ? { ...prev, treatment: data.treatment, updatedAt: data.updatedAt }
+        : prev)
+    } catch (err) {
+      setSectionError(`Couldn't regenerate ${section.replace(/_/g, ' ')}: ${err.message}`)
+    } finally {
+      setRegeneratingSection(null)
     }
   }
 
@@ -337,7 +369,7 @@ export function DirectionStep({
   const regenConfirmStrip = confirmRegen && (
     <div className="vorta-direction-confirm-strip" style={{ marginBottom: 14 }}>
       <span style={{ flex: 1 }}>
-        Regenerating the treatment discards all manual edits{confirmRegen !== 'full' ? ` (per-section regeneration arrives in DD-3 — this regenerates the full treatment)` : ''}. Continue?
+        Regenerating the full treatment discards all manual edits. Continue?
       </span>
       <button className="vorta-btn vorta-btn-danger vorta-btn-sm" onClick={handleGenerate}>
         Regenerate
@@ -385,7 +417,7 @@ export function DirectionStep({
       {/* ── Panel 1 — Treatment ── */}
       <Panel title="Treatment" subtitle="thesis, acts, pacing, sound" open={openPanels[0]} onToggle={() => togglePanel(0)}>
         <div className="vorta-direction-section">
-          <SectionTitle onRegenerate={() => setConfirmRegen('visual_thesis')}>Visual thesis</SectionTitle>
+          <SectionTitle onRegenerate={() => handleSectionRegenerate('visual_thesis')} busy={regeneratingSection === 'visual_thesis'} disabled={!!regeneratingSection}>Visual thesis</SectionTitle>
           <textarea
             className="vorta-textarea"
             rows={2}
@@ -395,7 +427,7 @@ export function DirectionStep({
         </div>
 
         <div className="vorta-direction-section">
-          <SectionTitle onRegenerate={() => setConfirmRegen('audience_experience')}>Audience experience</SectionTitle>
+          <SectionTitle onRegenerate={() => handleSectionRegenerate('audience_experience')} busy={regeneratingSection === 'audience_experience'} disabled={!!regeneratingSection}>Audience experience</SectionTitle>
           <div className="vorta-direction-grid-2">
             {['opening', 'setup', 'escalation', 'reveal', 'conclusion'].map(k => (
               <div key={k} className="vorta-field" style={k === 'conclusion' ? { gridColumn: '1 / -1' } : undefined}>
@@ -412,7 +444,7 @@ export function DirectionStep({
         </div>
 
         <div className="vorta-direction-section">
-          <SectionTitle onRegenerate={() => setConfirmRegen('acts')}>Acts</SectionTitle>
+          <SectionTitle onRegenerate={() => handleSectionRegenerate('acts')} busy={regeneratingSection === 'acts'} disabled={!!regeneratingSection}>Acts</SectionTitle>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {(treatment.acts || []).map(act => (
               <div key={act.act_number} className="vorta-direction-card">
@@ -438,7 +470,7 @@ export function DirectionStep({
         </div>
 
         <div className="vorta-direction-section">
-          <SectionTitle onRegenerate={() => setConfirmRegen('pacing_strategy')}>Pacing strategy</SectionTitle>
+          <SectionTitle onRegenerate={() => handleSectionRegenerate('pacing_strategy')} busy={regeneratingSection === 'pacing_strategy'} disabled={!!regeneratingSection}>Pacing strategy</SectionTitle>
           <div className="vorta-direction-grid-2">
             {[['fast_sections', 'Fast'], ['controlled_sections', 'Controlled'], ['reflective_sections', 'Reflective'], ['attention_resets', 'Attention resets']].map(([k, label]) => (
               <div key={k}>
@@ -454,7 +486,7 @@ export function DirectionStep({
         </div>
 
         <div className="vorta-direction-section">
-          <SectionTitle onRegenerate={() => setConfirmRegen('sound_direction')}>Sound direction</SectionTitle>
+          <SectionTitle onRegenerate={() => handleSectionRegenerate('sound_direction')} busy={regeneratingSection === 'sound_direction'} disabled={!!regeneratingSection}>Sound direction</SectionTitle>
           <div className="vorta-direction-grid-2">
             {[['music', 'Music'], ['ambience', 'Ambience'], ['silence_moments', 'Silence moments'], ['impact_moments', 'Impact moments'], ['transition_audio', 'Transition audio']].map(([k, label]) => (
               <div key={k} className="vorta-field" style={k === 'transition_audio' ? { gridColumn: '1 / -1' } : undefined}>
@@ -505,7 +537,7 @@ export function DirectionStep({
         </div>
 
         <div className="vorta-direction-section">
-          <SectionTitle onRegenerate={() => setConfirmRegen('style_bible')}>Style bible</SectionTitle>
+          <SectionTitle onRegenerate={() => handleSectionRegenerate('style_bible')} busy={regeneratingSection === 'style_bible'} disabled={!!regeneratingSection}>Style bible</SectionTitle>
           <div className="vorta-direction-grid-2">
             {styleBibleFields.map(([k, label]) => (
               <div key={k} className="vorta-field">
@@ -522,7 +554,7 @@ export function DirectionStep({
         </div>
 
         <div className="vorta-direction-section">
-          <SectionTitle onRegenerate={() => setConfirmRegen('recurring_motifs')}>Recurring motifs</SectionTitle>
+          <SectionTitle onRegenerate={() => handleSectionRegenerate('recurring_motifs')} busy={regeneratingSection === 'recurring_motifs'} disabled={!!regeneratingSection}>Recurring motifs</SectionTitle>
           <div className="vorta-direction-grid-2">
             {motifs.map((m, i) => (
               <div key={m.id || i} className="vorta-direction-card">
@@ -556,6 +588,13 @@ export function DirectionStep({
       {/* ── Panel 3 — Continuity Entities ── */}
       <Panel title="Continuity Entities" subtitle="locked descriptors + evidence claims" open={openPanels[2]} onToggle={() => togglePanel(2)}>
         <div className="vorta-direction-section">
+          <SectionTitle
+            onRegenerate={() => handleSectionRegenerate('continuity_entities')}
+            busy={regeneratingSection === 'continuity_entities'}
+            disabled={!!regeneratingSection}
+          >
+            Continuity entities
+          </SectionTitle>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {entities.map((ent, i) => {
               const colors = ENTITY_TYPE_COLORS[ent.type] || ENTITY_TYPE_COLORS.object
@@ -653,20 +692,44 @@ export function DirectionStep({
         </div>
       </Panel>
 
+      {/* ── Section / analysis errors surfaced above the footer ── */}
+      {(sectionError || analyzeError) && (
+        <div style={{
+          margin: '0 0 12px', padding: '10px 16px',
+          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
+          borderRadius: 8, color: '#f87171', fontSize: 13,
+        }}>
+          {sectionError || analyzeError}
+        </div>
+      )}
+
       {/* ── Sticky footer ── */}
       <div className="vorta-direction-footer">
-        <button className="vorta-btn vorta-btn-ghost" onClick={() => wizard.goBack()}>
+        <button className="vorta-btn vorta-btn-ghost" onClick={() => wizard.goBack()} disabled={isAnalyzing}>
           ← Back
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button className="vorta-btn vorta-btn-secondary" onClick={() => setConfirmRegen('full')}>
+          {isAnalyzing && (
+            <span className="vorta-hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />
+              Breaking the script into treatment-aware scenes…
+            </span>
+          )}
+          <button
+            className="vorta-btn vorta-btn-secondary"
+            onClick={() => setConfirmRegen('full')}
+            disabled={isAnalyzing}
+          >
             <RefreshCw size={12} /> Regenerate Direction
           </button>
+          {/* DD-3: runs the treatment-aware analysis (handleAnalyze reads direction.json
+              server-side); on success handleAnalyze marks this step complete and advances */}
           <button
             className="vorta-btn vorta-btn-primary"
-            onClick={() => { wizard.markComplete('direction'); wizard.goTo('scenes') }}
+            onClick={() => onAnalyze({ script: scriptText, metadata: projectMetadata || {} })}
+            disabled={isAnalyzing || !hasScript}
           >
-            Generate Scene Direction →
+            {isAnalyzing ? 'Analyzing…' : 'Generate Scene Direction →'}
           </button>
         </div>
       </div>

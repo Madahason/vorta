@@ -5885,3 +5885,126 @@ projects/proj_1784008308819/direction.json): visual_signature after live regener
 "bleached corporate white bleeding to sour yellow, shallow focus, fine digital grain,
 hyper-realist". 5 acts, 5 motifs, 5 continuity entities (Adam Neumann, Masayoshi Son, WeWork
 office interior, …), 22 evidence claims.
+
+---
+
+### Phase DD-3 — Treatment-aware scene analysis ✅ COMPLETE
+
+The phase that changes output quality: scenes now inherit the approved treatment instead of
+being invented independently. Two code paths coexist permanently.
+
+**Dual-path architecture & fallback chain:**
+- `routes/analyze.js` — projectId now travels TOP-LEVEL in the analyze body (not inside
+  metadata, which would have prematurely triggered the background clip seed). Route selection:
+  direction.json exists → `analyzeScriptWithDirection` (`engine: "director"`); otherwise the
+  pre-DD-3 selector runs unchanged (retention engine by default, percentage behind
+  VISUAL_ENGINE). Both selections are logged (route: TREATMENT-AWARE / STANDARD / FALLBACK).
+  If the treatment-aware path throws after its retry, the route falls back to the standard
+  path instead of 500ing — a degraded result beats a dead pipeline. `readDirection` hits disk
+  on every call, so Direction-step edits apply to the next analysis with no restart
+  (live-verified: PATCHed signature appeared on all scenes on the next run).
+- `services/claude.js` — `analyzeScript` untouched (its prompt, output and behaviour are the
+  permanent fallback). New `analyzeScriptWithDirection({script, metadata, defaults, direction})`:
+  treatment context block (visual thesis, signature, style bible, acts, continuity entities,
+  motifs, evidence claims) is PREPENDED to the existing system prompt — none of the
+  cinematographic rules weakened — and the DD-3 rules (act assignment, 20 scene types with
+  scene_type→shot_type mapping, asset strategy, asset_search, continuity refs, purpose,
+  alternative concept, complexity, risk flags, reconstruction labelling, evidence-backed
+  mandatory rule) are appended after. `postProcessScenes`/`validateAndGroundPrompts` gained an
+  optional styleLock parameter DEFAULTING to the production STYLE_LOCK — the default path is
+  byte-for-byte identical (existing suites pass untouched). `sanitizeDirectorFields` is a
+  deterministic pure-JS pass guaranteeing every enum invariant even when the model drifts
+  (act clamped to [1, actCount]; invalid scene_type falls back by shot_type; retention enum;
+  method enum with shot-type inference; alternative_concept nulled when its method equals the
+  primary; risk flags filtered; locked always false). ORDER MATTERS and was live-debugged:
+  sanitise runs BEFORE postProcess, because scene_type→shot_type remapping after prompt
+  assembly left a remapped image scene with an empty prompt (found in live run, fixed,
+  re-verified).
+
+**Style lock injection (the DD-1 resolver finally in the pipeline):**
+- On the direction path every scene is stamped `style_lock = resolveStyleLock(direction)` and
+  prompts end with the signature exactly once (Claude is told not to repeat it; strip+append
+  enforces it). DELIBERATE DEVIATION from the brief: the no-direction path is NOT stamped with
+  DEFAULT_STYLE_LOCK. The brief assumed resolveStyleLock(null)'s value "is the current
+  behaviour" — it is not: pre-DD-3 scenes carry the long production STYLE_LOCK (percentage
+  path) or the engine's globalAesthetic (retention path), both baked into prompts. Stamping
+  DEFAULT_STYLE_LOCK would have violated the overriding byte-for-byte constraint, so the
+  standard path's scenes keep their existing values untouched (control run verified: engine
+  aesthetic intact). The self-test "without direction, style_lock equals DEFAULT_STYLE_LOCK"
+  is intentionally unsatisfiable alongside byte-for-byte and was resolved in favour of
+  byte-for-byte.
+- `promptEnhancer.js` — new `sceneStyleLock(scene)` (scene.style_lock, else STYLE_LOCK) and a
+  dedicated `enhanceTreatmentPrompt` path gated on lock !== STYLE_LOCK, so the legacy branch
+  is literally the pre-DD-3 code. The treatment path strips the lock tail, enhances only the
+  body, and re-appends — REAL BUG caught by unit test: signatures can contain banned-list
+  words ("corporate" in the WeWork signature) and the old banned-word scrub would have mangled
+  the signature and duplicated it. `generate.js` retry now passes scene style_lock through;
+  client handleRetry sends it. higgsfield.js already had no style literal (takes the finished
+  prompt).
+
+**Continuity enforcement (`services/continuityEnforcement.js`, pure JS, no API call):**
+- For each image/real_footage scene with continuity_refs: mechanical presence check — first 6
+  significant words of the locked descriptor, lowercase substring, present when at least half
+  match. Missing → descriptor appended BEFORE the style-lock tail (lock stays terminal) plus
+  warning { scene_id, type: continuity_descriptor_missing, entity_id, auto_fixed: true }.
+  Warnings returned alongside scenes; ScenesStep shows a dismissible amber banner (count +
+  expandable per-scene list). Live: 4-9 auto-fixes per run observed; banner expand/dismiss
+  verified in Chrome with 5 real warnings.
+
+**Per-section treatment regeneration:**
+- POST /api/director/:projectId/regenerate { section, scriptText, metadata } — section
+  validated against the 8 treatment sections (400 otherwise; scriptText required; 404 if no
+  direction). One scoped Claude call receives the script + current full treatment as context,
+  returns a single-key object, deep-merged and persisted. DD-2's section buttons now call it
+  directly (no confirm — cheap and reversible), with per-section spinner; full-regenerate
+  keeps its confirm strip. A regenerate button was added for continuity_entities so all 8
+  sections are reachable.
+- DD-2 footer rewired: "Generate Scene Direction →" calls the shared handleAnalyze (which now
+  sends projectId), shows the standard analyzing state, and on success marks direction
+  complete and advances to Scenes.
+
+**Test results:**
+- [x] 13/13 offline unit tests (descriptor matching, append-before-lock ordering, enforcement
+  auto-fix + warning shape, legacy promptEnhancer byte-identical, signature-not-constant
+  appends, banned-word-in-signature regression, section regen invalid/happy/retry-then-throw,
+  8-section list, custom-lock strip)
+- [x] 10/10 route-level tests with stubbed services (standard path selection incl. no
+  projectId and projectId-without-direction, response shape unchanged without direction,
+  treatment path + warnings + stamping, failure→fallback→200 (not 500) with exactly one extra
+  standard call, fresh-from-disk direction read)
+- [x] Existing suites still pass (claude.test.js, overlaySingleCall, higgsfieldRegenerate);
+  client build clean; new client files eslint-clean
+- [x] Live treatment-aware run (23 scenes): 23/23 invariants — acts in range, all scene_types
+  from the list (after adding a deterministic shot-type-derived fallback), mapping correct,
+  shot_type valid, refs valid, descriptors present, 4 auto-fixes reported, signature exactly
+  once and terminal on every visual prompt, style_lock === signature everywhere, retention
+  enum, methods valid, 6 real-material evidence scenes (photograph/stock_footage — after
+  strengthening the evidence-backed rule when the first run produced 0), populated
+  asset_search with no URLs/fabricated documents, alternatives differ, complexity valid,
+  6 misleading_reconstruction flags, locked false
+- [x] Live per-section regeneration: invalid section → 400, missing scriptText → 400, all 8
+  sections regenerated (9-45s each) — section changed, other sections byte-identical,
+  persisted to disk
+- [x] Signature edit via PATCH → next analysis carries it on every scene + prompt, no restart
+- [x] E2E WITH direction (131-word test script, real Chrome): script → analyze → Generate
+  Direction → Generate Scene Direction (8 treatment scenes, all DD fields, 5 entity refs) →
+  visuals (5 Higgsfield images from the new prompts) → 8 ElevenLabs voice clips → Lambda
+  render → valid 63.4s MP4 (projects/proj_1784441156958/output/final.mp4)
+- [x] E2E SKIPPING direction (same script): retention-engine scenes with the exact pre-DD-3
+  engine aesthetic and NO DD fields → visuals → voice → Lambda render → valid 63.3s MP4
+  (projects/proj_1784443821694/output/final.mp4). "Identical to pre-DD-3" is code-path
+  identity — generation is nondeterministic, so byte-identical outputs are not possible
+- [x] Warnings banner live: 5 real auto-fixes, expandable list with entity ids, dismissible
+- [x] User's real session stashed under __bk_* keys during browser testing and restored
+  byte-for-byte (49-scene WeWork project intact)
+
+**Known issues / follow-ups for DD-4:**
+- Mid-analysis navigation race: the wizard lets the user reach Visuals and start generation
+  while a treatment-aware analysis is still in flight (it takes ~2-3 min). During live testing
+  this produced a generation run against the pre-analysis scenes plus a transient burst of 6
+  "Maximum update depth exceeded" console errors in a 6s window when the analysis resolved
+  mid-generation (zero console errors in every normal flow before and after). Recommend DD-4
+  disables forward navigation or asset generation while isAnalyzing.
+- Voice step requires a selected voice (vorta_selected_voice); with none selected, Generate
+  All is silently disabled — cosmetic UX gap, pre-existing.
+- proj_dd3_livetest cleaned up; the two e2e projects kept (they hold the deliverable MP4s).

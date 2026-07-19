@@ -193,6 +193,8 @@ export default function VideoCreator() {
   // DD-2: Documentary Direction — { version, updatedAt, treatment, audit } or null.
   // The direction step is fully skippable; null just renders its empty state.
   const [direction, setDirection] = useState(() => lsRead(LS.direction))
+  // DD-3: continuity-enforcement warnings from the last treatment-aware analysis
+  const [directionWarnings, setDirectionWarnings] = useState([])
 
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [analyzeError, setAnalyzeError] = useState(null)
@@ -482,11 +484,15 @@ export default function VideoCreator() {
       const res  = await fetch('/api/analyze', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ script, metadata }),
+        // DD-3: projectId (top-level, not in metadata — metadata.projectId would trigger
+        // the background clip seed early) lets the server pick the treatment-aware path
+        // when direction.json exists for this project.
+        body:    JSON.stringify({ script, metadata, projectId: sessionKey || projectId || undefined }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Analysis failed')
       setScenes(data.scenes)
+      setDirectionWarnings(data.warnings || [])
       setEdlBeats(data.beats || null)
       setEdlAnalysis(data.analysis || null)
       setEdl(data.edl || null)
@@ -797,10 +803,13 @@ export default function VideoCreator() {
     setIsGenerating(true)
 
     try {
+      // DD-3: pass the scene's style_lock so retries on direction projects keep the
+      // treatment signature instead of promptEnhancer re-appending the default lock
+      const sceneLock = scenes.find(s => s.scene_id === scene_id)?.style_lock
       await fetch('/api/generate/retry', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ projectId, scene_id, higgsfield_prompt }),
+        body:    JSON.stringify({ projectId, scene_id, higgsfield_prompt, ...(sceneLock ? { style_lock: sceneLock } : {}) }),
       })
       subscribeToProgress(projectId)
     } catch (err) {
@@ -914,6 +923,9 @@ export default function VideoCreator() {
             ensureProjectId={ensureDirectionProjectId}
             direction={direction}
             onDirectionChange={setDirection}
+            onAnalyze={handleAnalyze}
+            isAnalyzing={isAnalyzing}
+            analyzeError={analyzeError}
             wizard={wizard}
           />
         )
@@ -936,6 +948,8 @@ export default function VideoCreator() {
             onPreviewScene={setPreviewScene}
             voiceoverStatuses={voiceoverStatuses}
             onOpenVoiceover={handleOpenVoiceover}
+            directionWarnings={directionWarnings}
+            onDismissDirectionWarnings={() => setDirectionWarnings([])}
             wizard={wizard}
           />
         )
